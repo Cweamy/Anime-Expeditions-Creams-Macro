@@ -12,7 +12,9 @@ should I be seeing here" for a human skimming the log.
 import json
 import os
 
-_DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Assets", "stage_data.json")
+from . import constants
+
+_DATA_PATH = os.path.join(constants.ASSETS_DIR, "stage_data.json")
 _cache = None
 
 

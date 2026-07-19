@@ -11,6 +11,7 @@ import threading
 
 from core import window as wm
 from core import config
+from core import constants
 from core import keys
 from core import settings as cfg
 from core import templates as tpl
@@ -29,8 +30,9 @@ wm.set_dpi_aware()
 def _debug_dir() -> str:
     # Every Settings > Debug capture (screenshot, reward-region preview)
     # lands here instead of loose next to main.py -- one folder to check,
-    # and it stays out of the way of the actual source files.
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug")
+    # and it stays out of the way of the actual source files. Writable, so
+    # APP_DIR (see core.constants), not wherever a frozen build unpacks to.
+    path = os.path.join(constants.APP_DIR, "debug")
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -51,9 +53,9 @@ GUI_WIDTH_FULL = config.FIXED_WIN_W + PANEL_WIDTH
 GUI_WIDTH_COMPACT = PANEL_WIDTH
 GUI_HEIGHT_FULL = TITLEBAR_H + config.FIXED_WIN_H + LOGS_H
 GUI_HEIGHT_COMPACT = TITLEBAR_H + 280
-UI_INDEX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "index.html")
-LOGS_WINDOW_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "logs_window.html")
-LOGO_ICO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.ico")
+UI_INDEX = os.path.join(constants.UI_DIR, "index.html")
+LOGS_WINDOW_HTML = os.path.join(constants.UI_DIR, "logs_window.html")
+LOGO_ICO = os.path.join(constants.BUNDLE_DIR, "logo.ico")
 LOG_HISTORY_LIMIT = 500  # caps what a freshly popped-out window gets replayed with
 
 HOTKEY_DEFAULTS = {
@@ -168,9 +170,21 @@ class Api:
     def apply_update(self) -> dict:
         if not self._update_info.get("available"):
             return {"ok": False, "reason": "no_update"}
-        app_dir = os.path.dirname(os.path.abspath(__file__))
         try:
-            helper_path = updater.stage_update(self._update_info["zip_url"], app_dir, self.push_log)
+            # Running as a built exe: swap the exe itself -- robocopying
+            # loose .py source over a compiled exe's directory wouldn't do
+            # anything, it doesn't read source files at runtime. Running
+            # from source: the usual source-zip-over-the-install swap.
+            if constants.IS_FROZEN:
+                if not self._update_info.get("exe_url"):
+                    self.push_log("[Update] No exe attached to this release -- can't self-update the build. "
+                                  f'Grab it manually: {self._update_info.get("url")}')
+                    return {"ok": False, "reason": "no_exe_asset"}
+                new_exe = updater.download_exe_update(self._update_info["exe_url"], self.push_log)
+                helper_path = updater.stage_exe_update(new_exe)
+            else:
+                helper_path = updater.stage_source_update(
+                    self._update_info["zip_url"], constants.APP_DIR, self.push_log)
         except Exception as exc:
             self.push_log(f"[Update] Failed to prepare update: {exc}")
             return {"ok": False, "reason": str(exc)}

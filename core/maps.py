@@ -6,7 +6,9 @@ off an X/Y position instead of guessing coordinates blind.
 import base64
 import os
 
-MAPS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Assets", "map")
+from . import constants
+
+MAPS_DIR = os.path.join(constants.ASSETS_DIR, "map")
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg")
 

@@ -22,10 +22,11 @@ from core.ocr import (  # noqa: F401 -- re-exported for existing callers/tests
     TesseractNotAvailable, get_pytesseract as _get_pytesseract,
     capture_region, ocr_best as _ocr_best,
 )
+from core import constants
 
 # Reference icon art scraped from the game's wiki (see tools/fetch_item_icons.py) --
 # transparent-background PNGs named after the item, one per known reward.
-_ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "item_icons")
+_ICON_DIR = os.path.join(constants.ASSETS_DIR, "item_icons")
 _icon_histograms = None  # lazily built on first use, cached for the process's lifetime
 
 # Fixed spot (relative to the docked game window's top-left, same convention

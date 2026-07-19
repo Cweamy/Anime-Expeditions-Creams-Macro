@@ -2,7 +2,9 @@ import json
 import os
 import re
 
-TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Templates")
+from . import constants
+
+TEMPLATES_DIR = os.path.join(constants.APP_DIR, "Templates")
 
 
 def _safe_name(name: str) -> str:

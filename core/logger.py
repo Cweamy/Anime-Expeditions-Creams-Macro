@@ -1,7 +1,9 @@
 import os
 import time
 
-LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug.log")
+from . import constants
+
+LOG_FILE = os.path.join(constants.APP_DIR, "debug.log")
 
 
 class Logger:

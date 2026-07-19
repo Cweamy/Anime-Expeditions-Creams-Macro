@@ -21,9 +21,10 @@ import time
 import cv2
 import numpy as np
 
+from . import constants
 from . import window as wm
 
-UI_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Assets", "ui")
+UI_ASSETS_DIR = os.path.join(constants.ASSETS_DIR, "ui")
 # Map name-label crops (core.stage_select) -- kept separate from Assets/ui
 # since these are keyed by map name (one file per map, named to match a
 # Task's `map` field exactly) rather than by fixed UI-element name. Covers
@@ -31,7 +32,7 @@ UI_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 # was Assets/story_maps until Raid map crops started living here too. Not
 # the same folder as Assets/map/<Category>/ (the Place Unit picker's full
 # map preview thumbnails, a completely different, unrelated asset set).
-MAPS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Assets", "maps")
+MAPS_DIR = os.path.join(constants.ASSETS_DIR, "maps")
 
 # Match-score cutoff (see find_in_gray for which method this is on). Was
 # 0.74 -- too permissive: nav_start.png matched the Back button (a visually
@@ -167,7 +168,7 @@ def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold
     return {"x": x, "y": y, "w": tw, "h": th, "cx": x + tw // 2, "cy": y + th // 2, "score": float(max_val)}
 
 
-DEBUG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug")
+DEBUG_DIR = os.path.join(constants.APP_DIR, "debug")
 
 
 def save_match_debug(hwnd: int, name: str, match: dict) -> str:

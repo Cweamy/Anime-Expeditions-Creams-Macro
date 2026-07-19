@@ -18,21 +18,26 @@ import re
 import threading
 import time
 
-PATHS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Paths")
-# Known-good walk paths for specific maps/acts, shipped with the repo (see
-# Assets/default_walk_paths.json and .gitignore's Paths/defaults/ exception)
-# -- shared game data, not personal recordings, so unlike everything else in
-# Paths/ these are git-tracked. load_path/list_paths fall back to this
-# folder so a fresh clone gets working default walks with nothing to record
-# first; saving a path under the same name in the regular Paths/ folder
+from . import constants
+
+# Writable -- your own recordings, has to live beside the real exe (see
+# core.constants), not wherever a frozen build's temp extraction lands.
+PATHS_DIR = os.path.join(constants.APP_DIR, "Paths")
+# Known-good walk paths for specific maps/acts, shipped/bundled with the app
+# (see Assets/default_walk_paths.json and .gitignore's Paths/defaults/
+# exception) -- shared game data, not personal recordings, so unlike
+# everything else in Paths/ these are git-tracked AND resolved via
+# BUNDLE_DIR, not APP_DIR (a frozen build ships them inside the bundle, not
+# beside the exe). load_path/list_paths fall back to this folder so a fresh
+# clone/install gets working default walks with nothing to record first;
+# saving a path under the same name in the regular (APP_DIR) Paths/ folder
 # overrides it (see load_path).
-DEFAULT_PATHS_DIR = os.path.join(PATHS_DIR, "defaults")
+DEFAULT_PATHS_DIR = os.path.join(constants.BUNDLE_DIR, "Paths", "defaults")
 # The map-name -> path-name mapping to go with DEFAULT_PATHS_DIR above --
-# shipped/tracked for the same reason, read by main.Api.get_default_walk_paths/
+# shipped/bundled for the same reason, read by main.Api.get_default_walk_paths/
 # start_macro and merged with the user's own settings.json overrides (a
 # user's own mapping for the same map wins).
-SHIPPED_DEFAULT_WALK_PATHS_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Assets", "default_walk_paths.json")
+SHIPPED_DEFAULT_WALK_PATHS_FILE = os.path.join(constants.ASSETS_DIR, "default_walk_paths.json")
 
 _POLL_INTERVAL = 0.03  # 30ms -- well under human key-tap duration, cheap enough to poll forever
 # W/A/S/D for movement, I/O for whatever in-game action a recorded route

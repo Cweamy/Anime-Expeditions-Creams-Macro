@@ -1,21 +1,21 @@
 name: Release
 
 # Triggered by pushing a version tag (vX.Y.Z, matching VERSION at the repo
-# root -- see the release checklist in README.md). Publishes a GitHub
-# Release for that tag -- that's the only thing this actually needs to do:
-# core/updater.py's auto-update check reads /releases/latest, and the
-# update itself downloads the tag's source zip, which GitHub generates
-# automatically for any tag with no workflow involved. Source is also the
-# only officially supported way to run this macro (python main.py / run.bat).
+# root -- see the release checklist in README.md). Builds the real app exe
+# and a small bootstrapper exe with Nuitka (see build_nuitka.py/
+# build_bootstrap.py) and publishes them on a GitHub Release for that tag.
 #
-# There USED to be a PyInstaller-packaged .exe attached here -- pulled after
-# it turned out broken in practice (pywebview's WinForms backend fails to
-# resolve pythonnet's Python.Runtime.Loader once frozen: "Unhandled
-# exception... Failed to resolve Python.Runtime.Loader"). None of
-# core/*.py's __file__-based asset/data paths are frozen-build-aware either,
-# so even a working freeze would need that sorted out first. Revisit
-# packaging a real installer later instead of guessing at another frozen
-# build blind.
+# Nuitka, not PyInstaller: the first packaged build of this app used
+# PyInstaller and crashed on launch ("Failed to resolve Python.Runtime.
+# Loader") because its bundled pywebview plugin drops the
+# webview.platforms.win32 module that winforms.py needs. build_nuitka.py
+# works around the equivalent issue in Nuitka's own pywebview plugin by
+# including the right backend modules explicitly -- see its comments.
+#
+# core/updater.py's in-app update check downloads whichever of these two
+# assets is relevant (the exe itself when running frozen, the tag's source
+# zip when running from source) -- this workflow doesn't need to do
+# anything updater-specific beyond just publishing them here.
 on:
   push:
     tags:
@@ -25,13 +25,48 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build-and-release:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Nuitka build
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist-nuitka/main.build
+            dist-nuitka/main.dist
+            dist-nuitka/main.onefile-build
+          # Keyed on requirements.txt, not main.py/core/*.py -- those change
+          # on almost every release. Nuitka does its own incremental
+          # recompile within main.build across runs, so restoring the last
+          # build's intermediate objects still lets it skip rebuilding the
+          # untouched dependency code (numpy, opencv wrapper, pywebview,
+          # ...) even though our own source changed -- only this key needs
+          # to change when the actual dependency set changes.
+          key: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: nuitka-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install nuitka
+
+      - name: Build app exe (Nuitka)
+        run: python build_nuitka.py
+
+      - name: Build bootstrapper exe (Nuitka)
+        run: python build_bootstrap.py
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
+          files: |
+            dist-nuitka/Cream's Macro - Anime Expeditions.exe
+            dist-nuitka/Cream's Macro - Anime Expeditions Bootstrapper.exe

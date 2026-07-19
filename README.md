@@ -45,23 +45,29 @@
 
 ## Installation
 
+### Option A: Download (recommended)
+
+Grab **`Cream's Macro - Anime Expeditions Bootstrapper.exe`** from the [latest release](https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest) and run it. It's a small (~few MB) downloader — on first run it fetches the real app from this repo's Releases and launches it, then keeps itself up to date on every launch. No Python, no `git clone`, nothing else to install except Tesseract (below).
+
+### Option B: Run from source
+
 ```bash
 git clone https://github.com/Cweamy/Anime-Expeditions-Creams-Macro.git
 cd Anime-Expeditions-Creams-Macro
 pip install -r requirements.txt
 ```
 
-Then install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) if you haven't already (needed for stats/reward reading only — everything else works without it).
+Either way, install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) if you haven't already (needed for stats/reward reading only — everything else works without it).
 
 ## Usage
 
-Launch it with:
+If you're running from source, launch it with:
 
 ```bash
 python main.py
 ```
 
-...or just double-click `run.bat`. Start Roblox and join Anime Expeditions — the macro finds and docks the window automatically. From there:
+...or just double-click `run.bat`. (If you used the bootstrapper, just run it — it launches the app for you.) Start Roblox and join Anime Expeditions — the macro finds and docks the window automatically. From there:
 
 1. **Task** — queue up what to farm (map, stage, difficulty, repeat count).
 2. **Creation** — build a Pre Start routine (unit placement, settings, walk path) and save it as a template.
@@ -76,7 +82,7 @@ python main.py --test
 
 ## Auto-Updater
 
-On launch, the macro checks GitHub for a newer tagged release than the one you're running. If one exists, a popup shows the version and release notes with an **Update & Restart** button — clicking it downloads the new release, swaps it in over your local copy (your `settings.json`, saved templates, and walk paths are never touched), and relaunches automatically. You can also trigger a manual check any time by clicking the version badge in the titlebar.
+On launch, the macro checks GitHub for a newer tagged release than the one you're running. If one exists, a popup shows the version and release notes with an **Update & Restart** button. What "Update" downloads depends on how you're running it — the packaged exe swaps itself for the new exe; running from source instead swaps in the new source over your local copy. Either way your `settings.json`, saved templates, and walk paths are never touched, and it relaunches automatically. You can also trigger a manual check any time by clicking the version badge in the titlebar. (If you're using the bootstrapper, it also checks for a newer app exe on every launch on its own, independently of this.)
 
 ## Project Layout
 
@@ -84,18 +90,26 @@ On launch, the macro checks GitHub for a newer tagged release than the one you'r
 main.py          # pywebview entry point / JS<->Python API bridge
 core/            # macro engine: vision (image matching), runner (match automation),
                  # OCR, webhook, window docking, input, path recording, updater...
+core/constants.py # frozen-build-aware path resolution (BUNDLE_DIR/APP_DIR) --
+                 # every other core/*.py module's paths derive from this
 ui/              # frontend (HTML/CSS/JS) rendered inside the docked window
 tools/           # one-off scripts for scraping wiki data (stage rewards, item icons)
 Assets/ui/       # reference screenshots the macro's image search looks for
 Assets/map/      # full map images for the Set Position picker
 Assets/maps/     # map name-label crops for map-select image search
+Paths/defaults/  # known-good default walk paths, shipped with the repo
+bootstrap.py     # tiny downloader exe -- what most users actually run (see Installation)
+build_nuitka.py  # builds the real app exe
+build_bootstrap.py # builds bootstrap.py into its own small exe
 ```
 
 ## Contributing
 
 Issues and PRs are welcome. Every push/PR runs a CI sanity check (Python + JS syntax); there's no automated test suite yet, so please describe how you tested a change manually in your PR.
 
-To cut a release: bump `VERSION`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z` — this triggers the release workflow, which publishes a GitHub Release (what the auto-updater checks against) and attaches a packaged Windows build.
+To cut a release: bump `VERSION`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z` — this triggers the release workflow, which builds both exes with Nuitka (see `build_nuitka.py`/`build_bootstrap.py`) and publishes a GitHub Release (what both the auto-updater and the bootstrapper check against).
+
+To build either exe locally instead of waiting on CI: `pip install nuitka` (needs a python.org CPython, not the Microsoft Store build — Nuitka rejects it), then `python build_nuitka.py` / `python build_bootstrap.py`. Output lands in `dist-nuitka/`.
 
 ## Disclaimer
 
