@@ -105,8 +105,19 @@ def virtual_screen_rect():
 
 def screen_to_absolute(x: int, y: int):
     vx, vy, vw, vh = virtual_screen_rect()
-    abs_x = int(((x - vx) * 65536) / vw)
-    abs_y = int(((y - vy) * 65536) / vh)
+    # vw/vh come from GetSystemMetrics, which reports a DPI-UNAWARE
+    # process's virtual screen as a scaled-down/virtualized size, not the
+    # real physical pixel dimensions (see core.window.set_dpi_aware) -- if
+    # that ever silently fails again, dividing by the wrong denominator
+    # here would push abs_x/abs_y outside SendInput's valid 0-65535 range,
+    # which is exactly what turned into "cursor barely moves / clicks land
+    # nowhere near the target" in practice. Clamping can't fix a wrong
+    # scale, but it guarantees a bad computation degrades to "clicks the
+    # nearest screen edge" instead of an arbitrarily out-of-range value.
+    abs_x = int(((x - vx) * 65536) / vw) if vw else 0
+    abs_y = int(((y - vy) * 65536) / vh) if vh else 0
+    abs_x = max(0, min(65535, abs_x))
+    abs_y = max(0, min(65535, abs_y))
     return abs_x, abs_y
 
 
