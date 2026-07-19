@@ -167,6 +167,13 @@ UPGRADE_RETRY_WAIT = 5.0
 AUTO_UPGRADE_MENU_CLICK = (345, 453)  # right-click point that opens the menu
 AUTO_UPGRADE_PRIORITY_1 = (427, 487)  # Priority 1's row
 AUTO_UPGRADE_PRIORITY_ROW_HEIGHT = 34
+# Auto Upgrade Unit chains TWO nested UI transitions (select the unit ->
+# its info panel opens, right-click -> the priority menu opens on top of
+# that) before the priority-row click means anything -- BATTLE_BLOCK_CLICK_
+# SETTLE (0.3s, tuned for Upgrade/Sell Unit's single info-panel open) was
+# firing the next click before the second transition had actually
+# rendered, reported as the whole block just "too fast" to work reliably.
+AUTO_UPGRADE_CLICK_SETTLE = 0.6
 
 # Team Loadout application (see _apply_team_loadout) -- H opens the panel,
 # then Loadout 1-3 are stacked rows at a fixed position. 4+ exist in
@@ -218,6 +225,13 @@ class MacroRunner:
         # block skipped via "Once" on a repeat keeps whatever position its
         # first placement recorded rather than losing it.
         self._placed_unit_positions = {}
+        # The running #ordinal counter place_unit blocks share -- Pre Start
+        # blocks number first, Battle-phase place_unit blocks (see
+        # _run_battle_blocks_tick) continue counting from wherever Pre
+        # Start left off, matching ui/app.js's listPlacedUnits() (which
+        # numbers place_unit blocks across BOTH phases in one sequence).
+        # Reset to 0 once per match in _run_prestart.
+        self._last_unit_ordinal = 0
         # Battle-phase block state (see _run_battle_blocks_tick) -- reset at
         # the start of each match in _play_one_match.
         self._battle_block_index = 0
@@ -598,7 +612,7 @@ class MacroRunner:
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
         self._battle_block_state = {}
-        return self._wait_for_match_result(hwnd, stop_event, battle_blocks, first_repeat)
+        return self._wait_for_match_result(hwnd, stop_event, battle_blocks, first_repeat, task.get("macro"))
 
     def _load_battle_blocks(self, task: dict) -> list:
         macro_name = task.get("macro")
@@ -612,7 +626,7 @@ class MacroRunner:
         return blocks.get("battle") or []
 
     def _wait_for_match_result(self, hwnd, stop_event: threading.Event, battle_blocks: list = None,
-                                 first_repeat: bool = True):
+                                 first_repeat: bool = True, macro_name: str = None):
         self._log("[Macro] Battle in progress -- watching for Victory/Defeat...")
         self._set_status(action="Battle in progress...")
         battle_blocks = battle_blocks or []
@@ -621,7 +635,7 @@ class MacroRunner:
             if self._checkpoint(stop_event):
                 return None
             if battle_blocks:
-                self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat)
+                self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat, macro_name)
                 if self._checkpoint(stop_event):
                     return None
             try:
@@ -655,7 +669,8 @@ class MacroRunner:
             self._log(f"[Macro] Couldn't save a timeout screenshot: {exc}")
         return None
 
-    def _run_battle_blocks_tick(self, hwnd, stop_event: threading.Event, battle_blocks: list, first_repeat: bool) -> None:
+    def _run_battle_blocks_tick(self, hwnd, stop_event: threading.Event, battle_blocks: list, first_repeat: bool,
+                                  macro_name: str = None) -> None:
         """Advances the Battle-phase block list by one step, called once per
         poll of _wait_for_match_result's Victory/Defeat loop instead of
         running the whole list to completion up front -- Upgrade Unit can
@@ -685,6 +700,21 @@ class MacroRunner:
                 self._battle_block_state = {}
             elif btype == "auto_upgrade_unit":
                 done = self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
+                self._battle_block_state = {}
+            elif btype == "place_unit":
+                # Mid-battle placement (a reinforcement dropped in later,
+                # not a Pre Start starter) -- same click/verify/nudge-retry
+                # logic Pre Start uses, one-shot like Sell Unit. Continues
+                # the SAME #ordinal count Pre Start's place_unit blocks left
+                # off at, matching ui/app.js's listPlacedUnits() (which
+                # numbers place_unit blocks across both phases as one list),
+                # so Upgrade/Sell/Auto Upgrade Unit blocks targeting a
+                # unit placed here by #index still resolve correctly.
+                self._last_unit_ordinal += 1
+                left, top, _, _ = wm.get_window_rect_screen(hwnd)
+                self._run_place_unit_block(hwnd, stop_event, left, top, block, self._battle_block_index + 1,
+                                             macro_name, self._last_unit_ordinal)
+                done = True
                 self._battle_block_state = {}
             else:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
@@ -823,12 +853,12 @@ class MacroRunner:
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._set_status(action="Setting auto-upgrade priority...")
         self._mouse.click(left + pos[0], top + pos[1])
-        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
         if self._checkpoint(stop_event):
             return True
 
         self._mouse.click(left + AUTO_UPGRADE_MENU_CLICK[0], top + AUTO_UPGRADE_MENU_CLICK[1], button="right")
-        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
         if self._checkpoint(stop_event):
             return True
 
@@ -846,7 +876,7 @@ class MacroRunner:
             self._log(f'{label}: setting priority {priority}.')
         row_y = AUTO_UPGRADE_PRIORITY_1[1] + row_index * AUTO_UPGRADE_PRIORITY_ROW_HEIGHT
         self._mouse.click(left + AUTO_UPGRADE_PRIORITY_1[0], top + row_y)
-        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
         if self._checkpoint(stop_event):
             return True
 
@@ -1230,13 +1260,15 @@ class MacroRunner:
         # blocks, matching ui/app.js's listPlacedUnits() numbering (the #1,
         # #2, ... the Upgrade/Sell Unit pickers show), so a template mixing
         # place_unit and setting_change blocks still numbers its units the
-        # same way the UI does.
-        unit_ordinal = 0
+        # same way the UI does. self._last_unit_ordinal (not a local var)
+        # since Battle-phase place_unit blocks (see _run_battle_blocks_tick)
+        # continue this same count after Pre Start's blocks are done.
+        self._last_unit_ordinal = 0
         for i, block in enumerate(prestart_blocks, start=1):
             if self._checkpoint(stop_event):
                 return
             if block.get("type") == "place_unit":
-                unit_ordinal += 1
+                self._last_unit_ordinal += 1
             if block.get("once") and not first_repeat:
                 # "Once" (see the block's Once chip in Creation) means only
                 # the task's FIRST entry into this stage runs it -- e.g. a
@@ -1247,7 +1279,7 @@ class MacroRunner:
                 continue
             btype = block.get("type")
             if btype == "place_unit":
-                self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name, unit_ordinal)
+                self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name, self._last_unit_ordinal)
             elif btype == "setting_change":
                 self._run_setting_block(block, i)
             else:
