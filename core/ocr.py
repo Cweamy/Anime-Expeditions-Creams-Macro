@@ -1,0 +1,174 @@
+"""Shared OCR plumbing used by anything that reads small stylized game text
+off a screenshot (core.rewards' reward row, core.game_stats' stat grid):
+finding/loading the Tesseract engine, capturing a screen region with mss,
+and turning a tiny colorful crop into a handful of binarized candidates so
+Tesseract has a real shot at it.
+"""
+import os
+import re
+import numpy as np
+import cv2
+
+# Winget/the UB-Mannheim installer both drop it here by default. A fresh
+# install isn't on PATH until the shell/session restarts, so check this
+# explicit path as a fallback instead of making every user restart their
+# terminal (or the whole macro's launch environment) just to pick it up.
+_FALLBACK_TESSERACT_PATHS = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+
+
+class TesseractNotAvailable(Exception):
+    """The pytesseract *package* is present but the Tesseract OCR *engine*
+    (a separate native binary, not something pip installs) isn't found."""
+
+
+def get_pytesseract():
+    try:
+        import pytesseract
+    except ImportError as exc:
+        raise TesseractNotAvailable(
+            "pytesseract isn't installed (pip install pytesseract)."
+        ) from exc
+
+    try:
+        pytesseract.get_tesseract_version()
+        return pytesseract
+    except Exception:
+        pass  # not on PATH -- try the known install locations below
+
+    for path in _FALLBACK_TESSERACT_PATHS:
+        if os.path.isfile(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            try:
+                pytesseract.get_tesseract_version()
+                return pytesseract
+            except Exception:
+                continue
+
+    raise TesseractNotAvailable(
+        "Tesseract OCR engine not found. Install it from "
+        "https://github.com/UB-Mannheim/tesseract/wiki (Windows build), then "
+        "make sure tesseract.exe is on PATH, or set "
+        "pytesseract.pytesseract.tesseract_cmd to its full path."
+    )
+
+
+def capture_region(left: int, top: int, width: int, height: int) -> np.ndarray:
+    """Screenshots a screen-space rect, returns it as a BGR numpy array
+    (OpenCV's native order) ready for cv2 preprocessing."""
+    import mss
+    with mss.MSS() as sct:
+        shot = sct.grab({"left": left, "top": top, "width": width, "height": height})
+        # mss gives BGRA; drop alpha, already BGR-ordered so no channel swap needed.
+        return np.array(shot)[:, :, :3]
+
+
+def sample_color_matches(left: int, top: int, width: int, height: int,
+                          expected_rgb_hex: int, tolerance: int = 20) -> bool:
+    """Grabs a small screen-space patch and checks whether its average color
+    is close to expected_rgb_hex (e.g. 0x373737) -- used to detect a fixed
+    UI element (like a scrollbar track, which only renders when a panel's
+    content overflows) by its known color rather than OCRing anything.
+    Averaged over the patch instead of a single pixel so antialiasing/
+    compression noise at the sampled point doesn't cause a false miss."""
+    patch = capture_region(left, top, max(1, width), max(1, height))
+    b, g, r = patch.reshape(-1, 3).mean(axis=0)
+    expected_r = (expected_rgb_hex >> 16) & 0xFF
+    expected_g = (expected_rgb_hex >> 8) & 0xFF
+    expected_b = expected_rgb_hex & 0xFF
+    return (abs(r - expected_r) <= tolerance and
+            abs(g - expected_g) <= tolerance and
+            abs(b - expected_b) <= tolerance)
+
+
+def candidate_masks(cell_bgr: np.ndarray, upscale: int = 6, sharpen_amount: float = 1.5) -> list:
+    """Several different binarizations of the same crop, not just one: a
+    single global-Otsu threshold falls apart when the text sits on top of
+    colorful art (this UI's text is bright/white or a saturated color with a
+    dark outline, but what's behind it can be any color/brightness, which
+    throws off a plain split-the-histogram-in-half threshold). Trying a few
+    and keeping whichever one Tesseract can actually read is far more robust
+    than committing to a single strategy blind.
+
+    The upscale + Lanczos + unsharp combination matters specifically because
+    this UI's text is only a handful of pixels tall in the raw capture --
+    cubic interpolation invents curvature between those few real samples
+    that isn't in the source font (a straight "1" starts looking like a
+    curved "5"/"S" to Tesseract). Lanczos holds sharper, straighter edges
+    through the upscale, and an unsharp mask on top punches the stroke
+    edges back up before they get softened again by denoising.
+    """
+    h, w = cell_bgr.shape[:2]
+    big = cv2.resize(cell_bgr, (w * upscale, h * upscale), interpolation=cv2.INTER_LANCZOS4)
+    gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
+    if sharpen_amount:
+        blurred = cv2.GaussianBlur(gray, (0, 0), 3)
+        gray = cv2.addWeighted(gray, 1 + sharpen_amount, blurred, -sharpen_amount, 0)
+    denoised = cv2.bilateralFilter(gray, 5, 40, 40)  # denoise while keeping glyph edges sharp
+
+    masks = []
+
+    # Otsu: fine when the crop's background is roughly flat/bimodal.
+    _, otsu = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if np.mean(otsu) < 127:
+        otsu = cv2.bitwise_not(otsu)
+    masks.append(otsu)
+
+    # Bright-pixel isolation: keeps only near-white pixels regardless of how
+    # colorful/dark the art behind them is, then closes small gaps antialiasing
+    # leaves in thin strokes. This is the one that should carry stylized text
+    # over busy backgrounds.
+    _, bright = cv2.threshold(denoised, 185, 255, cv2.THRESH_BINARY)
+    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+    masks.append(cv2.bitwise_not(bright))  # dark-on-light, what Tesseract wants
+
+    # Adaptive threshold: handles uneven local lighting/gradients across the
+    # crop that neither global method above can.
+    adaptive = cv2.adaptiveThreshold(
+        denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 25, 10
+    )
+    masks.append(adaptive)
+
+    return masks
+
+
+def score_text(text: str, valid_pattern) -> tuple:
+    """Ranks a candidate OCR result: a string that actually matches the
+    expected shape (e.g. "125x") beats any raw character count, since a
+    longer garbled string (art noise misread as extra characters) would
+    otherwise "win" over a shorter but correct reading just by having more
+    characters."""
+    alnum = sum(c.isalnum() for c in text)
+    if valid_pattern is not None and valid_pattern.fullmatch(text):
+        return (1, alnum)
+    return (0, alnum)
+
+
+def ocr_best(pytesseract, cell_bgr: np.ndarray, base_config: str,
+             psm_modes: tuple = (7, 8), valid_pattern=None) -> str:
+    """Runs OCR against every candidate mask for this crop -- and, since the
+    text is a single short token/line, against both "one line" (psm 7) and
+    "one word" (psm 8) segmentation, which don't always agree -- and keeps
+    whichever combination scored best (see score_text).
+
+    Stops as soon as a result actually matches valid_pattern: each mask/psm
+    combo is its own Tesseract subprocess (real spawn overhead on Windows),
+    so sweeping all of them on every field of every read adds up. A pattern
+    match is already the top score tier score_text can give, so nothing
+    later in the sweep could beat it anyway.
+    """
+    best = ""
+    best_score = (-1, -1)
+    for mask in candidate_masks(cell_bgr):
+        for psm in psm_modes:
+            config = re.sub(r"--psm \d+", f"--psm {psm}", base_config)
+            text = pytesseract.image_to_string(mask, config=config).strip()
+            score = score_text(text, valid_pattern)
+            if score > best_score:
+                best_score = score
+                best = text
+            if valid_pattern is not None and score[0] == 1:
+                return best
+    return best

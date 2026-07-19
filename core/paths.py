@@ -1,0 +1,182 @@
+"""Records a player's own WASD (+ I/O) movement/action keys on the map into a
+named JSON file, so a Custom Path block (see Creation tab) can replay it
+later instead of relying on Auto Select's live pathing.
+
+Recording works by *polling* GetAsyncKeyState for each watched key at a
+fixed interval on a background thread -- this reads real physical key state
+regardless of which window has focus, unlike a message-based keyboard hook,
+which matters here since the player is actively controlling Roblox while
+this records. Only state *transitions* (press/release) get logged, each
+timestamped relative to recording start, rather than one entry per poll --
+that's enough to reconstruct exactly when each key was held and for how
+long, at a small fraction of the size logging every poll tick would take.
+"""
+import ctypes
+import json
+import os
+import re
+import threading
+import time
+
+PATHS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Paths")
+
+_POLL_INTERVAL = 0.03  # 30ms -- well under human key-tap duration, cheap enough to poll forever
+# W/A/S/D for movement, I/O for whatever in-game action a recorded route
+# needs alongside walking (e.g. an interact/use key at a specific point) --
+# recorded, replayed, and released-on-exit identically to the movement keys,
+# since every place below just iterates this same dict.
+_WATCHED_KEYS = {
+    "w": ord("W"), "a": ord("A"), "s": ord("S"), "d": ord("D"),
+    "i": ord("I"), "o": ord("O"),
+}
+
+_user32 = ctypes.windll.user32
+
+
+class RecordingAlreadyActive(Exception):
+    pass
+
+
+class _Recorder:
+    """One recording session's state -- module-level singleton since only
+    one Custom Path block can realistically be recorded at a time (there's
+    only one physical player controlling one game window)."""
+
+    def __init__(self):
+        self._thread = None
+        self._stop_event = None
+        self._events = []
+        self._start_time = None
+        self.active = False
+
+    def start(self):
+        if self.active:
+            raise RecordingAlreadyActive("A path recording is already in progress.")
+        self._events = []
+        self._start_time = None
+        self._stop_event = threading.Event()
+        self.active = True
+        self._thread = threading.Thread(target=self._poll_loop, args=(self._stop_event,), daemon=True)
+        self._thread.start()
+
+    def _poll_loop(self, stop_event: threading.Event) -> None:
+        held = {key: False for key in _WATCHED_KEYS}
+        while not stop_event.is_set():
+            for key, vk in _WATCHED_KEYS.items():
+                is_down = bool(_user32.GetAsyncKeyState(vk) & 0x8000)
+                if is_down != held[key]:
+                    # The clock starts at the FIRST key transition, not at
+                    # start(): however long the player fumbles between clicking
+                    # Record and actually walking, the saved path begins at
+                    # t=0 with the first press instead of replaying that whole
+                    # dead wait at the start.
+                    if self._start_time is None:
+                        self._start_time = time.perf_counter()
+                    held[key] = is_down
+                    self._events.append({
+                        "t": round(time.perf_counter() - self._start_time, 3),
+                        "key": key,
+                        "state": "down" if is_down else "up",
+                    })
+            time.sleep(_POLL_INTERVAL)
+
+    def stop(self) -> list:
+        if not self.active:
+            return []
+        self._stop_event.set()
+        self._thread.join(timeout=1.0)
+        self.active = False
+        return self._events
+
+    def cancel(self) -> None:
+        if self.active:
+            self._stop_event.set()
+            self._thread.join(timeout=1.0)
+            self.active = False
+        self._events = []
+
+
+_recorder = _Recorder()
+
+
+def start_recording() -> None:
+    _recorder.start()
+
+
+def stop_recording() -> list:
+    """Stops the active recording and returns its raw (key, state, t)
+    event list without saving it -- save_path() persists it separately so
+    the caller can name it first."""
+    return _recorder.stop()
+
+
+def cancel_recording() -> None:
+    """Stops and discards the active recording -- used when the player
+    starts a recording but then declines to name/save it."""
+    _recorder.cancel()
+
+
+def is_recording() -> bool:
+    return _recorder.active
+
+
+def _safe_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 _-]", "", name or "").strip()
+    return cleaned or "path"
+
+
+def list_paths() -> list:
+    if not os.path.isdir(PATHS_DIR):
+        return []
+    return sorted(f[:-5] for f in os.listdir(PATHS_DIR) if f.endswith(".json"))
+
+
+def save_path(name: str, events: list) -> str:
+    name = _safe_name(name)
+    os.makedirs(PATHS_DIR, exist_ok=True)
+    path = os.path.join(PATHS_DIR, f"{name}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"name": name, "events": events}, f, indent=2)
+    return name
+
+
+def load_path(name: str) -> dict:
+    path = os.path.join(PATHS_DIR, f"{_safe_name(name)}.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"name": name, "events": []}
+
+
+def replay_events(events: list, keyboard, stop_event: threading.Event = None) -> None:
+    """Replays a recorded WASD event list through a Keyboard controller,
+    sleeping between events to reproduce the original press/release timing
+    (events are stored in recording order, each timestamped relative to
+    recording start -- see _Recorder._poll_loop). Used by the Debug tab's
+    "Test Walking Path" to sanity-check a recorded path plays back the way
+    it was walked, without needing a Custom Path block wired into a real run.
+
+    Always releases every watched key on the way out (including when
+    stop_event cuts the replay short), so an interrupted test can't leave a
+    direction stuck held down in the live game.
+    """
+    try:
+        last_t = 0.0
+        for ev in events:
+            if stop_event is not None and stop_event.is_set():
+                break
+            delay = ev["t"] - last_t
+            if delay > 0:
+                time.sleep(delay)
+            last_t = ev["t"]
+            vk = _WATCHED_KEYS.get(ev["key"])
+            if vk is None:
+                continue
+            if ev["state"] == "down":
+                keyboard.key_down(vk)
+            else:
+                keyboard.key_up(vk)
+    finally:
+        for vk in _WATCHED_KEYS.values():
+            keyboard.key_up(vk)

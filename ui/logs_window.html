@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Logs | Cream's Macro</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>body { padding: 8px; background: var(--bg-deep); }</style>
+</head>
+<body class="h-full w-full flex flex-col">
+  <section class="rp-panel rp-panel-fill">
+    <header class="rp-panel-head">
+      <span class="rp-head-tag" style="--rp-tag: var(--brand);">Live</span>
+      <span class="rp-head-title">Process Log</span>
+      <span class="rp-head-rule"></span>
+      <button onclick="clearLogs()" class="log-toolbar-btn text-[10px] font-semibold flex-shrink-0" style="color: var(--text-muted);" title="Clear logs">Clear</button>
+    </header>
+    <div id="log-list" class="rp-log-list overflow-y-auto font-mono font-medium text-[11px] p-2 space-y-0.5"
+         style="color: var(--text-dim);">
+    </div>
+  </section>
+
+  <script>
+    // Standalone copy of the logic in ui/app.js: this page has no js_api of
+    // its own, Python pushes lines into it directly via evaluate_js (see
+    // Api.push_log / Api.pop_out_logs in main.py).
+    const LOG_TAG_COLORS = ['var(--brand)', 'var(--teal)', 'var(--amber)', 'var(--lilac)', 'var(--rose)', 'var(--slate)'];
+
+    function logTagColor(tag) {
+      let h = 0;
+      for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
+      return LOG_TAG_COLORS[h % LOG_TAG_COLORS.length];
+    }
+
+    function renderLogLine(div, line) {
+      const match = /^\[([^\]]+)\](.*)$/.exec(line);
+      div.appendChild(document.createTextNode('> '));
+      if (match) {
+        div.style.setProperty('--cat', logTagColor(match[1]));
+        const tag = document.createElement('span');
+        tag.className = 'log-tag';
+        tag.textContent = `[${match[1]}]`;
+        div.appendChild(tag);
+        div.appendChild(document.createTextNode(match[2]));
+      } else {
+        div.appendChild(document.createTextNode(line));
+      }
+    }
+
+    function addLog(line) {
+      const list = document.getElementById('log-list');
+      const div = document.createElement('div');
+      div.className = 'log-entry';
+      renderLogLine(div, line);
+      list.appendChild(div);
+      while (list.childElementCount > 400) list.removeChild(list.firstElementChild);
+      list.scrollTop = list.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById('log-list').innerHTML = '';
+    }
+  </script>
+</body>
+</html>

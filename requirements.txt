@@ -1,0 +1,8 @@
+pywebview      # docked macro UI (Windows: uses the EdgeChromium/WebView2 runtime, preinstalled on Win10/11)
+keyboard       # global hotkeys (Settings > Hotkeys)
+mss            # screen capture (Settings > Webhook > Debug Screenshot, core/rewards.py)
+requests       # multipart webhook uploads (core/webhook.py send_file)
+opencv-python  # reward-icon image preprocessing (core/rewards.py)
+numpy          # array handling for opencv/mss (core/rewards.py)
+pytesseract    # OCR wrapper (core/rewards.py) -- ALSO requires the separate Tesseract OCR
+               # engine binary, which pip cannot install: https://github.com/UB-Mannheim/tesseract/wiki

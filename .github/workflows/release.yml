@@ -1,0 +1,58 @@
+name: Release
+
+# Triggered by pushing a version tag (vX.Y.Z, matching VERSION at the repo
+# root -- see the release checklist in README.md). Publishes a GitHub
+# Release for that tag (so /releases/latest exists -- core/updater.py's
+# auto-update check depends on that endpoint) and attaches a PyInstaller-
+# built Windows build as a convenience download.
+#
+# The auto-updater itself does NOT use this build -- it downloads and
+# swaps in the tag's source zip (GitHub generates that automatically for
+# any tag, no workflow needed), since the officially supported way to run
+# this macro is from Python source via run.bat. The .exe here is best-
+# effort: none of core/*.py's asset/data paths have been reworked to be
+# frozen-build-aware yet, so double-check it can actually find ui/ and
+# Assets/ next to it before relying on it.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          pyinstaller --name "CreamsMacro" --onedir --noconsole \
+            --add-data "ui;ui" \
+            --add-data "Assets;Assets" \
+            main.py
+
+      - name: Zip the build
+        shell: bash
+        run: |
+          cd dist
+          7z a -tzip "../CreamsMacro-${{ github.ref_name }}-windows.zip" "CreamsMacro"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: CreamsMacro-${{ github.ref_name }}-windows.zip

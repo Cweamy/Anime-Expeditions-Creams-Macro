@@ -1,0 +1,41 @@
+name: CI
+
+# Sanity-checks every push/PR: does every Python file still parse, does the
+# frontend JS still parse, and do the dependencies still resolve on Windows
+# (the only platform this macro actually targets -- pywebview's WebView2
+# backend, the `keyboard` global-hotkey hooks, and core/window.py's ctypes
+# calls are all Windows-only, so a Linux runner would give a false sense of
+# coverage). No test suite exists yet -- this is a "did I break the build"
+# gate, not a correctness gate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  sanity-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile-check every Python file
+        shell: bash
+        run: |
+          set -e
+          find . -name "*.py" -not -path "./.git/*" -print0 | xargs -0 python -m py_compile
+
+      - name: Syntax-check the frontend
+        shell: bash
+        run: node --check ui/app.js
