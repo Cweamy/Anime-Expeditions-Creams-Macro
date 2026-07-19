@@ -37,6 +37,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need real tag history for the changelog step below, not a shallow clone
 
       - uses: actions/setup-python@v5
         with:
@@ -53,11 +55,46 @@ jobs:
       - name: Build bootstrapper exe (PyInstaller)
         run: python build_bootstrap.py
 
+      - name: Get changelog from the tag message
+        # A curated summary, not GitHub's raw commit-list changelog --
+        # written into the tag itself (`git tag -a vX.Y.Z -m "..."`) when
+        # cutting a release, read back out here. Falls back to the
+        # pointed-at commit's message if the tag was pushed lightweight
+        # (no -a) and has no message of its own.
+        id: changelog
+        shell: bash
+        run: |
+          BODY=$(git tag -l --format='%(contents)' "${{ github.ref_name }}")
+          if [ -z "$BODY" ]; then
+            BODY=$(git log -1 --format='%B' "${{ github.ref_name }}")
+          fi
+          echo "body<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.body }}
           files: |
             dist/Creams Macro - Anime Expeditions.exe
             dist/Creams Macro - Anime Expeditions Bootstrapper.exe
+
+      - name: Post changelog to Discord
+        shell: bash
+        env:
+          DISCORD_UPDATE_LOGS_WEBHOOK: ${{ secrets.DISCORD_UPDATE_LOGS_WEBHOOK }}
+          BODY: ${{ steps.changelog.outputs.body }}
+          RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+        run: |
+          if [ -z "$DISCORD_UPDATE_LOGS_WEBHOOK" ]; then exit 0; fi
+          # Discord embed descriptions cap at 4096 chars -- trim rather
+          # than let an unusually long changelog fail the whole post.
+          TRIMMED=$(printf '%s' "$BODY" | head -c 3800)
+          PAYLOAD=$(jq -n \
+            --arg title "Cream's Macro ${{ github.ref_name }} is out" \
+            --arg desc "$TRIMMED" \
+            --arg url "$RELEASE_URL" \
+            '{embeds: [{title: $title, description: $desc, url: $url, color: 5793266}]}')
+          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_UPDATE_LOGS_WEBHOOK" >/dev/null

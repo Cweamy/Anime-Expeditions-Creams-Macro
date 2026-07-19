@@ -107,7 +107,9 @@ build_bootstrap.py # builds bootstrap.py into its own small exe
 
 Issues and PRs are welcome. Every push/PR runs a CI sanity check (Python + JS syntax); there's no automated test suite yet, so please describe how you tested a change manually in your PR.
 
-To cut a release: bump `VERSION`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z` — this triggers the release workflow, which builds both exes with PyInstaller (see `build_pyinstaller.py`/`build_bootstrap.py`) and publishes a GitHub Release (what both the auto-updater and the bootstrapper check against).
+To cut a release: bump `VERSION`, commit, then tag with an **annotated** tag whose message is a short, human-readable changelog: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. That message becomes both the GitHub Release body and what gets posted to Discord (see below) — a lightweight tag (no `-a`/`-m`) falls back to just the tagged commit's own message, which is usually not what you want announced. Pushing the tag triggers the release workflow, which builds both exes with PyInstaller (see `build_pyinstaller.py`/`build_bootstrap.py`) and publishes a GitHub Release (what both the auto-updater and the bootstrapper check against).
+
+Every push to `main` posts a one-line summary to a Discord "git log" channel; every tagged release posts its changelog to a separate Discord "update log" channel. Both are wired via `DISCORD_GIT_LOGS_WEBHOOK`/`DISCORD_UPDATE_LOGS_WEBHOOK` repo secrets (Settings > Secrets and variables > Actions) — unset in a fork, so both steps just no-op instead of failing.
 
 To build either exe locally instead of waiting on CI: `pip install pyinstaller`, then `python build_pyinstaller.py` / `python build_bootstrap.py`. Output lands in `dist/`.
 

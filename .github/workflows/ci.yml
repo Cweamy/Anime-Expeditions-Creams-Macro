@@ -39,3 +39,27 @@ jobs:
       - name: Syntax-check the frontend
         shell: bash
         run: node --check ui/app.js
+
+      - name: Post to Discord git log
+        # Only for actual pushes to main, not PRs (a fork's PR run has no
+        # access to repo secrets anyway) -- always() so this still posts
+        # even if a step above failed, since a "did the build break" ping
+        # is exactly what a git-log channel is for. Built with jq (safe
+        # JSON escaping) instead of hand-built/embedded-script JSON, which
+        # kept fighting YAML's own quoting rules.
+        if: always() && github.event_name == 'push'
+        shell: bash
+        env:
+          DISCORD_GIT_LOGS_WEBHOOK: ${{ secrets.DISCORD_GIT_LOGS_WEBHOOK }}
+          JOB_STATUS: ${{ job.status }}
+          COMMIT_URL: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          if [ -z "$DISCORD_GIT_LOGS_WEBHOOK" ]; then exit 0; fi
+          EMOJI="✅"
+          if [ "$JOB_STATUS" != "success" ]; then EMOJI="❌"; fi
+          MSG=$(git log -1 --format='%s' | head -c 200)
+          SHA=$(git rev-parse --short HEAD)
+          AUTHOR=$(git log -1 --format='%an')
+          DESC=$(printf '%s **%s**\n%s · [`%s`](%s)' "$EMOJI" "$MSG" "$AUTHOR" "$SHA" "$COMMIT_URL")
+          PAYLOAD=$(jq -n --arg desc "$DESC" '{embeds: [{description: $desc, color: 5793266}]}')
+          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_GIT_LOGS_WEBHOOK" >/dev/null
