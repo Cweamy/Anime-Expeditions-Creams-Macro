@@ -135,6 +135,16 @@ CANNOT_PLACE_THRESHOLD = 0.85
 MAX_PLACEMENT_THRESHOLD = 0.85
 UNIT_INFO_RESET_CLICK = (3, 3)  # near-empty corner of the Roblox screen -- closes the unit info panel after verifying
 
+# Battle-phase Upgrade/Sell Unit blocks (see _run_battle_blocks_tick):
+# selecting a unit needs a beat to actually open its info panel before the
+# upgradeable/not_upgradeable search means anything.
+BATTLE_BLOCK_CLICK_SETTLE = 0.3
+# How long an Upgrade Unit block waits before retrying after finding
+# not_upgradeable (not enough gold yet, on cooldown, ...) -- not a failure,
+# just not ready, so it keeps its remaining `times` budget and tries again
+# later rather than giving up or burning through a poll every second.
+UPGRADE_RETRY_WAIT = 5.0
+
 # Fallbacks if main.py doesn't pass real calibrated regions through (mirrors
 # main.py's REWARD_REGION_DEFAULTS/STATS_REGION_DEFAULTS).
 DEFAULT_REWARD_REGION = {"x": 212, "y": 429, "width": 504, "height": 106}
@@ -168,6 +178,19 @@ class MacroRunner:
         self._debug_screenshots = False
         self._current_hwnd = None       # set at the top of _run -- lets _checkpoint reach Leave Stage on stop
         self._left_stage_this_run = False
+        # Placed-unit screen positions from THIS match's Pre Start (see
+        # _run_place_unit_block), keyed by the unit's #ordinal among place_unit
+        # blocks (same numbering ui/app.js's listPlacedUnits() uses for the
+        # Upgrade/Sell Unit pickers) -- lets Battle-phase Upgrade/Sell Unit
+        # blocks click the right spot without needing their own recorded
+        # position. Only overwritten when a placement actually runs, so a
+        # block skipped via "Once" on a repeat keeps whatever position its
+        # first placement recorded rather than losing it.
+        self._placed_unit_positions = {}
+        # Battle-phase block state (see _run_battle_blocks_tick) -- reset at
+        # the start of each match in _play_one_match.
+        self._battle_block_index = 0
+        self._battle_block_state = {}
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -529,18 +552,40 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return None
 
-        self._set_status(action="Battle. (Team/equipment + Battle-phase blocks aren't wired up yet.)")
-        self._log("[Macro] Moving into Battle. (Team/equipment + Battle-phase blocks aren't wired up yet.)")
+        # Team/equipment application isn't wired up yet -- Battle-phase
+        # blocks (Upgrade/Sell Unit) are, see _run_battle_blocks_tick.
+        self._set_status(action="Battle. (Team/equipment aren't wired up yet.)")
+        self._log("[Macro] Moving into Battle. (Team/equipment aren't wired up yet.)")
 
-        return self._wait_for_match_result(hwnd, stop_event)
+        battle_blocks = self._load_battle_blocks(task)
+        self._battle_block_index = 0
+        self._battle_block_state = {}
+        return self._wait_for_match_result(hwnd, stop_event, battle_blocks, first_repeat)
 
-    def _wait_for_match_result(self, hwnd, stop_event: threading.Event):
+    def _load_battle_blocks(self, task: dict) -> list:
+        macro_name = task.get("macro")
+        if not macro_name:
+            return []
+        from . import templates as tpl
+        data = tpl.load_template(macro_name)
+        blocks = data.get("blocks") or {}
+        if isinstance(blocks, list):
+            return []  # old-format template -- same as _run_prestart_blocks, needs re-saving
+        return blocks.get("battle") or []
+
+    def _wait_for_match_result(self, hwnd, stop_event: threading.Event, battle_blocks: list = None,
+                                 first_repeat: bool = True):
         self._log("[Macro] Battle in progress -- watching for Victory/Defeat...")
         self._set_status(action="Battle in progress...")
+        battle_blocks = battle_blocks or []
         deadline = time.time() + MATCH_RESULT_TIMEOUT
         while time.time() < deadline:
             if self._checkpoint(stop_event):
                 return None
+            if battle_blocks:
+                self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat)
+                if self._checkpoint(stop_event):
+                    return None
             try:
                 victory_match = vision.find_image(hwnd, "victory")
             except vision.TemplateNotFound as exc:
@@ -571,6 +616,158 @@ class MacroRunner:
         except Exception as exc:
             self._log(f"[Macro] Couldn't save a timeout screenshot: {exc}")
         return None
+
+    def _run_battle_blocks_tick(self, hwnd, stop_event: threading.Event, battle_blocks: list, first_repeat: bool) -> None:
+        """Advances the Battle-phase block list by one step, called once per
+        poll of _wait_for_match_result's Victory/Defeat loop instead of
+        running the whole list to completion up front -- Upgrade Unit can
+        need several separate attempts spread out over the match (see
+        _run_upgrade_unit_tick's not_upgradeable/retry handling), so this
+        has to interleave with the result check rather than block on it.
+
+        self._battle_block_index/self._battle_block_state (reset once per
+        match in _play_one_match) track which block is current and whatever
+        per-block progress it's made (e.g. an Upgrade block's remaining
+        `times` budget and next-retry time) across calls.
+        """
+        while self._battle_block_index < len(battle_blocks):
+            block = battle_blocks[self._battle_block_index]
+            if block.get("once") and not first_repeat:
+                self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} -- '
+                           f'marked "Once" and this isn\'t the first repeat.')
+                self._battle_block_index += 1
+                self._battle_block_state = {}
+                continue
+
+            btype = block.get("type")
+            if btype == "upgrade_unit":
+                done = self._run_upgrade_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
+            elif btype == "sell_unit":
+                done = self._run_sell_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
+                self._battle_block_state = {}
+            else:
+                self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
+                           f'("{btype}") -- not runnable in Battle yet.')
+                done = True
+                self._battle_block_state = {}
+
+            if done:
+                self._battle_block_index += 1
+                self._battle_block_state = {}
+            # Not done (an Upgrade block still has budget left, or is
+            # waiting out its retry cooldown) -- stay on this same block and
+            # pick back up here on the next poll tick, rather than blocking
+            # the whole loop (and the Victory/Defeat check) on it now.
+            return
+
+    def _placed_unit_click_point(self, block: dict, label: str):
+        index = block.get("params", {}).get("index")
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            self._log(f'[Macro] {label}: no unit selected -- skipping.')
+            return None
+        pos = self._placed_unit_positions.get(index)
+        if pos is None:
+            self._log(f'[Macro] {label}: unit #{index} was never placed this match (or Pre Start hasn\'t '
+                       f'placed it yet) -- skipping.')
+            return None
+        return pos
+
+    def _run_upgrade_unit_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int) -> bool:
+        """One attempt: click the unit, look for upgradeable/not_upgradeable.
+        Returns True once this block is DONE (times budget used up, or the
+        unit/position couldn't be resolved at all) -- False means try again
+        later (see UPGRADE_RETRY_WAIT), still holding this block's spot in
+        _run_battle_blocks_tick's loop."""
+        label = f'Battle block #{block_num} (Upgrade Unit)'
+        state = self._battle_block_state
+        if "remaining" not in state:
+            try:
+                state["remaining"] = max(1, int(block.get("params", {}).get("times") or 1))
+            except (TypeError, ValueError):
+                state["remaining"] = 1
+            state["next_attempt"] = 0.0
+
+        if time.time() < state["next_attempt"]:
+            return False  # still waiting out the retry cooldown from a previous not_upgradeable
+
+        pos = self._placed_unit_click_point(block, label)
+        if pos is None:
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+        time.sleep(0.1)
+
+        hotkey = block.get("hotkey")
+        if hotkey:
+            vk = keys.key_name_to_vk(hotkey)
+            if vk is not None:
+                self._keyboard.tap(vk)
+                time.sleep(0.1)
+
+        self._set_status(action=f"Upgrading unit ({state['remaining']} left)...")
+        self._mouse.click(left + pos[0], top + pos[1])
+        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        if self._checkpoint(stop_event):
+            return True
+
+        try:
+            upgrade_match = vision.find_image(hwnd, "upgradeable")
+        except vision.TemplateNotFound:
+            upgrade_match = None
+        if upgrade_match is not None:
+            self._log(f'{label}: found Upgradeable (score {upgrade_match["score"]:.2f}) -- clicking it '
+                       f'({state["remaining"]} left after this).')
+            vision.click_match(self._mouse, hwnd, upgrade_match)
+            time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+            if self._checkpoint(stop_event):
+                return True
+            # Reset click, same corner as before selecting the unit -- closes
+            # the info panel the upgrade click left open, so the next thing
+            # that runs (another attempt on this same unit, or whatever
+            # Battle block comes after it) doesn't have to fight a leftover
+            # panel/tooltip still covering the screen.
+            self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+            state["remaining"] -= 1
+            state["next_attempt"] = 0.0
+            return state["remaining"] <= 0
+
+        try:
+            not_upgrade_match = vision.find_image(hwnd, "not_upgradeable")
+        except vision.TemplateNotFound:
+            not_upgrade_match = None
+        if not_upgrade_match is not None:
+            self._log(f'{label}: not upgradeable yet (score {not_upgrade_match["score"]:.2f}) -- '
+                       f'waiting {UPGRADE_RETRY_WAIT:.0f}s and retrying.')
+        else:
+            self._log(f'{label}: neither Upgradeable nor Not Upgradeable found -- '
+                       f'waiting {UPGRADE_RETRY_WAIT:.0f}s and retrying.')
+        state["next_attempt"] = time.time() + UPGRADE_RETRY_WAIT
+        return False
+
+    def _run_sell_unit_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int) -> bool:
+        """One-shot: click the unit, press X. Always "done" after one try --
+        no retry/budget concept like Upgrade Unit has."""
+        label = f'Battle block #{block_num} (Sell Unit)'
+        pos = self._placed_unit_click_point(block, label)
+        if pos is None:
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+        time.sleep(0.1)
+
+        self._set_status(action="Selling unit...")
+        self._mouse.click(left + pos[0], top + pos[1])
+        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        if self._checkpoint(stop_event):
+            return True
+
+        self._log(f'{label}: clicked unit at {pos} -- pressing X to sell.')
+        self._keyboard.tap(ord("X"))
+        return True
 
     @staticmethod
     def _format_duration(seconds: float) -> str:
@@ -655,6 +852,12 @@ class MacroRunner:
             return None
         if expected:
             self._log(f"[Macro] Possible reward for this stage: {', '.join(expected)}")
+        if names:
+            try:
+                from . import rewards
+                rewards._ensure_wiki_icons_for(names)
+            except Exception as exc:
+                self._log(f"[Macro] Couldn't fetch wiki icons for this stage's rewards: {exc}")
         return names or None
 
     def _capture_stats_image(self, hwnd, stats_region: dict):
@@ -792,9 +995,14 @@ class MacroRunner:
         mention_id = (webhook or {}).get("mention_id")
         content = f"<@{mention_id}>" if mention_id else ""
         try:
-            webhook_module.send(url, embed, content=content, silent=bool(webhook.get("silent")))
+            result = webhook_module.send(url, embed, content=content, silent=bool(webhook.get("silent")))
         except Exception as exc:
             self._log(f"[Macro] Webhook send failed: {exc}")
+            return
+        if result["ok"]:
+            self._log("[Macro] Webhook sent.")
+        else:
+            self._log(f"[Macro] Webhook send failed: {result['reason']}")
 
     def _run_prestart(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
                         first_repeat: bool = True) -> bool:
@@ -878,9 +1086,17 @@ class MacroRunner:
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._log(f'[Macro] Running {len(prestart_blocks)} Pre Start block(s) from "{macro_name}"...')
         self._set_status(action=f'Running "{macro_name}" Pre Start blocks...')
+        # Separate from the generic #i below -- this only counts place_unit
+        # blocks, matching ui/app.js's listPlacedUnits() numbering (the #1,
+        # #2, ... the Upgrade/Sell Unit pickers show), so a template mixing
+        # place_unit and setting_change blocks still numbers its units the
+        # same way the UI does.
+        unit_ordinal = 0
         for i, block in enumerate(prestart_blocks, start=1):
             if self._checkpoint(stop_event):
                 return
+            if block.get("type") == "place_unit":
+                unit_ordinal += 1
             if block.get("once") and not first_repeat:
                 # "Once" (see the block's Once chip in Creation) means only
                 # the task's FIRST entry into this stage runs it -- e.g. a
@@ -891,7 +1107,7 @@ class MacroRunner:
                 continue
             btype = block.get("type")
             if btype == "place_unit":
-                self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name)
+                self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name, unit_ordinal)
             elif btype == "setting_change":
                 self._run_setting_block(block, i)
             else:
@@ -899,7 +1115,7 @@ class MacroRunner:
             time.sleep(0.2)  # brief gap between blocks so the game UI can settle
 
     def _run_place_unit_block(self, hwnd, stop_event: threading.Event, left: int, top: int, block: dict,
-                                index: int, macro_name: str) -> None:
+                                index: int, macro_name: str, unit_ordinal: int = None) -> None:
         params = block.get("params") or {}
         name = params.get("name") or f"#{index}"
         hotkey = block.get("hotkey")
@@ -1001,6 +1217,8 @@ class MacroRunner:
 
         self._log(f'[Macro] Place Unit "{name}": verified placed at ({cur_x}, {cur_y}) '
                    f'(score {exists_match["score"]:.2f}).')
+        if unit_ordinal is not None:
+            self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
         if (cur_x, cur_y) != (int(orig_x), int(orig_y)):
             self._save_corrected_position(macro_name, index, cur_x, cur_y, name)
 

@@ -6,6 +6,7 @@ Tesseract has a real shot at it.
 """
 import os
 import re
+import subprocess
 import numpy as np
 import cv2
 
@@ -18,6 +19,30 @@ _FALLBACK_TESSERACT_PATHS = (
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
 )
 
+# get_pytesseract() runs on every single OCR read (every reward/stat grab),
+# so the actual "is tesseract there" probe below is memoized here instead of
+# re-run each time -- besides being wasteful, pytesseract.get_tesseract_
+# version() is decorated @run_once but that only actually caches when called
+# with cached=True (never, here), so left uncached it was re-spawning a real
+# `tesseract --version` subprocess on every single OCR read. That subprocess
+# call also doesn't hide its console window the way pytesseract's main OCR
+# path (run_tesseract) does -- between the two, that's what was flashing a
+# cmd window seemingly at random during normal use. Probing it ourselves
+# with CREATE_NO_WINDOW instead of going through pytesseract.
+# get_tesseract_version() fixes both: one check ever, and it's silent.
+_resolved_tesseract_cmd = None  # None = not checked yet, "" = checked and unavailable
+
+
+def _tesseract_runs(cmd: str) -> bool:
+    try:
+        subprocess.run(
+            [cmd, "--version"], capture_output=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return True
+    except Exception:
+        return False
+
 
 class TesseractNotAvailable(Exception):
     """The pytesseract *package* is present but the Tesseract OCR *engine*
@@ -25,6 +50,8 @@ class TesseractNotAvailable(Exception):
 
 
 def get_pytesseract():
+    global _resolved_tesseract_cmd
+
     try:
         import pytesseract
     except ImportError as exc:
@@ -32,21 +59,24 @@ def get_pytesseract():
             "pytesseract isn't installed (pip install pytesseract)."
         ) from exc
 
-    try:
-        pytesseract.get_tesseract_version()
+    if _resolved_tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = _resolved_tesseract_cmd
         return pytesseract
-    except Exception:
-        pass  # not on PATH -- try the known install locations below
+    if _resolved_tesseract_cmd == "":  # already checked, confirmed unavailable
+        raise TesseractNotAvailable(
+            "Tesseract OCR engine not found. Install it from "
+            "https://github.com/UB-Mannheim/tesseract/wiki (Windows build), then "
+            "make sure tesseract.exe is on PATH, or set "
+            "pytesseract.pytesseract.tesseract_cmd to its full path."
+        )
 
-    for path in _FALLBACK_TESSERACT_PATHS:
-        if os.path.isfile(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            try:
-                pytesseract.get_tesseract_version()
-                return pytesseract
-            except Exception:
-                continue
+    for candidate in (pytesseract.pytesseract.tesseract_cmd, *_FALLBACK_TESSERACT_PATHS):
+        if _tesseract_runs(candidate):
+            _resolved_tesseract_cmd = candidate
+            pytesseract.pytesseract.tesseract_cmd = candidate
+            return pytesseract
 
+    _resolved_tesseract_cmd = ""
     raise TesseractNotAvailable(
         "Tesseract OCR engine not found. Install it from "
         "https://github.com/UB-Mannheim/tesseract/wiki (Windows build), then "

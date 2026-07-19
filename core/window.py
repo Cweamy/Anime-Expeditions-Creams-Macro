@@ -139,17 +139,37 @@ def client_size_to_window_size(hwnd: int, width: int, height: int):
 
 def set_dpi_aware() -> None:
     """Call once at startup. Roblox is docked at a hardcoded pixel size
-    (config.FIXED_WIN_W/H); if this process and Roblox disagree on what a
-    'pixel' is (non-100% Windows display scaling), the docked game ends up
-    the wrong size on screen."""
+    (config.FIXED_WIN_W/H), and every fixed-coordinate click/search region
+    in core.runner assumes screen pixels and "Windows pixels" are the same
+    thing -- if this process and Roblox disagree on what a "pixel" is
+    (non-100% Windows display scaling), everything drifts: docking sizes
+    the game wrong, and clicks land near but not on the right spot (a
+    reported bug that only showed up in the packaged exe, on other users'
+    machines with scaling other than 100% -- never on a 100%-scale dev
+    machine, and never from source).
+
+    The bug: each of these calls can fail (return FALSE / raise) without
+    ctypes surfacing that as a Python exception -- a bare call whose return
+    value is never checked "succeeds" even when it did nothing. A frozen
+    exe is more likely to already have a DPI-awareness mode set by its own
+    embedded manifest before this ever runs, which makes
+    SetProcessDpiAwarenessContext fail this way (ERROR_ACCESS_DENIED --
+    Windows only allows setting it once), and the old code treated that
+    failure as success and never tried the fallbacks below. Now every
+    attempt's actual result is checked, and get_display_scale_percent()
+    (used at startup for logging/diagnostics) tells us whether this
+    actually took effect.
+    """
     try:
-        user32.SetProcessDpiAwarenessContext(-4)
-        return
+        if user32.SetProcessDpiAwarenessContext(-4):
+            return
     except (OSError, AttributeError):
         pass
     try:
-        ctypes.WinDLL("shcore").SetProcessDpiAwareness(2)
-        return
+        # S_OK == 0 -- this one's a HRESULT, not a BOOL, so success is 0,
+        # not truthy.
+        if ctypes.WinDLL("shcore").SetProcessDpiAwareness(2) == 0:
+            return
     except (OSError, AttributeError):
         pass
     try:

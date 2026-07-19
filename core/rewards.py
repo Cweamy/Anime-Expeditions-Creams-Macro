@@ -245,6 +245,64 @@ def _ensure_icon_reference(icon_bgr: np.ndarray, name: str) -> None:
     _icon_histograms = None  # force a reload next call so the new icon is usable immediately
 
 
+_wiki_icon_checked_names = set()  # names already fetch-attempted this process -- never retried, success or not
+
+
+def _ensure_wiki_icons_for(allowed_names: list) -> None:
+    """Best-effort: downloads real wiki reference icons for whichever of
+    this stage's expected rewards don't have one locally yet, instead of
+    only ever getting a reference icon the first time that item happens to
+    drop live (see _ensure_icon_reference) or requiring
+    tools/fetch_item_icons.py's full-wiki scrape to have been run already.
+    Called once per match (see core.runner._log_expected_rewards) with the
+    stage's known-possible-rewards list, right before the actual reward
+    read -- so identify_item_name has a real icon to match against instead
+    of falling back to OCR/fuzzy-name-matching for an item this stage is
+    *known* to be able to drop.
+
+    Never raises -- offline, a slow wiki, or a name the wiki doesn't have
+    an image for all just leave that item to the existing OCR fallback,
+    same as before this existed.
+    """
+    if not allowed_names:
+        return
+    # Fuzzy, not exact -- same reasoning as _narrow_histograms: the wiki's
+    # own item name ("Gems") doesn't always match the icon filename exactly
+    # ("Gem.png"), so an exact-filename check here would call a name
+    # "missing" (and waste a fetch attempt confirming there's genuinely
+    # nothing new to get) even though a perfectly usable icon already
+    # exists locally under a slightly different spelling.
+    existing = set()
+    if os.path.isdir(_ICON_DIR):
+        existing = {os.path.splitext(f)[0].lower() for f in os.listdir(_ICON_DIR) if f.lower().endswith(".png")}
+
+    def _has_icon(name: str) -> bool:
+        name_lower = name.lower()
+        for have in existing:
+            if name_lower == have or name_lower in have or have in name_lower:
+                return True
+            if difflib.SequenceMatcher(None, name_lower, have).ratio() > 0.8:
+                return True
+        return False
+
+    missing = [
+        name for name in allowed_names
+        if name and name not in _wiki_icon_checked_names and not _has_icon(name)
+    ]
+    if not missing:
+        return
+    _wiki_icon_checked_names.update(missing)
+    try:
+        from tools import fetch_item_icons
+        result = fetch_item_icons.fetch_icons_for(missing, quiet=True)
+    except Exception:
+        return  # offline/unreachable -- OCR fallback still covers this reward read
+    downloaded = [name for name, ok in result.items() if ok]
+    if downloaded:
+        global _icon_histograms
+        _icon_histograms = None  # force a reload so the new icon(s) are usable immediately
+
+
 def _load_icon_histograms() -> dict:
     """Loads every reference icon in assets/item_icons once per process and
     reduces each to a hue/saturation histogram over its non-transparent

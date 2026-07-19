@@ -508,6 +508,7 @@
                      onchange="saveWebhookSettings(true)" onfocus="revealWebhookUrl()" onblur="maskWebhookUrl()">
               <span id="webhook-validity" class="w-2 h-2 rounded-full glow-dot flex-shrink-0" style="background: var(--text-muted); color: var(--text-muted);"></span>
               <button onclick="pasteWebhookUrl()" class="wh-paste-btn">Paste</button>
+              <button id="webhook-test-btn" onclick="testWebhook()" class="wh-paste-btn">Send Test</button>
             </div>
             <div class="wh-hint">Server Settings &gt; Integrations &gt; Webhooks. <span id="webhook-status-text"></span></div>
           </div>

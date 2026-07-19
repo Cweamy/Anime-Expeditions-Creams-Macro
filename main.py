@@ -573,6 +573,15 @@ class Api:
     def validate_webhook_url(self, url: str) -> dict:
         return webhook.validate(url or "")
 
+    def test_webhook(self, url: str) -> dict:
+        embed = {
+            "title": "Test",
+            "description": "If you can see this, the webhook is working.",
+            "color": 0x5865F2,  # Discord blurple
+            "footer": {"text": "Cream's Macro | Anime Expeditions"},
+        }
+        return webhook.send(url or "", embed)
+
     def push_log(self, message: str) -> None:
         self.logger.log(message)
         self._log_history.append(message)
@@ -1126,6 +1135,12 @@ def _launch_ui():
     webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
 
     api = Api()
+    # Diagnostic: confirms whether set_dpi_aware() (called at import time,
+    # above the wm.set_dpi_aware() call at module scope) actually took --
+    # a non-100% value here with docking/clicks still landing wrong would
+    # point elsewhere; still 100 despite real display scaling means it
+    # didn't take and every fixed coordinate in core.runner is off.
+    api.push_log(f"[Macro] Display scale: {wm.get_display_scale_percent()}%.")
     gui_wm = WindowManager(GUI_TITLE)
     roblox_wm = WindowManager(config.ROBLOX_WINDOW_TITLE)  # only used for its resize/client-rect helpers below
 

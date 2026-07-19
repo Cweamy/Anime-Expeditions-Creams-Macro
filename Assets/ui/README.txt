@@ -39,6 +39,13 @@ raid.png
   this is searched for instead. Tight crop of just the word (see
   core.runner._click_gamemode).
 
+upgradeable.png / not_upgradeable.png
+  Used by Battle-phase Upgrade Unit blocks (core.runner._run_upgrade_unit_tick).
+  After clicking a placed unit, the runner searches for whichever of these
+  actually renders on its info panel: upgradeable.png means click it now;
+  not_upgradeable.png (greyed out / insufficient gold / on cooldown,
+  whatever this game shows) means wait and retry later instead of clicking.
+
 Add more <name>.png files here as new macro steps need to recognize other
 buttons/screens -- core.vision.find_image(hwnd, "<name>", ...) will pick
 up any file added under this folder automatically, no code change needed

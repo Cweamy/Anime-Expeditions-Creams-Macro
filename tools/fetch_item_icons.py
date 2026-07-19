@@ -2,11 +2,16 @@
 item from the game's Miraheze wiki (via its public MediaWiki API -- the
 page itself sits behind a bot-check that blocks plain HTTP fetches, but the
 API is meant for exactly this kind of programmatic access) into
-assets/item_icons/, so core.rewards.identify_item_name has something to
+Assets/item_icons/, so core.rewards.identify_item_name has something to
 compare captured reward icons against.
 
 Re-run this whenever the wiki's Items page gains new entries -- it's safe
 to run repeatedly, it just re-downloads and overwrites.
+
+fetch_icons_for(names) below is also imported directly by core.rewards for
+an on-demand, single-stage-sized fetch (just the handful of items a stage
+can actually drop, not the whole wiki) when a stage's expected reward has
+no local icon yet -- see core.rewards._ensure_wiki_icons_for.
 """
 import json
 import os
@@ -16,7 +21,7 @@ import urllib.request
 
 WIKI_API = "https://animeexpeditions.miraheze.org/w/api.php"
 ITEMS_PAGE = "Items"
-ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "item_icons")
+ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Assets", "item_icons")
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # The Items page groups entries under these infobox-style templates --
@@ -68,29 +73,55 @@ def _safe_filename(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9 \-']", "", name).strip() + ".png"
 
 
-def main():
-    item_names = _fetch_item_names()
-    print(f"{len(item_names)} item names on the wiki's Items page")
+def fetch_icons_for(names: list, quiet: bool = True) -> dict:
+    """Downloads just the given items' icons (not the whole wiki) into
+    ICON_DIR. The wiki API has no per-file lookup that's reliable across
+    every item's naming quirks (Icon/Equipment/Accessory suffixes, spaces
+    vs underscores, ...), so this still has to page through the full
+    allimages list once -- but that's one bounded network round-trip
+    regardless of how many names are asked for, and it's the same proven
+    matching _fetch_all_images/_normalize_filename already do for the full
+    scrape below, just applied to a subset. Returns {name: True/False} --
+    False for a name with no matching image found on the wiki (a non-icon
+    cosmetic, or a name that doesn't match the wiki's own spelling).
+    """
+    wanted = {n.lower(): n for n in names if n}
+    if not wanted:
+        return {}
 
     images_by_name = {}
     for img in _fetch_all_images():
-        images_by_name.setdefault(_normalize_filename(img["name"]), img)
+        key = _normalize_filename(img["name"])
+        if key in wanted:
+            images_by_name.setdefault(key, img)
 
     os.makedirs(ICON_DIR, exist_ok=True)
-    downloaded, missing = 0, []
-    for name in item_names:
-        img = images_by_name.get(name.lower())
+    result = {}
+    for key, name in wanted.items():
+        img = images_by_name.get(key)
         if img is None:
-            missing.append(name)
+            result[name] = False
+            if not quiet:
+                print(f"no matching image found for {name!r}")
             continue
         req = urllib.request.Request(img["url"], headers=_HEADERS)
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = resp.read()
         with open(os.path.join(ICON_DIR, _safe_filename(name)), "wb") as f:
             f.write(data)
-        downloaded += 1
+        result[name] = True
+        if not quiet:
+            print(f"downloaded icon for {name!r}")
+    return result
 
-    print(f"downloaded {downloaded} icons to {ICON_DIR}")
+
+def main():
+    item_names = _fetch_item_names()
+    print(f"{len(item_names)} item names on the wiki's Items page")
+    result = fetch_icons_for(item_names, quiet=True)
+    downloaded = [n for n, ok in result.items() if ok]
+    missing = [n for n, ok in result.items() if not ok]
+    print(f"downloaded {len(downloaded)} icons to {ICON_DIR}")
     if missing:
         print(f"no matching image found for {len(missing)} items (likely non-icon cosmetics): {missing}")
 
