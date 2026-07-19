@@ -17,8 +17,11 @@ match whatever snake_case name the calling code actually uses.
 nav_play.png
   The Play button on the Nav bar (bottom-left menu: Store/Units/Items/
   Quests/Summon/Areas/Play/Events). Searched for inside a fixed region
-  (74, 434, 58, 58) in the docked game window's own coordinates, both to
-  confirm you're on the lobby (it only renders there) and to click it.
+  (core.runner.NAV_PLAY_REGION) in the docked game window's own
+  coordinates, both to confirm you're on the lobby (it only renders there)
+  and to click it. The region is padded well past the button's own size on
+  purpose -- gives template matching room to find it even if it's drifted
+  a bit, see the region's own comment in core/runner.py.
 
 nav_back.png
   The "Back" button shown on the gamemode-select screen (Story/Raid/
@@ -45,6 +48,11 @@ upgradeable.png / not_upgradeable.png
   actually renders on its info panel: upgradeable.png means click it now;
   not_upgradeable.png (greyed out / insufficient gold / on cooldown,
   whatever this game shows) means wait and retry later instead of clicking.
+
+team.png
+  Used by Team Loadout application (core.runner._apply_team_loadout).
+  After pressing H, the runner waits for this to confirm the team-select
+  panel actually opened, then clicks it before picking a Loadout row.
 
 Add more <name>.png files here as new macro steps need to recognize other
 buttons/screens -- core.vision.find_image(hwnd, "<name>", ...) will pick

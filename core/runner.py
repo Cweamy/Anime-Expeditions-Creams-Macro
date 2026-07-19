@@ -1,14 +1,14 @@
 """The macro's actual run loop -- Dashboard > Start. Currently covers the
 launch sequence (confirm the task queue isn't empty, confirm we're on the
 lobby screen, open Play > Story), picking the first task's map and stage,
-Pre Start (camera setup, a per-map default walk, the task's Macro Operation
-template's Pre Start blocks), pressing Start Game, and then waiting out the
-battle for a Victory/Defeat screen -- which gets its game stats (and, on a
-win, its rewards) read via OCR, recorded to run history/win-loss counts, and
-reported to Discord if a webhook is configured. Team/equipment application
-and the full Battle-phase block runner (mid-match upgrades/sells/waits) plug
-in once those exist -- this only watches for the match to END, it doesn't
-act during it yet.
+Pre Start (camera setup, Team Loadout, a per-map default walk, the task's
+Macro Operation template's Pre Start blocks), pressing Start Game, and then
+watching the battle for Battle-phase blocks (Upgrade/Sell/Auto Upgrade Unit)
+and a Victory/Defeat screen -- which gets its game stats (and, on a win, its
+rewards) read via OCR, recorded to run history/win-loss counts, and reported
+to Discord if a webhook is configured. Equipment include/exclude, and the
+rest of the Battle-phase block types (Walk/Wait/Setting), plug in once those
+exist.
 """
 import threading
 import time
@@ -161,6 +161,14 @@ UPGRADE_RETRY_WAIT = 5.0
 AUTO_UPGRADE_MENU_CLICK = (345, 453)  # right-click point that opens the menu
 AUTO_UPGRADE_PRIORITY_1 = (427, 487)  # Priority 1's row
 AUTO_UPGRADE_PRIORITY_ROW_HEIGHT = 34
+
+# Team Loadout application (see _apply_team_loadout) -- H opens the panel,
+# then Loadout 1-3 are stacked rows at a fixed position. 4+ exist in
+# Creation's picker but aren't reachable yet without scrolling.
+TEAM_PANEL_TIMEOUT = 5.0
+TEAM_LOADOUT_CLICK_1 = (800, 324)  # Loadout 1's row
+TEAM_LOADOUT_ROW_HEIGHT = 126
+TEAM_LOADOUT_MAX_SUPPORTED = 3
 
 # Fallbacks if main.py doesn't pass real calibrated regions through (mirrors
 # main.py's REWARD_REGION_DEFAULTS/STATS_REGION_DEFAULTS).
@@ -329,7 +337,9 @@ class MacroRunner:
         # A click has to actually reach the game, not this panel -- same
         # focus-fix every other live-input action in this app uses.
         wm.show_window(hwnd)
-        wm.activate_window(hwnd)
+        if not wm.activate_window(hwnd):
+            self._log("[Macro] Couldn't confirm Roblox actually took focus -- clicks may not register "
+                       "until it does. Continuing anyway.")
 
         for task_index, task in enumerate(tasks, start=1):
             if self._checkpoint(stop_event):
@@ -569,10 +579,10 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return None
 
-        # Team/equipment application isn't wired up yet -- Battle-phase
-        # blocks (Upgrade/Sell Unit) are, see _run_battle_blocks_tick.
-        self._set_status(action="Battle. (Team/equipment aren't wired up yet.)")
-        self._log("[Macro] Moving into Battle. (Team/equipment aren't wired up yet.)")
+        # Equipment include/exclude still isn't wired up yet -- Team itself
+        # is (see _apply_team_loadout, run earlier in Pre Start).
+        self._set_status(action="Battle. (Equipment include/exclude isn't wired up yet.)")
+        self._log("[Macro] Moving into Battle. (Equipment include/exclude isn't wired up yet.)")
 
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
@@ -1082,6 +1092,10 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return False
 
+        self._apply_team_loadout(hwnd, stop_event, task)
+        if self._checkpoint(stop_event):
+            return False
+
         # The default walk only makes sense the FIRST time a task enters a
         # stage -- once you're standing where the walk leaves you, repeating
         # the same walk on every repeat would just walk you away from that
@@ -1121,6 +1135,58 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return False
         return True
+
+    def _apply_team_loadout(self, hwnd, stop_event: threading.Event, task: dict) -> None:
+        """Presses H to open the team-select panel, waits for it to
+        actually open, then clicks the task's Macro Operation template's
+        configured Team Loadout slot (1-8 in Creation's picker, though only
+        1-3 are positioned here -- 4+ need a scroll method not implemented
+        yet). Best-effort like every other Pre Start step: no team set, an
+        out-of-range slot, or the panel never opening all just skip with a
+        log line instead of failing the run."""
+        macro_name = task.get("macro")
+        if not macro_name:
+            return
+        from . import templates as tpl
+        data = tpl.load_template(macro_name)
+        blocks = data.get("blocks") or {}
+        if isinstance(blocks, list):
+            return  # old-format template -- same as _run_prestart_blocks
+        team = blocks.get("team") or ""
+        if not team:
+            return
+
+        try:
+            team_num = int(team)
+        except (TypeError, ValueError):
+            self._log(f'[Macro] Team Loadout "{team}" isn\'t a recognized slot number -- skipping.')
+            return
+        if not (1 <= team_num <= TEAM_LOADOUT_MAX_SUPPORTED):
+            self._log(f'[Macro] Team Loadout {team_num} needs scrolling to reach (only 1-'
+                       f'{TEAM_LOADOUT_MAX_SUPPORTED} are positioned so far) -- skipping.')
+            return
+
+        self._log(f"[Macro] Applying Team Loadout {team_num}...")
+        self._set_status(action=f"Applying Team Loadout {team_num}...")
+        self._keyboard.tap(ord("H"))
+
+        try:
+            team_match = vision.wait_for_image(hwnd, "team", timeout=TEAM_PANEL_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't confirm the team panel opened: {exc}")
+            return
+        if team_match is None:
+            if not stop_event.is_set():
+                self._log('[Macro] Team panel never opened (no "team" match) -- skipping.')
+            return
+        vision.click_match(self._mouse, hwnd, team_match)
+        if self._checkpoint(stop_event):
+            return
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        row_y = TEAM_LOADOUT_CLICK_1[1] + (team_num - 1) * TEAM_LOADOUT_ROW_HEIGHT
+        self._mouse.click(left + TEAM_LOADOUT_CLICK_1[0], top + row_y)
+        self._log(f"[Macro] Clicked Loadout {team_num}.")
 
     def _run_prestart_blocks(self, hwnd, stop_event: threading.Event, task: dict, first_repeat: bool = True) -> None:
         # The task's Macro Operation (Creation > template) is what actually
@@ -1678,6 +1744,15 @@ class MacroRunner:
         debug_path = self._debug_save(hwnd, "nav_play", match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
         self._log(f"[Macro] Found Play (score {match['score']:.2f}) -- clicking it.{suffix}")
+        # Reasserted right here, not just once at the top of the run --
+        # SendInput clicks go to whatever window has REAL OS focus, and
+        # this is the very first live click after a screen transition
+        # (lobby just loaded), the exact moment focus is most likely to
+        # not have actually settled yet. Reported by multiple users as
+        # "it finds Play correctly, the click just doesn't register."
+        if not wm.activate_window(hwnd):
+            self._log("[Macro] Couldn't confirm focus before clicking Play -- click may not register.")
+        time.sleep(0.1)
         vision.click_match(self._mouse, hwnd, match)
         return True
 

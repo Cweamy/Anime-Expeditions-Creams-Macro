@@ -21,6 +21,15 @@ user32.LoadImageW.argtypes = [
 user32.SendMessageW.restype = ctypes.c_void_p
 user32.SendMessageW.argtypes = [wintypes.HWND, ctypes.c_uint, wintypes.WPARAM, ctypes.c_void_p]
 
+# Used by activate_window's AttachThreadInput workaround below.
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, wintypes.LPDWORD]
+user32.AttachThreadInput.restype = wintypes.BOOL
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+user32.SetForegroundWindow.restype = wintypes.BOOL
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ROBLOX_PROCESS_NAME = "robloxplayerbeta.exe"
 
@@ -368,10 +377,52 @@ def set_window_icon(hwnd: int, ico_path: str) -> bool:
     return ok
 
 
-def activate_window(hwnd: int) -> None:
+def activate_window(hwnd: int) -> bool:
+    """Brings hwnd to the foreground -- returns whether it actually worked.
+
+    Every click this app sends goes through SendInput, which is GLOBAL
+    synthetic input: it goes to whatever window currently has real OS
+    input focus, not to a specific hwnd. If activation silently failed,
+    every click after it can miss Roblox entirely and land nowhere (or on
+    whatever else has focus) -- this exact symptom ("it finds the button
+    correctly, the click just doesn't register") is consistent with plain
+    SetForegroundWindow failing, which the old code never checked for
+    (same class of bug as core.window.set_dpi_aware's fix).
+
+    Windows deliberately restricts SetForegroundWindow: a call from a
+    process that isn't already "in the foreground lineage" can silently
+    fail and return FALSE (an anti-annoyance measure so background apps
+    can't just steal focus at will) -- extremely plausible for a docked-
+    window automation app clicking programmatically rather than through a
+    real user-initiated click. The standard, reliable workaround:
+    temporarily attach this thread's input queue to both the CURRENT
+    foreground window's thread and hwnd's own thread, which makes Windows
+    treat the call as if it came from an already-foreground process
+    (always allowed), then detach again either way.
+    """
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, SW_RESTORE)
-    user32.SetForegroundWindow(hwnd)
+    if user32.SetForegroundWindow(hwnd):
+        return True
+
+    current_thread = kernel32.GetCurrentThreadId()
+    fg_hwnd = user32.GetForegroundWindow()
+    fg_thread = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+
+    attached_fg = attached_target = False
+    if fg_thread and fg_thread != current_thread:
+        attached_fg = bool(user32.AttachThreadInput(current_thread, fg_thread, True))
+    if target_thread and target_thread != current_thread:
+        attached_target = bool(user32.AttachThreadInput(current_thread, target_thread, True))
+    try:
+        ok = bool(user32.SetForegroundWindow(hwnd))
+    finally:
+        if attached_fg:
+            user32.AttachThreadInput(current_thread, fg_thread, False)
+        if attached_target:
+            user32.AttachThreadInput(current_thread, target_thread, False)
+    return ok
 
 
 def move_window(hwnd: int, x: int, y: int, w: int, h: int) -> None:

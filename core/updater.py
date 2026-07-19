@@ -79,7 +79,16 @@ def check_for_update(timeout: float = 6.0) -> dict:
     if not tag or _parse_version(tag) <= _parse_version(current):
         return {"available": False}
 
-    exe_asset = next((a for a in data.get("assets", []) if a.get("name", "").lower().endswith(".exe")), None)
+    # "bootstrapper" must be excluded here -- every release has TWO .exe
+    # assets (the real app and the small bootstrapper, see release.yml),
+    # and picking whichever happens to come first in the API's asset order
+    # risked self-updating by overwriting the real app with the tiny
+    # bootstrapper. bootstrap.py's own _find_exe_asset_url() already
+    # excludes it the same way; this just needed the same filter.
+    exe_asset = next(
+        (a for a in data.get("assets", [])
+         if a.get("name", "").lower().endswith(".exe") and "bootstrapper" not in a.get("name", "").lower()),
+        None)
     return {
         "available": True,
         "version": tag,
