@@ -24,7 +24,16 @@ from . import window as wm
 # Nav > Play button, in the docked game window's own client coordinates
 # (top-left of the docked Roblox window == (0, 0), same convention as every
 # other fixed region in this codebase, e.g. main.REWARD_SCROLLBAR_PROBE).
-NAV_PLAY_REGION = (74, 434, 58, 58)
+# Padded well past the button's own ~58x58 footprint (was searched at
+# exactly that size, with zero margin for the button being even a few
+# pixels off from where this assumed it'd be -- matchTemplate needs the
+# whole template to fit inside the search region, so a template this size
+# with no padding had nowhere to "look around" at all) -- template matching
+# already scans every position within whatever region it's given, so a
+# bigger region is a wider/fuzzier scan for free, not a slower or less
+# precise one; the score threshold (see vision.DEFAULT_THRESHOLD) is what
+# actually decides what counts as a match, not the region size.
+NAV_PLAY_REGION = (44, 404, 118, 118)
 
 # Recovery after a failed map search (see _spam_back_until_gone): repeatedly
 # click Back until it's no longer found, rather than leaving the run stuck
@@ -144,6 +153,14 @@ BATTLE_BLOCK_CLICK_SETTLE = 0.3
 # just not ready, so it keeps its remaining `times` budget and tries again
 # later rather than giving up or burning through a poll every second.
 UPGRADE_RETRY_WAIT = 5.0
+
+# Auto Upgrade Unit's priority menu (see _run_auto_upgrade_unit_tick):
+# right-clicking a selected unit opens a fixed-position context menu with
+# Priority 1-6 stacked rows, then a Disable row one more row-height below
+# Priority 6.
+AUTO_UPGRADE_MENU_CLICK = (345, 453)  # right-click point that opens the menu
+AUTO_UPGRADE_PRIORITY_1 = (427, 487)  # Priority 1's row
+AUTO_UPGRADE_PRIORITY_ROW_HEIGHT = 34
 
 # Fallbacks if main.py doesn't pass real calibrated regions through (mirrors
 # main.py's REWARD_REGION_DEFAULTS/STATS_REGION_DEFAULTS).
@@ -645,6 +662,9 @@ class MacroRunner:
             elif btype == "sell_unit":
                 done = self._run_sell_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
                 self._battle_block_state = {}
+            elif btype == "auto_upgrade_unit":
+                done = self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
+                self._battle_block_state = {}
             else:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
                            f'("{btype}") -- not runnable in Battle yet.')
@@ -767,6 +787,49 @@ class MacroRunner:
 
         self._log(f'{label}: clicked unit at {pos} -- pressing X to sell.')
         self._keyboard.tap(ord("X"))
+        return True
+
+    def _run_auto_upgrade_unit_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int) -> bool:
+        """One-shot: click the unit, right-click to open its priority menu,
+        click the configured priority row (or Disable for "None"), then a
+        reset click. Always "done" after one try -- setting a priority
+        isn't a repeated action the way Upgrade Unit's clicks are."""
+        label = f'Battle block #{block_num} (Auto Upgrade Unit)'
+        pos = self._placed_unit_click_point(block, label)
+        if pos is None:
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._set_status(action="Setting auto-upgrade priority...")
+        self._mouse.click(left + pos[0], top + pos[1])
+        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        if self._checkpoint(stop_event):
+            return True
+
+        self._mouse.click(left + AUTO_UPGRADE_MENU_CLICK[0], top + AUTO_UPGRADE_MENU_CLICK[1], button="right")
+        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        if self._checkpoint(stop_event):
+            return True
+
+        priority = str(block.get("params", {}).get("priority") or "None")
+        if priority == "None":
+            # The Disable row sits one row-height below Priority 6 -- the
+            # last of the 6 priority rows, not a 7th priority.
+            row_index = 6
+            self._log(f'{label}: disabling auto-upgrade for this unit.')
+        else:
+            try:
+                row_index = int(priority) - 1
+            except ValueError:
+                row_index = 0
+            self._log(f'{label}: setting priority {priority}.')
+        row_y = AUTO_UPGRADE_PRIORITY_1[1] + row_index * AUTO_UPGRADE_PRIORITY_ROW_HEIGHT
+        self._mouse.click(left + AUTO_UPGRADE_PRIORITY_1[0], top + row_y)
+        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        if self._checkpoint(stop_event):
+            return True
+
+        self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
         return True
 
     @staticmethod

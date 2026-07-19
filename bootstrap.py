@@ -20,7 +20,7 @@ APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 GITHUB_REPO = "Cweamy/Anime-Expeditions-Creams-Macro"
 RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-LOCAL_EXE = os.path.join(APP_DIR, "Cream's Macro - Anime Expeditions.exe")
+LOCAL_EXE = os.path.join(APP_DIR, "Creams Macro - Anime Expeditions.exe")
 VERSION_FILE = os.path.join(APP_DIR, ".bootstrap_version")
 
 MB_OK = 0x40

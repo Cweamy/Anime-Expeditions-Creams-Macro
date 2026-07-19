@@ -2,15 +2,23 @@ name: Release
 
 # Triggered by pushing a version tag (vX.Y.Z, matching VERSION at the repo
 # root -- see the release checklist in README.md). Builds the real app exe
-# and a small bootstrapper exe with Nuitka (see build_nuitka.py/
+# and a small bootstrapper exe with PyInstaller (see build_pyinstaller.py/
 # build_bootstrap.py) and publishes them on a GitHub Release for that tag.
 #
-# Nuitka, not PyInstaller: the first packaged build of this app used
-# PyInstaller and crashed on launch ("Failed to resolve Python.Runtime.
-# Loader") because its bundled pywebview plugin drops the
-# webview.platforms.win32 module that winforms.py needs. build_nuitka.py
-# works around the equivalent issue in Nuitka's own pywebview plugin by
-# including the right backend modules explicitly -- see its comments.
+# PyInstaller, not Nuitka: Nuitka's C-compile step took 15-20+ minutes per
+# release (see git history) for a repo this size. PyInstaller just bundles
+# the interpreter + bytecode -- no compile step, builds finish in under a
+# minute. Trade-off: PyInstaller's bundled bytecode is far easier to
+# decompile back to readable source than Nuitka's compiled machine code --
+# an accepted trade here since this is a public source repo with nothing
+# proprietary to protect by making it hard to reverse.
+#
+# The very first packaged build of this app (also PyInstaller) crashed on
+# launch ("Failed to resolve Python.Runtime.Loader") because PyInstaller's
+# own pywebview hook doesn't collect webview.platforms.win32, which
+# winforms.py needs unconditionally. build_pyinstaller.py fixes that with
+# explicit --hidden-import flags this time instead of switching build
+# tools blind a second time.
 #
 # core/updater.py's in-app update check downloads whichever of these two
 # assets is relevant (the exe itself when running frozen, the tag's source
@@ -34,32 +42,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Cache Nuitka build
-        uses: actions/cache@v4
-        with:
-          path: |
-            dist-nuitka/main.build
-            dist-nuitka/main.dist
-            dist-nuitka/main.onefile-build
-          # Keyed on requirements.txt, not main.py/core/*.py -- those change
-          # on almost every release. Nuitka does its own incremental
-          # recompile within main.build across runs, so restoring the last
-          # build's intermediate objects still lets it skip rebuilding the
-          # untouched dependency code (numpy, opencv wrapper, pywebview,
-          # ...) even though our own source changed -- only this key needs
-          # to change when the actual dependency set changes.
-          key: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
-          restore-keys: nuitka-${{ runner.os }}-
-
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install nuitka
+          pip install pyinstaller
 
-      - name: Build app exe (Nuitka)
-        run: python build_nuitka.py
+      - name: Build app exe (PyInstaller)
+        run: python build_pyinstaller.py
 
-      - name: Build bootstrapper exe (Nuitka)
+      - name: Build bootstrapper exe (PyInstaller)
         run: python build_bootstrap.py
 
       - name: Create GitHub Release
@@ -68,5 +59,5 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            dist-nuitka/Cream's Macro - Anime Expeditions.exe
-            dist-nuitka/Cream's Macro - Anime Expeditions Bootstrapper.exe
+            dist/Creams Macro - Anime Expeditions.exe
+            dist/Creams Macro - Anime Expeditions Bootstrapper.exe

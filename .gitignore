@@ -37,13 +37,9 @@ __pycache__/
 .venv/
 venv/
 
-# Build output -- see build_nuitka.py / build_bootstrap.py. The release
-# workflow builds these fresh in CI; never commit a local build.
+# Build output -- see build_pyinstaller.py / build_bootstrap.py. The
+# release workflow builds these fresh in CI; never commit a local build.
 build/
 dist/
-dist-nuitka/
-*.build/
-*.dist/
-*.onefile-build/
 *.spec
 .bootstrap_version

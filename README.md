@@ -47,7 +47,7 @@
 
 ### Option A: Download (recommended)
 
-Grab **`Cream's Macro - Anime Expeditions Bootstrapper.exe`** from the [latest release](https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest) and run it. It's a small (~few MB) downloader — on first run it fetches the real app from this repo's Releases and launches it, then keeps itself up to date on every launch. No Python, no `git clone`, nothing else to install except Tesseract (below).
+Grab **`Creams Macro - Anime Expeditions Bootstrapper.exe`** from the [latest release](https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest) and run it. It's a small (~few MB) downloader — on first run it fetches the real app from this repo's Releases and launches it, then keeps itself up to date on every launch. No Python, no `git clone`, nothing else to install except Tesseract (below).
 
 ### Option B: Run from source
 
@@ -99,7 +99,7 @@ Assets/map/      # full map images for the Set Position picker
 Assets/maps/     # map name-label crops for map-select image search
 Paths/defaults/  # known-good default walk paths, shipped with the repo
 bootstrap.py     # tiny downloader exe -- what most users actually run (see Installation)
-build_nuitka.py  # builds the real app exe
+build_pyinstaller.py # builds the real app exe
 build_bootstrap.py # builds bootstrap.py into its own small exe
 ```
 
@@ -107,9 +107,9 @@ build_bootstrap.py # builds bootstrap.py into its own small exe
 
 Issues and PRs are welcome. Every push/PR runs a CI sanity check (Python + JS syntax); there's no automated test suite yet, so please describe how you tested a change manually in your PR.
 
-To cut a release: bump `VERSION`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z` — this triggers the release workflow, which builds both exes with Nuitka (see `build_nuitka.py`/`build_bootstrap.py`) and publishes a GitHub Release (what both the auto-updater and the bootstrapper check against).
+To cut a release: bump `VERSION`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z` — this triggers the release workflow, which builds both exes with PyInstaller (see `build_pyinstaller.py`/`build_bootstrap.py`) and publishes a GitHub Release (what both the auto-updater and the bootstrapper check against).
 
-To build either exe locally instead of waiting on CI: `pip install nuitka` (needs a python.org CPython, not the Microsoft Store build — Nuitka rejects it), then `python build_nuitka.py` / `python build_bootstrap.py`. Output lands in `dist-nuitka/`.
+To build either exe locally instead of waiting on CI: `pip install pyinstaller`, then `python build_pyinstaller.py` / `python build_bootstrap.py`. Output lands in `dist/`.
 
 ## Disclaimer
 
