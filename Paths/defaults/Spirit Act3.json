@@ -1,0 +1,15 @@
+{
+  "name": "Spirit Act3",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 1.521,
+      "key": "d",
+      "state": "up"
+    }
+  ]
+}

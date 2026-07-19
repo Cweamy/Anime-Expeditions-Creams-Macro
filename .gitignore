@@ -12,8 +12,17 @@ Assets/stage_data.json
 # Generated at runtime -- debug captures, recorded paths, saved templates,
 # the task queue. None of it is meaningful to anyone but you.
 debug/
-Paths/
+Paths/*
 Templates/
+
+# Paths/defaults/ is the exception -- known-good walk paths for specific
+# maps/acts (Fairy King Forest, King's Tomb, Spirit City Act 3) that the
+# macro's Pre Start step looks up by name (see Assets/default_walk_paths.json
+# and core.paths.load_path's fallback). Shared game data, not personal
+# recordings, so unlike the rest of Paths/ it ships with the repo -- without
+# it, the auto-walk feature would just silently do nothing for anyone who
+# clones this.
+!Paths/defaults/
 
 # Personal config -- includes your Discord webhook URL, hotkeys, calibrated
 # regions, etc. Never commit this.

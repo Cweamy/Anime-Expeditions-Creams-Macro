@@ -19,6 +19,20 @@ import threading
 import time
 
 PATHS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Paths")
+# Known-good walk paths for specific maps/acts, shipped with the repo (see
+# Assets/default_walk_paths.json and .gitignore's Paths/defaults/ exception)
+# -- shared game data, not personal recordings, so unlike everything else in
+# Paths/ these are git-tracked. load_path/list_paths fall back to this
+# folder so a fresh clone gets working default walks with nothing to record
+# first; saving a path under the same name in the regular Paths/ folder
+# overrides it (see load_path).
+DEFAULT_PATHS_DIR = os.path.join(PATHS_DIR, "defaults")
+# The map-name -> path-name mapping to go with DEFAULT_PATHS_DIR above --
+# shipped/tracked for the same reason, read by main.Api.get_default_walk_paths/
+# start_macro and merged with the user's own settings.json overrides (a
+# user's own mapping for the same map wins).
+SHIPPED_DEFAULT_WALK_PATHS_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Assets", "default_walk_paths.json")
 
 _POLL_INTERVAL = 0.03  # 30ms -- well under human key-tap duration, cheap enough to poll forever
 # W/A/S/D for movement, I/O for whatever in-game action a recorded route
@@ -125,10 +139,21 @@ def _safe_name(name: str) -> str:
     return cleaned or "path"
 
 
+def load_shipped_default_walk_paths() -> dict:
+    try:
+        with open(SHIPPED_DEFAULT_WALK_PATHS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def list_paths() -> list:
-    if not os.path.isdir(PATHS_DIR):
-        return []
-    return sorted(f[:-5] for f in os.listdir(PATHS_DIR) if f.endswith(".json"))
+    names = set()
+    if os.path.isdir(DEFAULT_PATHS_DIR):
+        names.update(f[:-5] for f in os.listdir(DEFAULT_PATHS_DIR) if f.endswith(".json"))
+    if os.path.isdir(PATHS_DIR):
+        names.update(f[:-5] for f in os.listdir(PATHS_DIR) if f.endswith(".json"))
+    return sorted(names)
 
 
 def save_path(name: str, events: list) -> str:
@@ -141,12 +166,18 @@ def save_path(name: str, events: list) -> str:
 
 
 def load_path(name: str) -> dict:
-    path = os.path.join(PATHS_DIR, f"{_safe_name(name)}.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {"name": name, "events": []}
+    safe = _safe_name(name)
+    # Your own recording (Paths/<name>.json) wins if one exists under this
+    # name -- only falls back to the shipped default when you haven't
+    # recorded your own version of it.
+    for directory in (PATHS_DIR, DEFAULT_PATHS_DIR):
+        path = os.path.join(directory, f"{safe}.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+    return {"name": name, "events": []}
 
 
 def replay_events(events: list, keyboard, stop_event: threading.Event = None) -> None:

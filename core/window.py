@@ -13,6 +13,14 @@ gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 user32.GetWindowLongPtrW.restype = ctypes.c_void_p
 user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
 
+# Handle-sized return/params -- same truncation risk as GetWindowLongPtrW
+# above (ctypes defaults to c_int, which chops a 64-bit HICON/HWND).
+user32.LoadImageW.restype = ctypes.c_void_p
+user32.LoadImageW.argtypes = [
+    wintypes.HINSTANCE, wintypes.LPCWSTR, ctypes.c_uint, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+user32.SendMessageW.restype = ctypes.c_void_p
+user32.SendMessageW.argtypes = [wintypes.HWND, ctypes.c_uint, wintypes.WPARAM, ctypes.c_void_p]
+
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ROBLOX_PROCESS_NAME = "robloxplayerbeta.exe"
 
@@ -311,6 +319,33 @@ def hide_window(hwnd: int) -> None:
 
 def show_window(hwnd: int) -> None:
     user32.ShowWindow(hwnd, SW_SHOW)
+
+
+WM_SETICON = 0x0080
+ICON_SMALL = 0
+ICON_BIG = 1
+IMAGE_ICON = 1
+LR_LOADFROMFILE = 0x00000010
+LR_DEFAULTSIZE = 0x00000040
+
+
+def set_window_icon(hwnd: int, ico_path: str) -> bool:
+    """Sets the titlebar/taskbar icon for a plain (non-frozen) window --
+    pywebview's own `icon=` start() param only works on the GTK/QT backends,
+    not Windows' EdgeChromium one, so this is done directly via WM_SETICON
+    instead. Loaded twice (small/big) since Windows uses different sizes for
+    the titlebar vs. Alt-Tab/taskbar and LoadImageW with LR_DEFAULTSIZE only
+    picks one size per call."""
+    if not os.path.isfile(ico_path):
+        return False
+    ok = True
+    for icon_type, size in ((ICON_SMALL, 16), (ICON_BIG, 32)):
+        handle = user32.LoadImageW(None, ico_path, IMAGE_ICON, size, size, LR_LOADFROMFILE)
+        if not handle:
+            ok = False
+            continue
+        user32.SendMessageW(hwnd, WM_SETICON, icon_type, handle)
+    return ok
 
 
 def activate_window(hwnd: int) -> None:

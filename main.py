@@ -53,6 +53,7 @@ GUI_HEIGHT_FULL = TITLEBAR_H + config.FIXED_WIN_H + LOGS_H
 GUI_HEIGHT_COMPACT = TITLEBAR_H + 280
 UI_INDEX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "index.html")
 LOGS_WINDOW_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "logs_window.html")
+LOGO_ICO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.ico")
 LOG_HISTORY_LIMIT = 500  # caps what a freshly popped-out window gets replayed with
 
 HOTKEY_DEFAULTS = {
@@ -298,9 +299,13 @@ class Api:
         # left on Auto for a map that already has a good recorded route,
         # instead of every template that ever runs that map having to pick
         # the same Custom path by hand. Settings > Debug > Pathing manages
-        # this list; the runner reads it once the Pre Start walk step is
-        # wired up to actually apply it.
-        return cfg.load().get("default_walk_paths", {})
+        # this list. A few maps ship a known-good default (see
+        # core.paths.load_shipped_default_walk_paths /
+        # Assets/default_walk_paths.json) -- your own settings.json entry
+        # for the same map overrides it, same as core.paths.load_path lets
+        # your own recording under the same name override the shipped one.
+        from core import paths as walk_paths
+        return {**walk_paths.load_shipped_default_walk_paths(), **cfg.load().get("default_walk_paths", {})}
 
     def set_default_walk_path(self, map_name: str, path_name: str) -> dict:
         data = cfg.load()
@@ -319,7 +324,7 @@ class Api:
         scroll_nudges = data.get("story_scroll_nudges", 8)
         coords = {k: data.get(k, v) for k, v in MACRO_COORD_DEFAULTS.items()}
         debug_screenshots = data.get("debug_screenshots", False)
-        default_walk_paths = data.get("default_walk_paths", {})
+        default_walk_paths = self.get_default_walk_paths()
         reward_region = self.get_reward_region()
         stats_region = self.get_stats_region()
         webhook_settings = self.get_webhook_settings()
@@ -1128,6 +1133,23 @@ def _launch_ui():
         easy_drag=False,  # dragging is handled by the .pywebview-drag-region element in ui/index.html instead
     )
     api.set_window(window)
+
+    def _set_window_icon_background():
+        # pywebview's own icon= start() param only works on GTK/QT, not the
+        # Windows EdgeChromium backend this app actually uses (see
+        # core.window.set_window_icon) -- and the native window doesn't
+        # exist to set an icon ON until webview.start()'s GUI loop actually
+        # creates it, hence polling here rather than doing this right after
+        # create_window() above.
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            hwnd = gui_wm.find()
+            if hwnd:
+                wm.set_window_icon(hwnd, LOGO_ICO)
+                return
+            time.sleep(0.2)
+
+    threading.Thread(target=_set_window_icon_background, daemon=True).start()
 
     def _check_for_update_background():
         # A few seconds after launch, not immediately -- so a slow/offline

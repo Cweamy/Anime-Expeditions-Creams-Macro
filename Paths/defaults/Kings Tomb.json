@@ -1,0 +1,15 @@
+{
+  "name": "Kings Tomb",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 0.67,
+      "key": "w",
+      "state": "up"
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+<img src="logo.ico" width="64" height="64" alt="Cream's Macro logo">
+
 # Cream's Macro | Anime Expeditions
 
 **A free, open-source auto-farm macro for the Roblox game [Anime Expeditions](https://www.roblox.com/games/).** Docks Roblox directly inside its own window and automates the full Story/Raid grind loop — map and stage selection, unit placement, match start, Victory/Defeat detection, reward tracking, and repeat farming — so you can queue up a run and walk away.

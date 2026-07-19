@@ -2,17 +2,20 @@ name: Release
 
 # Triggered by pushing a version tag (vX.Y.Z, matching VERSION at the repo
 # root -- see the release checklist in README.md). Publishes a GitHub
-# Release for that tag (so /releases/latest exists -- core/updater.py's
-# auto-update check depends on that endpoint) and attaches a PyInstaller-
-# built Windows build as a convenience download.
+# Release for that tag -- that's the only thing this actually needs to do:
+# core/updater.py's auto-update check reads /releases/latest, and the
+# update itself downloads the tag's source zip, which GitHub generates
+# automatically for any tag with no workflow involved. Source is also the
+# only officially supported way to run this macro (python main.py / run.bat).
 #
-# The auto-updater itself does NOT use this build -- it downloads and
-# swaps in the tag's source zip (GitHub generates that automatically for
-# any tag, no workflow needed), since the officially supported way to run
-# this macro is from Python source via run.bat. The .exe here is best-
-# effort: none of core/*.py's asset/data paths have been reworked to be
-# frozen-build-aware yet, so double-check it can actually find ui/ and
-# Assets/ next to it before relying on it.
+# There USED to be a PyInstaller-packaged .exe attached here -- pulled after
+# it turned out broken in practice (pywebview's WinForms backend fails to
+# resolve pythonnet's Python.Runtime.Loader once frozen: "Unhandled
+# exception... Failed to resolve Python.Runtime.Loader"). None of
+# core/*.py's __file__-based asset/data paths are frozen-build-aware either,
+# so even a working freeze would need that sorted out first. Revisit
+# packaging a real installer later instead of guessing at another frozen
+# build blind.
 on:
   push:
     tags:
@@ -22,37 +25,13 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    runs-on: windows-latest
+  release:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Build with PyInstaller
-        shell: bash
-        run: |
-          pyinstaller --name "CreamsMacro" --onedir --noconsole \
-            --add-data "ui;ui" \
-            --add-data "Assets;Assets" \
-            main.py
-
-      - name: Zip the build
-        shell: bash
-        run: |
-          cd dist
-          7z a -tzip "../CreamsMacro-${{ github.ref_name }}-windows.zip" "CreamsMacro"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: CreamsMacro-${{ github.ref_name }}-windows.zip
