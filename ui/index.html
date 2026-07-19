@@ -915,7 +915,20 @@
           <span class="text-[10px]" style="color: var(--text-muted);">current <span id="update-current-version">-</span></span>
         </div>
         <div id="update-notes" style="font-size: 11px; color: var(--text-dim); white-space: pre-wrap; max-height: 160px; overflow-y: auto; margin-bottom: 14px;"></div>
-        <div class="flex items-center gap-2" style="justify-content: flex-end;">
+
+        <!-- Hidden until Update & Restart is clicked -- replaces the
+             notes/buttons with real download progress (see applyUpdate's
+             polling loop in app.js) instead of the button just saying
+             "Updating..." with no other feedback for however long the
+             download takes. -->
+        <div id="update-progress-wrap" style="display:none; margin-bottom: 4px;">
+          <div id="update-progress-track" style="height: 6px; border-radius: 3px; background: var(--bg-surface); overflow: hidden; margin-bottom: 8px;">
+            <div id="update-progress-bar" style="height: 100%; width: 0%; border-radius: 3px; background: var(--brand); transition: width 0.2s ease;"></div>
+          </div>
+          <div id="update-progress-text" class="text-[10px]" style="color: var(--text-muted);">Starting download...</div>
+        </div>
+
+        <div id="update-actions" class="flex items-center gap-2" style="justify-content: flex-end;">
           <button type="button" class="task-toolbar-btn" onclick="dismissUpdateModal()">Later</button>
           <button type="button" id="update-apply-btn" class="rp-btn rp-btn-start" style="padding: 6px 14px;" onclick="applyUpdate()">Update &amp; Restart</button>
         </div>

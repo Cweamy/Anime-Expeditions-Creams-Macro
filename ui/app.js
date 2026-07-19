@@ -126,11 +126,25 @@ async function showUpdateAvailable() {
     document.getElementById('update-current-version').textContent = info.current_version || '-';
     document.getElementById('update-notes').textContent = info.notes || 'No release notes provided.';
     document.getElementById('update-modal').style.display = 'flex';
+    // Roblox is docked as a real native child window, not DOM content --
+    // it renders on top of this modal regardless of CSS z-index, same
+    // reason switchScreen() hides it for every screen except Dashboard.
+    // This can fire while sitting on Dashboard (where it's normally
+    // shown), so it has to hide it explicitly here too, or the modal
+    // exists but is invisible behind the game.
+    try { window.pywebview && pywebview.api.hide_game(); } catch (e) {}
   } catch (e) {}
 }
 
 function dismissUpdateModal() {
+  clearInterval(updateProgressPoll);
   document.getElementById('update-modal').style.display = 'none';
+  // Only restore Roblox if Dashboard is where it's actually supposed to
+  // be visible right now -- switchScreen() already keeps it hidden on
+  // every other screen, this shouldn't override that.
+  if (currentScreen === 'dashboard') {
+    try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
+  }
 }
 
 async function manualCheckForUpdate() {
@@ -155,24 +169,68 @@ async function manualCheckForUpdate() {
   }
 }
 
+let updateProgressPoll = null;
+
+function resetUpdateModalButtons() {
+  const btn = document.getElementById('update-apply-btn');
+  btn.disabled = false;
+  btn.textContent = 'Update & Restart';
+  document.getElementById('update-progress-wrap').style.display = 'none';
+  document.getElementById('update-notes').style.display = '';
+  document.getElementById('update-actions').style.display = '';
+}
+
+// apply_update() kicks off the download/stage/relaunch in a background
+// thread and returns immediately -- this polls get_update_progress() to
+// drive a real progress bar instead of the button just saying "Updating..."
+// with no other feedback for however long the download takes (previously
+// the window would just sit there with nothing visible happening, which
+// read as broken rather than in-progress).
 async function applyUpdate() {
   const btn = document.getElementById('update-apply-btn');
   btn.disabled = true;
-  btn.textContent = 'Updating...';
+  document.getElementById('update-notes').style.display = 'none';
+  document.getElementById('update-actions').style.display = 'none';
+  document.getElementById('update-progress-wrap').style.display = 'block';
+
   try {
     const result = await pywebview.api.apply_update();
     if (!result || !result.ok) {
-      btn.disabled = false;
-      btn.textContent = 'Update & Restart';
+      resetUpdateModalButtons();
       addLog && addLog('[Update] Failed to start the update -- check the log for details.');
+      return;
     }
-    // On success the app closes itself shortly after (see main.Api.
-    // apply_update) and a relaunch helper brings it back up -- nothing
-    // left to do here.
   } catch (e) {
-    btn.disabled = false;
-    btn.textContent = 'Update & Restart';
+    resetUpdateModalButtons();
+    return;
   }
+
+  const bar = document.getElementById('update-progress-bar');
+  const text = document.getElementById('update-progress-text');
+  clearInterval(updateProgressPoll);
+  updateProgressPoll = setInterval(async () => {
+    let progress;
+    try { progress = await pywebview.api.get_update_progress(); } catch (e) { return; }
+    if (!progress || !progress.phase) return;
+
+    text.textContent = progress.message || '';
+    if (progress.percent == null) {
+      bar.classList.add('update-progress-indeterminate');
+    } else {
+      bar.classList.remove('update-progress-indeterminate');
+      bar.style.width = `${progress.percent}%`;
+    }
+
+    if (progress.phase === 'error') {
+      clearInterval(updateProgressPoll);
+      resetUpdateModalButtons();
+      addLog && addLog(`[Update] ${progress.message}`);
+    }
+    // "restarting" -- the app closes itself moments after this (see
+    // main.Api._apply_update_background) and a relaunch helper brings it
+    // back up. Nothing left to poll for; just leave the bar at 100% and
+    // let the window disappear on its own.
+  }, 400);
 }
 
 let skipped = false;

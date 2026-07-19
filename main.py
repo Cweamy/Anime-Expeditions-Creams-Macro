@@ -138,6 +138,9 @@ class Api:
         # then, so an early get_update_info() poll from the UI just no-ops
         # instead of racing the check.
         self._update_info = {"available": False}
+        # Populated by apply_update's background thread, polled by the UI
+        # to drive the update modal's progress bar (see get_update_progress).
+        self._update_progress = {}
         self.runner = MacroRunner(
             self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result)
 
@@ -170,6 +173,35 @@ class Api:
     def apply_update(self) -> dict:
         if not self._update_info.get("available"):
             return {"ok": False, "reason": "no_update"}
+        if self._update_progress.get("phase") in ("downloading", "staging", "restarting"):
+            return {"ok": False, "reason": "already_updating"}
+        # Runs in the background so the UI can poll get_update_progress()
+        # and show a real progress bar/animation instead of a static
+        # "Updating..." label with no feedback for however long the
+        # download takes -- that dead air (window vanishes, then just a
+        # wait with nothing visible) is what read as broken/"scary".
+        self._update_progress = {"phase": "downloading", "percent": 0, "message": "Starting download..."}
+        threading.Thread(target=self._apply_update_background, daemon=True).start()
+        return {"ok": True}
+
+    def _apply_update_background(self) -> None:
+        def on_progress(downloaded: int, total: int) -> None:
+            mb_downloaded = downloaded / (1024 * 1024)
+            if total:
+                self._update_progress = {
+                    "phase": "downloading",
+                    "percent": round(downloaded / total * 100),
+                    "message": f"Downloading update... {mb_downloaded:.1f} / {total / (1024 * 1024):.1f} MB",
+                }
+            else:
+                # No Content-Length header -- can't show a percentage, so
+                # the JS side falls back to an indeterminate spinner.
+                self._update_progress = {
+                    "phase": "downloading",
+                    "percent": None,
+                    "message": f"Downloading update... {mb_downloaded:.1f} MB",
+                }
+
         try:
             # Running as a built exe: swap the exe itself -- robocopying
             # loose .py source over a compiled exe's directory wouldn't do
@@ -177,24 +209,33 @@ class Api:
             # from source: the usual source-zip-over-the-install swap.
             if constants.IS_FROZEN:
                 if not self._update_info.get("exe_url"):
-                    self.push_log("[Update] No exe attached to this release -- can't self-update the build. "
-                                  f'Grab it manually: {self._update_info.get("url")}')
-                    return {"ok": False, "reason": "no_exe_asset"}
-                new_exe = updater.download_exe_update(self._update_info["exe_url"], self.push_log)
+                    msg = ("No exe attached to this release -- can't self-update the build. "
+                           f'Grab it manually: {self._update_info.get("url")}')
+                    self.push_log(f"[Update] {msg}")
+                    self._update_progress = {"phase": "error", "percent": None, "message": msg}
+                    return
+                new_exe = updater.download_exe_update(self._update_info["exe_url"], self.push_log, on_progress)
+                self._update_progress = {"phase": "staging", "percent": 100, "message": "Preparing update..."}
                 helper_path = updater.stage_exe_update(new_exe)
             else:
                 helper_path = updater.stage_source_update(
-                    self._update_info["zip_url"], constants.APP_DIR, self.push_log)
+                    self._update_info["zip_url"], constants.APP_DIR, self.push_log, on_progress)
+                self._update_progress = {"phase": "staging", "percent": 100, "message": "Preparing update..."}
         except Exception as exc:
             self.push_log(f"[Update] Failed to prepare update: {exc}")
-            return {"ok": False, "reason": str(exc)}
+            self._update_progress = {"phase": "error", "percent": None, "message": str(exc)}
+            return
+
         self.push_log(f'[Update] Update to {self._update_info["version"]} staged -- restarting to apply it...')
+        self._update_progress = {"phase": "restarting", "percent": 100, "message": "Restarting..."}
         # Launch the detached helper BEFORE closing -- it waits for this
         # process to exit before touching any files, but it has to already
         # be running (and thus survive this process going away) first.
         updater.launch_helper(helper_path)
         threading.Timer(0.4, self.close_window).start()
-        return {"ok": True}
+
+    def get_update_progress(self) -> dict:
+        return self._update_progress
 
     def get_status(self) -> dict:
         # current_task/map/action come from the live runner (see

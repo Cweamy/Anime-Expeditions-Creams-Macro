@@ -259,6 +259,18 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Update progress bar (see #update-progress-wrap in index.html) -- plain
+   width-driven fill when percent is known, this sliding-stripe animation
+   when it isn't (no Content-Length header on the download response). */
+.update-progress-indeterminate {
+  width: 40% !important;
+  animation: update-progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes update-progress-slide {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+
 /* ---- Settings screen ---- */
 .settings-cat-btn {
   display: flex; align-items: center; gap: 8px;

@@ -104,19 +104,31 @@ def check_for_update(timeout: float = 6.0) -> dict:
 # Source update (running from a git clone / python main.py)
 # ---------------------------------------------------------------------------
 
-def stage_source_update(zip_url: str, app_dir: str, log) -> str:
+def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> str:
     """Downloads + extracts the release source zip and writes the relaunch
     helper script. Returns the helper's path -- the caller launches it
-    detached, then closes the app (see main.Api.apply_update)."""
+    detached, then closes the app (see main.Api.apply_update).
+
+    on_progress(downloaded_bytes, total_bytes), if given, is called after
+    every chunk -- total_bytes is 0 if the server didn't send a
+    Content-Length (rare, but not worth failing over -- callers should
+    treat that as "unknown", e.g. an indeterminate spinner instead of a
+    percentage).
+    """
     tmp_root = tempfile.mkdtemp(prefix="aecm_update_")
     zip_path = os.path.join(tmp_root, "update.zip")
 
     log(f"[Update] Downloading {zip_url}...")
     resp = requests.get(zip_url, timeout=60, stream=True)
     resp.raise_for_status()
+    total = int(resp.headers.get("content-length") or 0)
+    downloaded = 0
     with open(zip_path, "wb") as f:
         for chunk in resp.iter_content(chunk_size=1 << 16):
             f.write(chunk)
+            downloaded += len(chunk)
+            if on_progress:
+                on_progress(downloaded, total)
 
     extract_dir = os.path.join(tmp_root, "extracted")
     with zipfile.ZipFile(zip_path) as zf:
@@ -164,18 +176,28 @@ def _current_exe_path() -> str:
     return os.path.abspath(sys.argv[0])
 
 
-def download_exe_update(exe_url: str, log) -> str:
+def download_exe_update(exe_url: str, log, on_progress=None) -> str:
     """Downloads the new exe alongside the running one (as `<exe>.update`,
     not overwriting it yet -- the running exe's file is likely still
-    locked). Returns the downloaded path for apply_exe_update to swap in."""
+    locked). Returns the downloaded path for apply_exe_update to swap in.
+
+    on_progress(downloaded_bytes, total_bytes), if given, is called after
+    every chunk -- see stage_source_update's docstring for what total=0
+    means.
+    """
     current_exe = _current_exe_path()
     new_exe = current_exe + ".update"
     log(f"[Update] Downloading {exe_url}...")
     resp = requests.get(exe_url, stream=True, timeout=120)
     resp.raise_for_status()
+    total = int(resp.headers.get("content-length") or 0)
+    downloaded = 0
     with open(new_exe, "wb") as f:
         for chunk in resp.iter_content(chunk_size=1 << 16):
             f.write(chunk)
+            downloaded += len(chunk)
+            if on_progress:
+                on_progress(downloaded, total)
     return new_exe
 
 
