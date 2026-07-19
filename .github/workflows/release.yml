@@ -58,15 +58,28 @@ jobs:
       - name: Get changelog from the tag message
         # A curated summary, not GitHub's raw commit-list changelog --
         # written into the tag itself (`git tag -a vX.Y.Z -m "..."`) when
-        # cutting a release, read back out here. Falls back to the
-        # pointed-at commit's message if the tag was pushed lightweight
-        # (no -a) and has no message of its own.
+        # cutting a release, read back out here via the API rather than
+        # local git commands -- `git tag -l --format='%(contents)'` came
+        # back empty in this exact job (actions/checkout's tag-object fetch
+        # is flaky depending on how the ref was resolved for a tag-push
+        # trigger), silently falling back to the commit message instead
+        # and shipping the wrong release body. The API has no such
+        # ambiguity: it reads the tag object GitHub itself has on record.
         id: changelog
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          BODY=$(git tag -l --format='%(contents)' "${{ github.ref_name }}")
-          if [ -z "$BODY" ]; then
-            BODY=$(git log -1 --format='%B' "${{ github.ref_name }}")
+          REF_JSON=$(gh api "repos/${{ github.repository }}/git/refs/tags/${{ github.ref_name }}")
+          OBJ_SHA=$(echo "$REF_JSON" | jq -r '.object.sha')
+          OBJ_TYPE=$(echo "$REF_JSON" | jq -r '.object.type')
+          if [ "$OBJ_TYPE" = "tag" ]; then
+            BODY=$(gh api "repos/${{ github.repository }}/git/tags/$OBJ_SHA" --jq '.message')
+          else
+            # Lightweight tag (no -a/-m) -- object.type is "commit", not
+            # "tag", so there's no separate tag message to read; fall back
+            # to the commit it points at.
+            BODY=$(gh api "repos/${{ github.repository }}/commits/$OBJ_SHA" --jq '.commit.message')
           fi
           echo "body<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
           echo "$BODY" >> "$GITHUB_OUTPUT"
