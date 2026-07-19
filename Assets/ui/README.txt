@@ -54,6 +54,18 @@ team.png
   After pressing H, the runner waits for this to confirm the team-select
   panel actually opened, then clicks it before picking a Loadout row.
 
+warning.png
+  Optional (core.runner._wait_out_start_game_warning): if a warning popup
+  is blocking Start Game right after Pre Start finishes, the runner waits
+  up to 10s for it to clear before searching for Start Game at all.
+
+nav_start_game_2.png
+  Optional (core.runner._click_start_game_2_if_found). A second Start
+  Game / confirm button that can show up alongside the warning above
+  (e.g. a "Start Anyway" prompt) -- found and clicked, this skips the
+  warning wait entirely instead of sitting through the full timeout for
+  something that was already dismissable right away.
+
 Add more <name>.png files here as new macro steps need to recognize other
 buttons/screens -- core.vision.find_image(hwnd, "<name>", ...) will pick
 up any file added under this folder automatically, no code change needed

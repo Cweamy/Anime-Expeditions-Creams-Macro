@@ -665,10 +665,35 @@ class Api:
     def skip_waiting(self):
         # Lets the panel be used (config, etc.) before Roblox is even open.
         # The window has to actually resize to full size here, not just in
-        # JS/CSS, since the two-column layout is wider than the compact window.
+        # JS/CSS, since the two-column layout is wider than the compact
+        # window (see index.html's #main-layout comment -- it's 1552px
+        # wide and assumes it never gets shown without that resize having
+        # actually happened first).
         if self._window:
+            # A resize issued on a minimized window -- or, it turns out,
+            # under some DPI-scaling states -- can be silently dropped,
+            # leaving the window at the old compact size (verified against
+            # pywebview 6.2.1; this is the same known quirk
+            # _dock_watchdog already guards against for the docking
+            # resize, just never applied here too). Restore first, then
+            # verify the resize actually took, falling back to a native
+            # MoveWindow if it didn't -- otherwise every screen except the
+            # waiting placeholder renders squeezed into ~400px.
+            self._window.restore()
+            time.sleep(0.2)
             self._window.resize(GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
             self._window.move(0, 0)
+            time.sleep(0.3)
+            gui_hwnd = WindowManager(GUI_TITLE).find()
+            if gui_hwnd:
+                left, top, right, bottom = wm.get_window_rect_screen(gui_hwnd)
+                if (right - left, bottom - top) != (GUI_WIDTH_FULL, GUI_HEIGHT_FULL):
+                    wm.move_window(gui_hwnd, 0, 0, GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
+                    time.sleep(0.2)
+                    left, top, right, bottom = wm.get_window_rect_screen(gui_hwnd)
+                    if (right - left, bottom - top) != (GUI_WIDTH_FULL, GUI_HEIGHT_FULL):
+                        self.push_log("Warning: the window didn't fully resize -- some screens may look "
+                                      "cramped. Try resizing or maximizing it by hand.")
         self.push_log("Skipped waiting for Roblox.")
 
     def save_debug_screenshot(self) -> dict:

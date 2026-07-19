@@ -125,6 +125,12 @@ START_GAME_CHECK_TIMEOUT = 1.5
 NAV_CLICK_TIMEOUT = 8.0  # nav_settings / nav_search in the Auto Vote Start fallback
 SETTLE_DELAY = 0.6  # lets a panel-open animation (e.g. Settings) finish before searching it
 
+# A warning popup can block Start Game right after Pre Start (see
+# _wait_out_start_game_warning) -- waited out instead of immediately
+# treating a missing nav_start_game as "already started".
+WARNING_WAIT_TIMEOUT = 10.0
+WARNING_POLL_INTERVAL = 1.0
+
 # Place Unit block execution: click, check for a rejection message, nudge
 # and retry if blocked, then verify. cannot_place/max_placement_reached are
 # matched over gameplay art (see vision.find_bottommost_image's reasoning),
@@ -560,6 +566,11 @@ class MacroRunner:
 
         self._log("[Macro] Pre Start finished -- starting the round.")
         self._set_status(action="Starting the round...")
+        if self._checkpoint(stop_event):
+            return None
+        self._wait_out_start_game_warning(hwnd, stop_event)
+        if self._checkpoint(stop_event):
+            return None
         try:
             start_match = vision.find_image(hwnd, "nav_start_game")
         except vision.TemplateNotFound as exc:
@@ -1520,6 +1531,65 @@ class MacroRunner:
         self._log(f'[Macro] Found "{name}" (score {match["score"]:.2f}) -- clicking it.{suffix}')
         vision.click_match(self._mouse, hwnd, match)
         return match
+
+    def _click_start_game_2_if_found(self, hwnd) -> bool:
+        # nav_start_game_2 -- a second Start Game/confirm button that can
+        # show up alongside the warning itself (e.g. a "Start Anyway"
+        # prompt) -- clicking it skips the wait in
+        # _wait_out_start_game_warning entirely instead of sitting through
+        # the full timeout for a warning that's actually already
+        # dismissable right now.
+        try:
+            skip_match = vision.find_image(hwnd, "nav_start_game_2")
+        except vision.TemplateNotFound:
+            return False
+        if skip_match is None:
+            return False
+        self._log(f"[Macro] Found nav_start_game_2 (score {skip_match['score']:.2f}) -- "
+                   f"clicking it to skip the warning wait.")
+        vision.click_match(self._mouse, hwnd, skip_match)
+        return True
+
+    def _wait_out_start_game_warning(self, hwnd, stop_event: threading.Event) -> None:
+        """Best-effort, like nav_disband: a warning popup (e.g. an
+        incomplete-setup warning) can sit in front of Start Game right
+        after Pre Start finishes -- if one's up, wait for it to clear (and
+        Start Game to actually show up) instead of immediately treating a
+        missing nav_start_game as "already started" and moving on. A
+        missing warning.png just skips this check entirely, same as any
+        other optional template."""
+        try:
+            warning_match = vision.find_image(hwnd, "warning")
+        except vision.TemplateNotFound:
+            return
+        if warning_match is None:
+            return
+
+        self._log(f"[Macro] Found a warning (score {warning_match['score']:.2f}) -- checking for a way past it.")
+        if self._click_start_game_2_if_found(hwnd):
+            return
+
+        self._log(f"[Macro] Waiting up to {WARNING_WAIT_TIMEOUT:.0f}s for it to clear.")
+        self._set_status(action="Waiting for warning to clear...")
+        deadline = time.time() + WARNING_WAIT_TIMEOUT
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return
+            if self._click_start_game_2_if_found(hwnd):
+                return
+            try:
+                warning_gone = vision.find_image(hwnd, "warning") is None
+            except vision.TemplateNotFound:
+                warning_gone = True
+            try:
+                start_visible = vision.find_image(hwnd, "nav_start_game") is not None
+            except vision.TemplateNotFound:
+                start_visible = False
+            if warning_gone and start_visible:
+                self._log("[Macro] Warning cleared -- Start Game is up.")
+                return
+            time.sleep(WARNING_POLL_INTERVAL)
+        self._log("[Macro] Warning didn't clear (or Start Game didn't show up) in time -- continuing anyway.")
 
     def _start_game_or_reset_via_settings(self, hwnd, stop_event: threading.Event) -> bool:
         # Start Game only exists for the party leader -- a quick presence
