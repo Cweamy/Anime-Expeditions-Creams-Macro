@@ -310,8 +310,7 @@ class MacroRunner:
 
     def start(self, hwnd_getter, get_tasks, scroll_power: int = None, coords: dict = None,
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
-              reward_region: dict = None, stats_region: dict = None, webhook: dict = None,
-              loop_queue: bool = False) -> dict:
+              reward_region: dict = None, stats_region: dict = None, webhook: dict = None) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -323,7 +322,7 @@ class MacroRunner:
         self._thread = threading.Thread(
             target=self._run,
             args=(hwnd_getter, get_tasks, self._stop_event, scroll_power, coords, scroll_nudges, default_walk_paths,
-                  reward_region, stats_region, webhook, bool(loop_queue)),
+                  reward_region, stats_region, webhook),
             daemon=True)
         self._thread.start()
         return {"ok": True}
@@ -417,8 +416,7 @@ class MacroRunner:
 
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,
-              reward_region: dict = None, stats_region: dict = None, webhook: dict = None,
-              loop_queue: bool = False) -> None:
+              reward_region: dict = None, stats_region: dict = None, webhook: dict = None) -> None:
         coords = {**DEFAULT_COORDS, **(coords or {})}
         default_walk_paths = default_walk_paths or {}
         reward_region = reward_region or DEFAULT_REWARD_REGION
@@ -459,11 +457,11 @@ class MacroRunner:
 
         loop_pass = 1
         while True:
-            # Re-read the queue every pass instead of once up front -- with
-            # Loop Queue on, a run can sit going for hours, and the user may
-            # edit the Task screen (add/remove/reorder) between passes
-            # expecting the NEXT pass to pick up their changes rather than
-            # keep replaying a stale snapshot from when the run started.
+            # Re-read the queue every pass instead of once up front -- a run
+            # loops indefinitely (see below), potentially for hours, and the
+            # user may edit the Task screen (add/remove/reorder) between
+            # passes expecting the NEXT pass to pick up their changes rather
+            # than keep replaying a stale snapshot from when the run started.
             tasks = get_tasks()
             if not tasks:
                 self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
@@ -473,7 +471,7 @@ class MacroRunner:
             if loop_pass == 1:
                 self._log(f"[Macro] Starting run -- {len(tasks)} task(s) queued.")
             else:
-                self._log(f"[Macro] Loop Queue: restarting from task 1 (pass {loop_pass}).")
+                self._log(f"[Macro] Task queue finished -- restarting from task 1 (pass {loop_pass}).")
 
             for task_index, task in enumerate(tasks, start=1):
                 if self._checkpoint(stop_event):
@@ -499,11 +497,9 @@ class MacroRunner:
                     self._set_status(action="Idle")
                     return
 
-            if not loop_queue:
-                self._log("[Macro] Task queue finished -- all tasks complete.")
-                self._set_status(current_task="-", current_repeat="-", map="-", action="Idle")
-                return
-
+            # The queue always loops back to task 1 once it finishes rather
+            # than going Idle -- Stop (F2) is the only way to actually end
+            # an unattended run now.
             if self._checkpoint(stop_event):
                 return
             loop_pass += 1

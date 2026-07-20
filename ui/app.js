@@ -615,8 +615,6 @@ async function loadSettingsUI() {
     document.getElementById('toggle-start-minimized').classList.toggle('on', !!s.start_minimized);
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
     if (debugScreenshotsEl) debugScreenshotsEl.classList.toggle('on', !!s.debug_screenshots);
-    const loopQueueEl = document.getElementById('toggle-loop-queue');
-    if (loopQueueEl) loopQueueEl.classList.toggle('on', !!s.loop_queue);
     applyTheme(s.theme || 'default', true);
     const scrollPowerEl = document.getElementById('story-scroll-power');
     if (scrollPowerEl) scrollPowerEl.value = s.story_scroll_power ?? 3;
