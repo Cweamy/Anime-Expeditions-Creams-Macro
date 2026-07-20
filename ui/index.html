@@ -725,8 +725,9 @@
           </header>
 
           <p class="text-[11px] px-3 pt-3 pb-1" style="color: var(--text-muted);">
-            Reads the Victory screen's reward row (quantity + item name per icon) via OCR -- how many
-            icons there are gets detected automatically, no need to count them. Coordinates below are
+            Reads the Victory screen's reward row by identifying each icon's color against
+            Assets/item_icons, then looking its guaranteed quantity up in the stage data (no OCR) -- how
+            many icons there are gets detected automatically, no need to count them. Coordinates below are
             relative to the docked Roblox window's top-left corner; use the Screenshot capture above to
             find them, then tune here.
           </p>

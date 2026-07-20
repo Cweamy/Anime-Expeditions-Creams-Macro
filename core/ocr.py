@@ -19,7 +19,8 @@ _FALLBACK_TESSERACT_PATHS = (
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
 )
 
-# get_pytesseract() runs on every single OCR read (every reward/stat grab),
+# get_pytesseract() runs on every single OCR read (every stat grab -- reward
+# reading no longer uses OCR at all, see core.rewards' module docstring),
 # so the actual "is tesseract there" probe below is memoized here instead of
 # re-run each time -- besides being wasteful, pytesseract.get_tesseract_
 # version() is decorated @run_once but that only actually caches when called

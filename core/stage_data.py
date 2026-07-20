@@ -81,6 +81,29 @@ def expected_rewards(map_name: str, stage: str, difficulty: str = "Normal") -> l
     return lines
 
 
+def expected_item_amounts(map_name: str, stage: str, difficulty: str = "Normal") -> dict:
+    """Name -> guaranteed Amount for everything this stage's Rewards
+    dict promises on a non-first clear (currency/EXP + guaranteed Items) --
+    the quantity half of what used to come from OCRing the tiny "125x"
+    badge on the reward screen (see core.rewards.read_reward_row). These
+    are fixed game data, not per-run RNG, so once an icon is IDENTIFIED
+    (still done live, by color -- see core.rewards.identify_item_name) its
+    quantity doesn't need to be read off the screen at all, just looked up
+    here. Chance Drops are deliberately left out (no fixed amount exists
+    for them to look up), so an item identified as a Drop still falls back
+    to reporting "?" for its quantity rather than a wrong guess."""
+    stage_info = get_stage(map_name, stage, difficulty)
+    if not stage_info:
+        return {}
+    rewards = stage_info.get("Rewards", {})
+    base = rewards.get("Normal") or rewards.get("Wave") or {}
+    amounts = {name: amount for name, amount in base.items() if name != "Every"}
+    for item in rewards.get("Items", []):
+        if item.get("Item"):
+            amounts[item["Item"]] = item.get("Amount", "?")
+    return amounts
+
+
 def expected_item_names(map_name: str, stage: str, difficulty: str = "Normal") -> list:
     """Just the names (currency/EXP + guaranteed Items + chance Drops) --
     for narrowing reward-icon identification down to what this stage can

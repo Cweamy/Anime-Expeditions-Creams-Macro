@@ -1009,12 +1009,15 @@ class Api:
             return {"ok": False, "reason": "no_roblox"}
 
         allowed_names = None
+        amounts = None
         if map_name and stage:
             try:
                 from core import stage_data
                 allowed_names = stage_data.expected_item_names(map_name, stage, difficulty) or None
+                amounts = stage_data.expected_item_amounts(map_name, stage, difficulty) or None
             except Exception:
                 allowed_names = None
+                amounts = None
 
         region = self.get_reward_region()
         game_left, game_top, _, _ = wm.get_window_rect_screen(hwnd)
@@ -1078,16 +1081,18 @@ class Api:
 
         self.push_log("[Rewards] Reading...")
         threading.Thread(
-            target=self._read_rewards_background, args=(image_top, image_bottom, allowed_names), daemon=True
+            target=self._read_rewards_background, args=(image_top, image_bottom, allowed_names, amounts),
+            daemon=True
         ).start()
         return {"ok": True, "started": True}
 
-    def _read_rewards_background(self, image_top, image_bottom, allowed_names: list = None) -> None:
+    def _read_rewards_background(self, image_top, image_bottom, allowed_names: list = None,
+                                   amounts: dict = None) -> None:
         try:
             from core import rewards
-            pages = [rewards.read_reward_grid(image_top, allowed_names=allowed_names)]
+            pages = [rewards.read_reward_grid(image_top, allowed_names=allowed_names, amounts=amounts)]
             if image_bottom is not None:
-                pages.append(rewards.read_reward_grid(image_bottom, allowed_names=allowed_names))
+                pages.append(rewards.read_reward_grid(image_bottom, allowed_names=allowed_names, amounts=amounts))
             items = rewards.merge_reward_pages(*pages)
         except Exception as exc:
             self.push_log(f"[Rewards] Read failed: {exc}")

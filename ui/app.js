@@ -719,8 +719,8 @@ async function previewRewardRegion(btn) {
 // you're not on the Dashboard (see switchScreen()), so capturing its reward
 // row from the Settings screen would just grab whatever's behind the hidden
 // window instead of the actual game -- switch over and let it settle first.
-// read_rewards() only blocks on the capture + scroll (~1s) -- the actual OCR
-// runs in a background Python thread and streams its results into the
+// read_rewards() only blocks on the capture + scroll (~1s) -- the actual icon
+// identification runs in a background Python thread and streams its results into the
 // Process Log as [Rewards] lines instead of coming back with this call, so
 // there's no item count to show here. The button just confirms the capture
 // started; watch the Process Log for what it actually found.

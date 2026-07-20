@@ -1,9 +1,13 @@
 """Reads the "Gained Rewards" row on a Victory screen: a horizontal strip of
 icon cells, each with a "125x"-style quantity badge near the top and an item
 name label along the bottom -- capture with mss, auto-detect how many icons
-are actually in the row this run (see detect_icon_cells), clean each cell up
-with OpenCV so the (small, stylized) text OCRs reliably, read it with
-pytesseract.
+are actually in the row this run (see detect_icon_cells), identify each icon
+by color against Assets/item_icons (see identify_item_name), then look its
+guaranteed quantity up in Assets/stage_data.json (see
+core.stage_data.expected_item_amounts) instead of OCRing the badge/label --
+both are too small/stylized for Tesseract to read reliably, and the
+quantities are fixed game data in the first place, not something that needs
+reading off the screen at all.
 
 Only the row's rectangle needs calibrating (Settings > Debug) -- there's no
 way to know that up front without seeing the live UI -- the icon count is
@@ -13,15 +17,11 @@ reads empty space as an item.
 """
 import difflib
 import os
-import re
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import cv2
 
-from core.ocr import (  # noqa: F401 -- re-exported for existing callers/tests
-    TesseractNotAvailable, get_pytesseract as _get_pytesseract,
-    capture_region, ocr_best as _ocr_best,
-)
+from core.ocr import capture_region  # noqa: F401 -- re-exported for main.Api.read_rewards
 from core import constants
 
 # Reference icon art scraped from the game's wiki (see tools/fetch_item_icons.py) --
@@ -45,41 +45,6 @@ SCROLLBAR_COLOR = 0x373737
 # and got its contents blended into the read as if they were real drops.
 # Tightened again (was 8) -- still too loose in practice.
 SCROLLBAR_TOLERANCE = 1
-
-_QUANTITY_PATTERN = re.compile(r"^\d[\d,]*x$")
-# Loose "this already looks like a real name" shape -- letters/spaces only,
-# no stray symbols, long enough to not just be OCR noise -- good enough to
-# let _ocr_best stop early on the common case instead of always running the
-# full mask/psm sweep for the name field too.
-_NAME_LOOKS_CLEAN = re.compile(r"^[A-Za-z][A-Za-z ]{2,}$")
-
-
-_QUANTITY_EXTRACT = re.compile(r"\d[\d,]*x?")
-
-
-def _clean_quantity_text(text: str) -> str:
-    """Trims stray trailing punctuation (a comma or period tesseract
-    sometimes tacks on after the "x") down to just the digits/comma/x that
-    make up the actual quantity, then drops any thousands-separator commas --
-    whether tesseract actually catches the in-game comma is inconsistent
-    (same value reads as both "1,000x" and "1000x" depending on the capture),
-    so always normalizing to the no-comma form keeps every reading the same
-    shape instead of the format silently varying item to item."""
-    match = _QUANTITY_EXTRACT.search(text)
-    cleaned = match.group(0) if match else text
-    return cleaned.replace(",", "")
-
-
-_NAME_ALLOWED = re.compile(r"[^A-Za-z0-9 '\-]")
-
-
-def _clean_name_text(text: str) -> str:
-    """Strips the stray symbols (pipes, brackets, punctuation) that OCR
-    sometimes picks up from the colorful icon art bleeding into the name
-    crop -- item names are always plain words, so anything outside letters/
-    digits/spaces/apostrophes/hyphens is noise, not part of the label."""
-    return re.sub(r"\s+", " ", _NAME_ALLOWED.sub(" ", text)).strip()
-
 
 def save_region_preview(region_bgr: np.ndarray, path: str) -> None:
     """Saves exactly what Read Rewards would capture -- no annotations --
@@ -330,23 +295,6 @@ def _load_icon_histograms() -> dict:
     return histograms
 
 
-def _best_allowed_match(ocr_text: str, allowed_names: list, min_ratio: float = 0.5):
-    """The closest name in allowed_names to ocr_text, by fuzzy ratio -- or
-    None if nothing clears min_ratio. Used as a confirmed fallback when icon
-    identification finds no existing reference to match against (see
-    read_cell): a stage's real possible-reward list is a much safer thing
-    to trust a garbled OCR read against than accepting it verbatim."""
-    if not ocr_text or not allowed_names:
-        return None
-    ocr_lower = ocr_text.lower()
-    best_name, best_ratio = None, min_ratio
-    for name in allowed_names:
-        ratio = difflib.SequenceMatcher(None, ocr_lower, name.lower()).ratio()
-        if ratio > best_ratio:
-            best_ratio, best_name = ratio, name
-    return best_name
-
-
 def _narrow_histograms(histograms: dict, allowed_names: list) -> dict:
     """Restricts the candidate pool to icons plausibly matching a known
     "this stage can only reward these" list (see core.stage_data), instead
@@ -383,32 +331,25 @@ def _narrow_histograms(histograms: dict, allowed_names: list) -> dict:
     return narrowed or histograms
 
 
-def identify_item_name(icon_bgr: np.ndarray, ocr_name_text: str = "",
-                        candidate_count: int = 8, allowed_names: list = None) -> str:
-    """Identifies which known reward item an icon-cell crop shows, by color
-    signature rather than reading the (often illegible at this resolution)
-    name label.
-
-    Icon art survives being tiny far better than text does -- a handful of
-    pixels of "mostly blue" is still recognizably a Gem, where a handful of
-    pixels of stylized text is often just noise (see the module docstring's
-    OCR path). So this matches the crop's hue/saturation histogram over a
-    centered oval (the icon; this skips the card's decorative background
-    corners) against every reference icon's histogram, takes the top
-    candidates, and re-ranks them by fuzzy string similarity to whatever the
-    OCR pass on the name label did manage to read -- color alone confuses
-    icons that happen to share a palette (e.g. two mostly-white/gold icons),
-    and OCR alone garbles small stylized text, but the two rarely fail on
-    the *same* item, so combining them resolved every miss either one made
-    alone in testing.
+def identify_item_name(icon_bgr: np.ndarray, allowed_names: list = None, min_score: float = 0.6) -> str:
+    """Identifies which known reward item an icon-cell crop shows, purely by
+    color signature -- no OCR at all. Icon art survives being tiny far
+    better than text does: a handful of pixels of "mostly blue" is still
+    recognizably a Gem, where a handful of pixels of stylized text at this
+    resolution is often just noise. Matches the crop's hue/saturation
+    histogram over a centered oval (the icon; this skips the card's
+    decorative background corners) against every reference icon's
+    histogram and returns whichever scores highest.
 
     allowed_names, if given (see core.stage_data.expected_item_names),
     narrows the candidate pool to just what this specific stage can
-    actually reward -- see _narrow_histograms.
+    actually reward -- see _narrow_histograms. min_score is a floor below
+    which nothing is trusted: with no OCR text to cross-check against
+    anymore, a low-confidence color match has to be rejected outright
+    rather than reported as a guess.
 
-    Returns "" (falls back to the OCR text upstream) if there's no reference
-    set to match against, or the crop is too small/blank to build a
-    histogram from.
+    Returns "" if there's no reference set to match against, the crop is
+    too small/blank to build a histogram from, or nothing clears min_score.
     """
     histograms = _load_icon_histograms()
     if not histograms:
@@ -422,20 +363,12 @@ def identify_item_name(icon_bgr: np.ndarray, ocr_name_text: str = "",
     mask = _center_oval_mask(h, w)
     crop_hist = _icon_hue_sat_histogram(icon_bgr, mask)
 
-    scored = sorted(
-        ((cv2.compareHist(crop_hist, rhist, cv2.HISTCMP_CORREL), name) for name, rhist in histograms.items()),
-        reverse=True,
-    )
-    top_candidates = scored[:candidate_count]
-
-    ocr_lower = ocr_name_text.lower()
-    best_name, best_score = "", float("-inf")
-    for hist_score, name in top_candidates:
-        text_score = difflib.SequenceMatcher(None, ocr_lower, name.lower()).ratio()
-        combined = hist_score + text_score
-        if combined > best_score:
-            best_score, best_name = combined, name
-    return best_name
+    best_score, best_name = float("-inf"), ""
+    for name, rhist in histograms.items():
+        score = cv2.compareHist(crop_hist, rhist, cv2.HISTCMP_CORREL)
+        if score > best_score:
+            best_score, best_name = score, name
+    return best_name if best_score >= min_score else ""
 
 
 def detect_row_bands(region_bgr: np.ndarray, min_height_frac: float = 0.15) -> list:
@@ -569,29 +502,28 @@ def merge_reward_pages(*pages: list) -> list:
 def read_reward_row(region_bgr: np.ndarray,
                      quantity_band: float = 0.28, name_band: float = 0.22,
                      row_pad: int = 3, side_pad_frac: float = 0.08,
-                     allowed_names: list = None) -> list:
-    """Auto-detects icon cells in region_bgr (see detect_icon_cells) and OCRs
-    each one's quantity badge and item name.
+                     allowed_names: list = None, amounts: dict = None) -> list:
+    """Auto-detects icon cells in region_bgr (see detect_icon_cells) and
+    identifies each one by icon color alone -- no OCR at all. The tiny
+    "125x" quantity badge and item-name label are both too small/stylized
+    for Tesseract to read reliably at this resolution (see identify_item_name's
+    own docstring on why icon color already beat OCR text even when OCR was
+    still in the mix); worse, they're redundant reads in the first place --
+    a stage's reward quantities are fixed game data (see
+    core.stage_data.expected_item_amounts), not per-run RNG, so once an
+    icon is identified its amount is a lookup, not a read.
 
-    Reads two areas per cell: the quantity number, which sits top-left of
-    the cell, and the item name, which sits lower and is more likely to run
-    past the icon's right edge on long names. side_pad_frac adds a small
-    margin to the left of the quantity box and the right of the name box so
-    a badge/label that's a few pixels wider than the auto-detected icon-art
-    boundary doesn't get clipped -- kept small since padding too far in
-    either direction starts pulling in the *neighboring* icon's badge/art
-    instead when cells sit close together. Vertically, the two text rows are
-    located dynamically via detect_text_bands rather than assumed to be a
-    fixed top/bottom fraction of the cell -- quantity_band/name_band are
-    only used as a fallback if that detection doesn't find two distinct
-    bands (e.g. very low-contrast text).
+    amounts (see core.stage_data.expected_item_amounts) maps an identified
+    name to its known guaranteed quantity; a name with no entry there (a
+    chance Drop, or an icon that couldn't be identified at all) reports "?"
+    rather than guessing.
 
     allowed_names (see core.stage_data.expected_item_names) narrows icon
     identification to just what the current stage can actually reward --
     passed straight through to identify_item_name.
     """
-    pytesseract = _get_pytesseract()  # raises TesseractNotAvailable early, before any work
     h, w = region_bgr.shape[:2]
+    amounts = amounts or {}
 
     bands = detect_text_bands(region_bgr)
     # A band that hugs this slice's own bottom edge is very likely bleed from
@@ -599,79 +531,47 @@ def read_reward_row(region_bgr: np.ndarray,
     # / _drop_cutoff_row) rather than this row's actual name label, which
     # normally leaves a little blank buffer below it before the calibrated
     # crop ends. Prefer an earlier band over trusting an edge-hugging one as
-    # "the name" -- picking the wrong one here corrupts every cell in the
-    # row, not just the cut-off item.
+    # the icon-art boundary -- picking the wrong one here corrupts every
+    # cell in the row, not just the cut-off item.
     while len(bands) > 2 and bands[-1][1] >= h - 2:
         bands = bands[:-1]
     if len(bands) >= 2:
-        qty_y0, qty_y1 = bands[0]
-        name_y0, name_y1 = bands[-1]
+        qty_y1 = bands[0][1]
+        name_y0 = bands[-1][0]
     else:
-        qty_y0, qty_y1 = 0, max(1, int(h * quantity_band))
-        name_y0, name_y1 = h - max(1, int(h * name_band)), h
-    # The icon-art crop (used for color-based identification, below) wants
-    # the *unpadded* band edges -- it should exclude as much of the text
-    # rows as possible, the opposite of what the OCR crops below want extra
-    # margin for.
+        qty_y1 = max(1, int(h * quantity_band))
+        name_y0 = h - max(1, int(h * name_band))
+    # The icon-art crop wants everything BETWEEN the quantity badge and the
+    # name label -- excluding both text rows is what makes the color match
+    # score the actual icon art instead of getting diluted by white text
+    # pixels bleeding into the sample.
     icon_y0, icon_y1 = qty_y1, name_y0
-    qty_y0 = max(0, qty_y0 - row_pad)
-    qty_y1 = min(h, qty_y1 + row_pad)
-    name_y0 = max(0, name_y0 - row_pad)
-    name_y1 = min(h, name_y1 + row_pad)
 
     def read_cell(cell_bounds):
         x0, x1 = cell_bounds
         cw = x1 - x0
         if cw < 2:
             return None
-        pad = max(2, int(cw * side_pad_frac))
 
-        qty_x0, qty_x1 = max(0, x0 - pad), x1
-        name_x0, name_x1 = x0, min(w, x1 + pad)
-
-        qty_cell = region_bgr[qty_y0:qty_y1, qty_x0:qty_x1]
-        name_cell = region_bgr[name_y0:name_y1, name_x0:name_x1]
-        if qty_cell.shape[0] < 2 or qty_cell.shape[1] < 2 or \
-           name_cell.shape[0] < 2 or name_cell.shape[1] < 2:
+        icon_cell = region_bgr[icon_y0:icon_y1, x0:x1]
+        if icon_cell.shape[0] < 2 or icon_cell.shape[1] < 2:
             return None
 
-        qty_text = _clean_quantity_text(_ocr_best(
-            pytesseract, qty_cell, "--psm 7 -c tessedit_char_whitelist=0123456789x,.",
-            valid_pattern=_QUANTITY_PATTERN))
-        ocr_name_text = _clean_name_text(_ocr_best(
-            pytesseract, name_cell, "--psm 7", valid_pattern=_NAME_LOOKS_CLEAN))
-
-        # The icon art itself -- between the quantity badge and the name
-        # label -- identifies the item far more reliably than OCRing the
-        # label does at this resolution (see identify_item_name).
-        icon_cell = region_bgr[icon_y0:icon_y1, x0:x1]
-        name_text = identify_item_name(icon_cell, ocr_name_text, allowed_names=allowed_names)
-
+        name_text = identify_item_name(icon_cell, allowed_names=allowed_names)
         if not name_text:
-            # No existing reference icon matched -- this is either a
-            # genuinely new item, or a stage effect never captured before.
-            # If it's close to one of this stage's *known* possible rewards
-            # (see core.stage_data), trust that confirmed name over the raw
-            # OCR guess -- both for the returned reading, and for what gets
-            # saved as a new reference icon below (never save under an
-            # unverified OCR misread).
-            name_text = _best_allowed_match(ocr_name_text, allowed_names) or ocr_name_text
+            return None  # no reference icon matched closely enough to trust
 
-        if name_text:
-            _ensure_icon_reference(icon_cell, name_text)
-
-        if not qty_text and not name_text:
-            return None  # a detected cell that turned out blank after all
-        return {"quantity": qty_text, "name": name_text}
+        _ensure_icon_reference(icon_cell, name_text)
+        quantity = amounts.get(name_text, "?")
+        return {"quantity": f"{quantity}x" if quantity != "?" else "?", "name": name_text}
 
     cells = detect_icon_cells(region_bgr)
     if not cells:
         return []
-    # Each cell's OCR is several independent Tesseract *subprocess* calls --
-    # real OS processes, not just Python bytecode -- so a thread per cell
-    # actually runs them concurrently instead of fighting the GIL, and a
-    # row's cells have zero data dependency on each other. executor.map
-    # keeps results in the same left-to-right order the cells were submitted
-    # in regardless of which subprocess finishes first.
+    # Icon identification is pure numpy/OpenCV (histogram compare against
+    # every reference icon), not a subprocess call the way OCR was -- still
+    # worth parallelizing across a row's handful of cells since each is
+    # independent, just via a thread pool sized to actual CPU work instead
+    # of the OCR-subprocess-count reasoning this used to need.
     with ThreadPoolExecutor(max_workers=min(len(cells), 8)) as executor:
         return [r for r in executor.map(read_cell, cells) if r is not None]

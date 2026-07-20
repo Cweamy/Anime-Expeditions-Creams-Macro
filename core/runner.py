@@ -1198,35 +1198,39 @@ class MacroRunner:
         stats = self._ocr_game_stats(stats_image)
         items = []
         if reward_images is not None:
-            allowed_names = self._log_expected_rewards(task)
-            items = self._ocr_reward_items(*reward_images, allowed_names=allowed_names)
+            names, amounts = self._log_expected_rewards(task)
+            items = self._ocr_reward_items(*reward_images, allowed_names=names, amounts=amounts)
         self._record_result(result, map_name, duration, stats, items)
         self._send_result_webhook(webhook, result, task, duration, stats, items)
 
-    def _log_expected_rewards(self, task: dict) -> list:
-        # Reference logged right before the actual OCR'd items so they're
+    def _log_expected_rewards(self, task: dict) -> tuple:
+        # Reference logged right before the actual reward read so they're
         # easy to eyeball against each other -- scraped from the wiki's own
-        # data (see tools/fetch_stage_data.py). The returned name list is
-        # also fed into icon identification (core.rewards.identify_item_name's
-        # allowed_names) to narrow its candidate pool down to what this
-        # specific stage can actually reward, instead of every known item --
-        # not just a passive log line, an actual accuracy improvement.
+        # data (see tools/fetch_stage_data.py). The returned name list AND
+        # amounts dict both feed into the actual read (core.rewards.
+        # read_reward_grid): names narrow icon identification down to what
+        # this stage can actually reward, and amounts is the lookup table
+        # that replaced OCRing each reward's quantity badge entirely -- not
+        # just a passive log line, this stage data now IS how quantities
+        # get reported. Returns (names, amounts), both possibly empty/None
+        # if stage_data.json has nothing for this map/stage/difficulty.
         try:
             from . import stage_data
             map_name, stage, difficulty = task.get("map"), task.get("stage") or "1", task.get("difficulty") or "Normal"
             expected = stage_data.expected_rewards(map_name, stage, difficulty)
             names = stage_data.expected_item_names(map_name, stage, difficulty)
+            amounts = stage_data.expected_item_amounts(map_name, stage, difficulty)
         except Exception:
-            return None
+            return None, None
         if expected:
-            self._log(f"[Macro] Possible reward for this stage: {', '.join(expected)}")
+            self._log(f"[Macro] Expected reward for this stage: {', '.join(expected)}")
         if names:
             try:
                 from . import rewards
                 rewards._ensure_wiki_icons_for(names)
             except Exception as exc:
                 self._log(f"[Macro] Couldn't fetch wiki icons for this stage's rewards: {exc}")
-        return names or None
+        return names or None, amounts or None
 
     def _capture_stats_image(self, hwnd, stats_region: dict):
         try:
@@ -1305,21 +1309,22 @@ class MacroRunner:
             self._log(f"[Macro] Couldn't capture the rewards region: {exc}")
             return None
 
-    def _ocr_reward_items(self, image_top, image_bottom, allowed_names: list = None) -> list:
+    def _ocr_reward_items(self, image_top, image_bottom, allowed_names: list = None,
+                            amounts: dict = None) -> list:
         try:
             from core import rewards
-            pages = [rewards.read_reward_grid(image_top, allowed_names=allowed_names)]
+            pages = [rewards.read_reward_grid(image_top, allowed_names=allowed_names, amounts=amounts)]
             if image_bottom is not None:
-                pages.append(rewards.read_reward_grid(image_bottom, allowed_names=allowed_names))
+                pages.append(rewards.read_reward_grid(image_bottom, allowed_names=allowed_names, amounts=amounts))
             items = rewards.merge_reward_pages(*pages)
         except Exception as exc:
             self._log(f"[Macro] Couldn't read rewards: {exc}")
             return []
 
         if not items:
-            self._log("[Macro] No reward icons read -- check the region in Settings > Debug.")
+            self._log("[Macro] No reward icons identified -- check the region in Settings > Debug.")
         for item in items:
-            self._log(f"[Macro] Reward: {item.get('quantity') or '?'} {item.get('name') or '(unreadable)'}")
+            self._log(f"[Macro] Reward: {item.get('quantity') or '?'} {item.get('name') or '(unidentified)'}")
         return items
 
     def _send_result_webhook(self, webhook: dict, result: str, task: dict, duration: str,
