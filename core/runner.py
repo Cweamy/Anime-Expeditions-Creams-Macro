@@ -122,10 +122,21 @@ SOLO_START_TIMEOUT = 10.0  # Solo mode's direct Start button, in place of Enter 
 
 # Teleporting into the actual match can take a while (loading screen) --
 # nav_unitmanager only renders once you're actually in-game, so waiting for
-# it is the "did we teleport in" confirmation. For matchmaking this is one
-# long wait (TELEPORT_IN_TIMEOUT); for Solo it's retried in shorter chunks
-# alongside re-clicking Start -- see _click_start_and_wait_teleport.
+# it is the "did we teleport in" confirmation. Used for the repeat-cycle
+# re-teleport (already-matched session, should be near-instant) and as
+# Solo's per-attempt chunk -- see SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT/
+# _click_start_and_wait_teleport. NOT used for matchmaking's initial entry
+# (see MATCHMAKING_TELEPORT_TIMEOUT below) -- that one's a genuinely
+# different wait, not just a longer version of this one.
 TELEPORT_IN_TIMEOUT = 30.0
+# Clicking Enter Matchmaking doesn't teleport you in on its own -- it only
+# happens once the lobby actually FILLS with real players, which can take
+# anywhere from seconds to several minutes depending on server population,
+# nothing like Solo's near-instant teleport. Reusing TELEPORT_IN_TIMEOUT
+# (30s) here was timing this out mid-legitimate-wait almost every time,
+# which looked exactly like "clicked Enter Matchmaking, then just never
+# did anything else."
+MATCHMAKING_TELEPORT_TIMEOUT = 300.0
 SOLO_START_RETRY_ATTEMPTS = 3
 SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT = 20.0  # generous per chunk -- a slow teleport shouldn't burn through attempts
 # How long teleportstuck.png (optional -- see Assets/ui/README.txt) must be
@@ -659,7 +670,9 @@ class MacroRunner:
                 return False
             if self._checkpoint(stop_event):
                 return False
-            if not self._wait_teleport_in(hwnd, stop_event, webhook, task):
+            self._log(f"[Macro] Waiting for the lobby to fill (up to {MATCHMAKING_TELEPORT_TIMEOUT / 60:.0f} "
+                       f"min) -- matchmaking has to find real players before it teleports in.")
+            if not self._wait_teleport_in(hwnd, stop_event, webhook, task, timeout=MATCHMAKING_TELEPORT_TIMEOUT):
                 return False
         else:
             self._log("[Macro] Solo mode -- clicking Start (retrying up to "
@@ -1852,13 +1865,14 @@ class MacroRunner:
         self._log(f'[Macro] Setting "{name}" ({kind or "?"}) -- unsupported kind, skipping.')
 
     def _wait_teleport_in(self, hwnd, stop_event: threading.Event, webhook: dict = None,
-                            task: dict = None) -> bool:
+                            task: dict = None, timeout: float = None) -> bool:
         # nav_unitmanager only renders once you're actually in the match (not
         # during the loading/teleport transition), so waiting for it is the
         # confirmation the teleport actually finished.
+        timeout = TELEPORT_IN_TIMEOUT if timeout is None else timeout
         self._log("[Macro] Waiting to teleport in-game...")
         self._set_status(action="Waiting to teleport in-game...")
-        result = self._wait_for_teleport_or_stuck(hwnd, stop_event, TELEPORT_IN_TIMEOUT)
+        result = self._wait_for_teleport_or_stuck(hwnd, stop_event, timeout)
         if result == "ok":
             self._log("[Macro] Teleported in-game.")
             return True
