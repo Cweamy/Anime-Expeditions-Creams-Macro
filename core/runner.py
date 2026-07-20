@@ -75,6 +75,13 @@ GAMEMODE_CLICK_TIMEOUT = 8.0  # how long to search for the Raid card once the me
 # the whole click instead of trusting one attempt, same idea as
 # SOLO_START_RETRY_ATTEMPTS below.
 PLAY_CLICK_RETRY_ATTEMPTS = 3
+# Same "click didn't register" flakiness, but for the actual "start the
+# round" click -- previously fired once with no verification at all, so a
+# dropped click here left the run sitting on the Start Game confirmation
+# forever while _wait_for_match_result was already off watching for a
+# Victory/Defeat that could never come.
+START_GAME_CLICK_RETRY_ATTEMPTS = 3
+START_GAME_CLICK_VERIFY_SETTLE = 1.0  # after clicking, how long to wait before checking it's actually gone
 
 # Stage-select screen (after picking a map): a fixed vertical list of rows,
 # same x for every row, y stepping by one row height per stage -- Level 1
@@ -670,18 +677,33 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return None
         start_name, start_match = self._find_start_game_button(hwnd)
-        if start_match is not None:
-            debug_path = self._debug_save(hwnd, start_name, start_match)
-            suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found Start Game ({start_name}, score {start_match['score']:.2f}) -- "
-                       f"clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, start_match)
-        else:
+        if start_match is None:
             # Not fatal: Start Game may already have been pressed by the
             # leader (or Auto Vote Start already handles it) earlier in
             # _start_game_or_reset_via_settings -- its absence here just
             # means the round is already starting on its own.
             self._log("[Macro] Start Game not found -- already started, continuing.")
+        else:
+            for attempt in range(1, START_GAME_CLICK_RETRY_ATTEMPTS + 1):
+                debug_path = self._debug_save(hwnd, start_name, start_match)
+                suffix = f" Debug: {debug_path}" if debug_path else ""
+                self._log(f"[Macro] Found Start Game ({start_name}, score {start_match['score']:.2f}) -- "
+                           f"clicking it (attempt {attempt}/{START_GAME_CLICK_RETRY_ATTEMPTS}).{suffix}")
+                if not wm.activate_window(hwnd):
+                    self._log("[Macro] Couldn't confirm focus before clicking Start Game -- "
+                               "click may not register.")
+                vision.click_match(self._mouse, hwnd, start_match)
+                time.sleep(START_GAME_CLICK_VERIFY_SETTLE)
+                if self._checkpoint(stop_event):
+                    return None
+
+                start_name, start_match = self._find_start_game_button(hwnd)
+                if start_match is None:
+                    break
+                if attempt == START_GAME_CLICK_RETRY_ATTEMPTS:
+                    self._log(f"[Macro] Start Game still showing after {START_GAME_CLICK_RETRY_ATTEMPTS} "
+                               f"clicks -- the round may not have actually started. Continuing anyway.")
+                    self._save_debug_screenshot_unconditional(hwnd, "start_game_click_stuck")
         if self._checkpoint(stop_event):
             return None
 
