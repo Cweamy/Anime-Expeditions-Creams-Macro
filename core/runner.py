@@ -84,6 +84,7 @@ START_GAME_CLICK_RETRY_ATTEMPTS = 3
 START_GAME_CLICK_VERIFY_SETTLE = 1.0  # after clicking, how long to wait before checking it's actually gone
 START_GAME_BUTTON_WAIT_TIMEOUT = 5.0  # how long to poll for Start Game right after Pre Start hands off
 EXPEDITION_WAVE_TIMEOUT = 8.0  # how long to wait for Continue_2/extract after clicking exp_continue/exp_extract
+EXPEDITION_EXTRACT_DECLINE_COOLDOWN = 2.0  # settle after declining the first exp_extract so a laggy banner isn't miscounted
 
 # Stage-select screen (after picking a map): a fixed vertical list of rows,
 # same x for every row, y stepping by one row height per stage -- Level 1
@@ -324,6 +325,10 @@ class MacroRunner:
         # the start of each match in _play_one_match.
         self._battle_block_index = 0
         self._battle_block_state = {}
+        # How many times exp_extract has shown up THIS match (see
+        # _check_expedition_wave_result) -- reset alongside the battle
+        # block state in _play_one_match.
+        self._expedition_extract_count = 0
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -434,6 +439,22 @@ class MacroRunner:
         debug_path = self._debug_save(hwnd, "return", match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
         self._log(f"[Macro] Found \"Return to Lobby\" (score {match['score']:.2f}) -- clicking it.{suffix}")
+        vision.click_match(self._mouse, hwnd, match)
+
+    def _click_close_popup_if_found(self, hwnd) -> None:
+        # Spirit City Act 3 (Raid) can throw up a "Click anywhere to close"
+        # popup (a boss/cutscene intro) mid-battle -- one-shot/best-effort
+        # like nav_disband, checked every poll tick while watching for the
+        # match result (see watch_close_popup in _wait_for_match_result).
+        try:
+            match = vision.find_image(hwnd, "Click anywhere to close")
+        except vision.TemplateNotFound:
+            return
+        if match is None:
+            return
+        debug_path = self._debug_save(hwnd, "Click anywhere to close", match)
+        suffix = f" Debug: {debug_path}" if debug_path else ""
+        self._log(f"[Macro] Found \"Click anywhere to close\" (score {match['score']:.2f}) -- clicking it.{suffix}")
         vision.click_match(self._mouse, hwnd, match)
 
     def _debug_save(self, hwnd, name: str, match: dict) -> str:
@@ -777,6 +798,8 @@ class MacroRunner:
         self._set_status(action="Starting the round...")
         if self._checkpoint(stop_event):
             return None
+        # Start Game genuinely applies to Expedition too (it can show up
+        # more than once, similar to Infinite mode) -- not skipped here.
         self._wait_out_start_game_warning(hwnd, stop_event)
         if self._checkpoint(stop_event):
             return None
@@ -823,8 +846,13 @@ class MacroRunner:
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
         self._battle_block_state = {}
+        self._expedition_extract_count = 0
+        # Spirit City Act 3's boss/cutscene "Click anywhere to close" popup
+        # (see _click_close_popup_if_found) only ever shows up there.
+        watch_close_popup = (task.get("mode") == "raid" and task.get("map") == "Spirit City"
+                              and str(task.get("stage")) == "3")
         return self._wait_for_match_result(hwnd, stop_event, battle_blocks, first_repeat, task.get("macro"),
-                                             task.get("mode"))
+                                             task.get("mode"), watch_close_popup)
 
     def _load_battle_blocks(self, task: dict) -> list:
         macro_name = task.get("macro")
@@ -876,7 +904,8 @@ class MacroRunner:
         return filtered
 
     def _wait_for_match_result(self, hwnd, stop_event: threading.Event, battle_blocks: list = None,
-                                 first_repeat: bool = True, macro_name: str = None, mode: str = None) -> str:
+                                 first_repeat: bool = True, macro_name: str = None, mode: str = None,
+                                 watch_close_popup: bool = False) -> str:
         self._log("[Macro] Battle in progress -- watching for Victory/Defeat...")
         self._set_status(action="Battle in progress...")
         battle_blocks = battle_blocks or []
@@ -888,6 +917,9 @@ class MacroRunner:
                 self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat, macro_name)
                 if self._checkpoint(stop_event):
                     return None
+
+            if watch_close_popup:
+                self._click_close_popup_if_found(hwnd)
 
             if mode == "expedition":
                 result = self._check_expedition_wave_result(hwnd, stop_event)
@@ -920,12 +952,14 @@ class MacroRunner:
     def _check_expedition_wave_result(self, hwnd, stop_event: threading.Event) -> str:
         """Expedition doesn't show a Victory popup mid-run -- exp_continue
         shows up at least once per run (click it, then Continue_2 to
-        actually move on to the next wave) and, once there are no waves
-        left, exp_extract shows up instead (click it, then extract,
-        landing on the reward screen -- the same terminal state Victory is
-        for Story/Raid). Returns "win" once extracted, "loss" if a click's
-        follow-up never showed up, or None while still mid-run (the caller
-        just keeps polling)."""
+        actually move on to the next wave). exp_extract shows up TWICE
+        before the run is actually over: the first sighting is declined
+        (click "Continue" instead of Extract, so the run keeps going for
+        one more wave), only the second sighting is actually accepted
+        (click exp_extract, then extract, landing on the reward screen --
+        the same terminal state Victory is for Story/Raid). Returns "win"
+        once extracted, "loss" if a click's follow-up never showed up, or
+        None while still mid-run (the caller just keeps polling)."""
         try:
             continue_match = vision.find_image(hwnd, "exp_continue")
         except vision.TemplateNotFound:
@@ -945,9 +979,28 @@ class MacroRunner:
         except vision.TemplateNotFound:
             extract_match = None
         if extract_match is not None:
+            self._expedition_extract_count += 1
             debug_path = self._debug_save(hwnd, "exp_extract", extract_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f'[Macro] Found "exp_extract" (score {extract_match["score"]:.2f}) -- clicking it.{suffix}')
+            self._log(f'[Macro] Found "exp_extract" (occurrence {self._expedition_extract_count}, '
+                       f'score {extract_match["score"]:.2f}).{suffix}')
+
+            if self._expedition_extract_count < 2:
+                # First sighting -- decline it (there's one more wave to
+                # go), same "Continue" choice as exp_continue's flow but a
+                # different button on this popup. A cooldown after the
+                # click, not just the click itself, since a laggy game can
+                # leave exp_extract on screen a moment longer -- without
+                # it, the very next poll tick would see that same still-
+                # visible banner and wrongly count it as the SECOND sighting.
+                if not self._click_found_image(hwnd, "Continue", EXPEDITION_WAVE_TIMEOUT, stop_event):
+                    self._log('[Macro] "Continue" never showed up after the first exp_extract -- stopping.')
+                    return "loss"
+                time.sleep(EXPEDITION_EXTRACT_DECLINE_COOLDOWN)
+                return None
+
+            # Second sighting -- actually extract.
+            self._log("[Macro] Second exp_extract -- extracting for real.")
             vision.click_match(self._mouse, hwnd, extract_match)
             if not self._click_found_image(hwnd, "extract", EXPEDITION_WAVE_TIMEOUT, stop_event):
                 self._log('[Macro] "extract" never showed up after exp_extract -- stopping.')
@@ -2161,6 +2214,25 @@ class MacroRunner:
         instead of continuing to poll a dead window handle. Updates
         self._current_hwnd on success. Returns whether the lobby was
         actually reached again."""
+        # A deep-link launch invokes Roblox's OWN single-instance handling,
+        # which force-closes every OTHER open Roblox window down to just
+        # the newly launched one -- fine (even desired) on a single-
+        # instance setup, but it was silently taking out someone's other
+        # accounts/windows on a multi-instance one, which is a much worse
+        # outcome than just failing this one rejoin attempt. Only attempt
+        # it when there's nothing else around it could take down (the
+        # window that actually disconnected doesn't count here -- it's
+        # still docked/hidden at this point, not a standalone window
+        # list_roblox_windows would even see).
+        try:
+            other_windows = wm.list_roblox_windows()
+        except Exception:
+            other_windows = []
+        if other_windows:
+            self._log("[Macro] Not attempting a deep-link rejoin -- other Roblox windows are open and it "
+                       "would close them. Stopping instead.")
+            return False
+
         self._set_status(action="Disconnected -- rejoining...")
         try:
             os.startfile(REJOIN_DEEPLINK)
@@ -2683,6 +2755,8 @@ class MacroRunner:
         # Reconnect/Retry prompt (see _handle_disconnect) -- rather than
         # just give up here, try the same deep-link rejoin a detected
         # disconnect already uses instead of stopping the whole run over it.
+        # (_attempt_rejoin itself skips this on a multi-instance setup --
+        # see its own comment.)
         self._log("[Macro] Play button never showed up -- attempting a rejoin via deep link.")
         return self._attempt_rejoin(hwnd, stop_event)
 

@@ -565,6 +565,20 @@ function mapKeyName(e) {
     'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right',
   };
   if (special[e.key] !== undefined) return special[e.key];
+  // event.key is whatever character the CURRENT keyboard layout produces
+  // for the physical key -- on non-US layouts the digit row often doesn't
+  // type a plain digit without Shift at all, so someone pressing "1"-"6"
+  // was getting captured (and stored/displayed) as that layout's symbol
+  // instead ("§", "&", ...). event.code is the physical key's US-layout
+  // position regardless of layout/Shift, which is what "press this key to
+  // bind it" actually means here -- used for the plain digit row and
+  // letter keys, where landing on one stable name matters most; anything
+  // else still falls back to event.key so punctuation/media keys keep
+  // whatever name they'd normally get.
+  const digitMatch = /^Digit(\d)$/.exec(e.code || '');
+  if (digitMatch) return digitMatch[1];
+  const letterMatch = /^Key([A-Z])$/.exec(e.code || '');
+  if (letterMatch) return letterMatch[1].toLowerCase();
   return e.key.toLowerCase();
 }
 

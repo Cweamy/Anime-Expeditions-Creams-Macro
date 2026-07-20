@@ -1,20 +1,44 @@
-<img src="logo.ico" width="64" height="64" alt="Cream's Macro logo">
+<p align="center">
+  <img src="logo.ico" width="80" alt="Cream's Macro — Anime Expeditions logo">
+</p>
 
-# Cream's Macro | Anime Expeditions
+<h1 align="center">Cream's Macro | Anime Expeditions</h1>
 
-**A free, open-source auto-farm macro for the Roblox game [Anime Expeditions](https://www.roblox.com/games/).** Docks Roblox directly inside its own window and automates the full Story/Raid grind loop — map and stage selection, unit placement, match start, Victory/Defeat detection, reward tracking, and repeat farming — so you can queue up a run and walk away.
+<p align="center">
+  <strong>Free, open-source auto-farm macro for the Roblox game Anime Expeditions</strong><br>
+  Vision-based (screen capture + image matching) — no injection, no memory reading.<br>
+  Docks Roblox directly inside its own window and automates the full Story/Raid/Expedition grind loop.
+</p>
 
-[![CI](https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/actions/workflows/ci.yml/badge.svg)](https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg)](#requirements)
+<p align="center">
+  <a href="https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest">
+    <img src="https://img.shields.io/github/v/release/Cweamy/Anime-Expeditions-Creams-Macro?style=flat-square&color=blue" alt="Latest Release">
+  </a>
+  <a href="https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest">
+    <img src="https://img.shields.io/github/downloads/Cweamy/Anime-Expeditions-Creams-Macro/total?style=flat-square&color=green" alt="Downloads">
+  </a>
+  <a href="https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/actions/workflows/ci.yml">
+    <img src="https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT">
+  </a>
+  <a href="#requirements">
+    <img src="https://img.shields.io/badge/platform-Windows-0078D6.svg?style=flat-square" alt="Platform: Windows">
+  </a>
+</p>
 
-> Looking for an **Anime Expeditions auto farm bot**, **Anime Expeditions macro**, or a way to **auto raid / auto story farm** in Anime Expeditions on Roblox? You're in the right place.
+<p align="center">
+  <a href="https://discord.gg/FwU6ppjKNf">Discord</a> · <a href="https://www.youtube.com/@Cweamya">YouTube</a> · <a href="https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest">Download</a>
+</p>
+
+> Looking for an **Anime Expeditions auto farm bot**, **Anime Expeditions macro**, or a way to **auto raid / auto story farm / auto expedition** in Anime Expeditions on Roblox? You're in the right place.
 
 ## Table of Contents
 
 - [Features](#features)
 - [Requirements](#requirements)
-- [Installation](#installation)
+- [Download & Install](#download--install)
 - [Usage](#usage)
 - [Auto-Updater](#auto-updater)
 - [Project Layout](#project-layout)
@@ -25,7 +49,7 @@
 ## Features
 
 - **Docked automation** — Roblox is embedded as a native child window inside the macro's own UI, not remote-controlled from outside, so clicks and key presses land exactly where they should.
-- **Task queue** — build a queue of Story or Raid tasks (map, stage/act, difficulty, Solo or Matchmaking, repeat count) and let the macro work through all of them in order.
+- **Task queue** — build a queue of Story, Raid, or Expedition tasks (map, stage/act/difficulty, Solo or Matchmaking, repeat count) and let the macro work through all of them in order.
 - **Repeat farming with automatic recovery** — farm the same stage N times via Repeat Stage without re-doing the lobby/map/stage picks each run. A stuck battle or a missed click backs out to the lobby and retries automatically instead of derailing an unattended session.
 - **Pre Start block builder (Creation)** — a drag-and-drop editor for what happens before a match starts: place starter units (with click-verify and auto-nudge if a spot is rejected), flip in-game settings via hotkey, and mark any block "Once" so it only fires on a task's first entry into a stage, not every repeat.
 - **Walk path recorder** — record a WASD(+ability-key) movement path once per map and replay it automatically as part of Pre Start.
@@ -43,11 +67,20 @@
 - **[Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)** (preinstalled on most Win10/11 systems)
 - **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)** — required for reading match stats/rewards; pip cannot install this, grab the Windows installer from the link above
 
-## Installation
+## Download & Install
 
 ### Option A: Download (recommended)
 
-Grab **`Creams Macro - Anime Expeditions Bootstrapper.exe`** from the [latest release](https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest) and run it. It's a small (~few MB) downloader — on first run it fetches the real app from this repo's Releases and launches it, then keeps itself up to date on every launch. No Python, no `git clone`, nothing else to install except Tesseract (below).
+No `git clone`, no Python needed — just one small `.exe`.
+
+1. Open the [**Releases page**](https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest)
+2. The newest release is shown at the top
+3. Under **Assets**, download **`Creams Macro - Anime Expeditions Bootstrapper.exe`**
+4. Run it — on first launch it fetches the real app from this repo's Releases and launches it, then keeps itself up to date on every launch after that
+
+> Windows SmartScreen may warn about an unrecognized app the first time (normal for small open-source tools) — click **More info → Run anyway**, or build it yourself from source below.
+
+The only other thing you need is [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) (pip can't install this one — grab the Windows installer from the link) for reading match stats/rewards; everything else works without it.
 
 ### Option B: Run from source
 
