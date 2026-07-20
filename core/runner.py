@@ -67,6 +67,13 @@ LOBBY_CHECK_TIMEOUT = 15.0   # how long to wait for the Play button to appear be
 STORY_SCREEN_TIMEOUT = 10.0  # Play's menu (Story/Raid) animates in, not instant
 BACK_CONFIRM_TIMEOUT = 8.0   # how long to wait for nav_back after clicking Story, to confirm it landed
 GAMEMODE_CLICK_TIMEOUT = 8.0  # how long to search for the Raid card once the menu's open
+# A perfectly-matched Play click that never opens the gamemode menu is
+# exactly the "click didn't register" focus flakiness _click_play's own
+# activate_window() reassertion was already added for (see its comment) --
+# still reported by some users even with that fix in place, so this retries
+# the whole click instead of trusting one attempt, same idea as
+# SOLO_START_RETRY_ATTEMPTS below.
+PLAY_CLICK_RETRY_ATTEMPTS = 3
 
 # Stage-select screen (after picking a map): a fixed vertical list of rows,
 # same x for every row, y stepping by one row height per stage -- Level 1
@@ -717,18 +724,22 @@ class MacroRunner:
                 return "loss"
             time.sleep(MATCH_RESULT_POLL_INTERVAL)
         self._log(f"[Macro] Timed out after {MATCH_RESULT_TIMEOUT / 60:.0f} min waiting for Victory/Defeat.")
-        # Unlike every other debug screenshot (gated behind Settings > Debug
-        # > "Debug Match Screenshots"), this one always saves -- a timeout
-        # this long is rare enough, and useful enough to diagnose after the
-        # fact, that it's worth it unconditionally rather than only when the
-        # toggle happened to already be on.
+        self._save_debug_screenshot_unconditional(hwnd, "match_result_timeout")
+        return None
+
+    def _save_debug_screenshot_unconditional(self, hwnd, name: str) -> None:
+        """A full-window screenshot saved regardless of Settings > Debug >
+        "Debug Match Screenshots" -- for failures rare and diagnostically
+        useful enough (a long timeout, a menu that never opened) that it's
+        worth it unconditionally rather than only when that toggle happened
+        to already be on, so a user's bug report actually comes with
+        evidence of what was on screen instead of a blind guess."""
         try:
             left, top, right, bottom = wm.get_window_rect_screen(hwnd)
-            path = vision.save_region_debug(hwnd, "match_result_timeout", (0, 0, right - left, bottom - top))
-            self._log(f"[Macro] Saved a screenshot of the timeout for troubleshooting: {path}")
+            path = vision.save_region_debug(hwnd, name, (0, 0, right - left, bottom - top))
+            self._log(f"[Macro] Saved a screenshot for troubleshooting: {path}")
         except Exception as exc:
-            self._log(f"[Macro] Couldn't save a timeout screenshot: {exc}")
-        return None
+            self._log(f"[Macro] Couldn't save a debug screenshot: {exc}")
 
     def _run_battle_blocks_tick(self, hwnd, stop_event: threading.Event, battle_blocks: list, first_repeat: bool,
                                   macro_name: str = None) -> None:
@@ -2324,17 +2335,32 @@ class MacroRunner:
         # "already open" shortcut in _run) -- no point polling for something
         # already known to be there.
         if wait_for_menu:
-            self._log("[Macro] Waiting for the gamemode menu to open...")
-            self._set_status(action="Waiting for gamemode menu...")
-            try:
-                match = vision.wait_for_image(
-                    hwnd, "nav_back", timeout=STORY_SCREEN_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't confirm the menu opened: {exc}")
-                return False
+            match = None
+            for attempt in range(1, PLAY_CLICK_RETRY_ATTEMPTS + 1):
+                self._log("[Macro] Waiting for the gamemode menu to open..." if attempt == 1 else
+                           f"[Macro] Still on the lobby -- re-clicking Play (attempt {attempt}/"
+                           f"{PLAY_CLICK_RETRY_ATTEMPTS})...")
+                self._set_status(action="Waiting for gamemode menu...")
+                try:
+                    match = vision.wait_for_image(
+                        hwnd, "nav_back", timeout=STORY_SCREEN_TIMEOUT, stop_event=stop_event)
+                except vision.TemplateNotFound as exc:
+                    self._log(f"[Macro] Can't confirm the menu opened: {exc}")
+                    return False
+                if match is not None or stop_event.is_set():
+                    break
+                if attempt < PLAY_CLICK_RETRY_ATTEMPTS:
+                    # Still on the lobby -- the earlier Play click plausibly
+                    # never actually registered (see PLAY_CLICK_RETRY_ATTEMPTS'
+                    # comment). Re-clicking is retriable in a way waiting
+                    # even longer for a click that already failed isn't.
+                    if not self._click_play(hwnd, stop_event):
+                        return False
             if match is None:
                 if not stop_event.is_set():
-                    self._log("[Macro] Gamemode menu never opened (no Back button found) -- stopping.")
+                    self._log(f"[Macro] Gamemode menu never opened after {PLAY_CLICK_RETRY_ATTEMPTS} attempt(s) "
+                               f"(no Back button found) -- stopping.")
+                    self._save_debug_screenshot_unconditional(hwnd, "gamemode_menu_timeout")
                 return False
 
         # A "Disband Party" prompt can sit in front of the menu at this
