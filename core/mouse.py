@@ -28,7 +28,7 @@ class Mouse:
         abs_x, abs_y = si.screen_to_absolute(x, y)
         mi = si.MouseInput(
             dx=abs_x, dy=abs_y, mouseData=0,
-            dwFlags=si.MOUSEEVENTF_MOVE | si.MOUSEEVENTF_ABSOLUTE,
+            dwFlags=si.MOUSEEVENTF_MOVE | si.MOUSEEVENTF_ABSOLUTE | si.MOUSEEVENTF_VIRTUALDESK,
             time=0, dwExtraInfo=0,
         )
         si.send_mouse_input(mi)

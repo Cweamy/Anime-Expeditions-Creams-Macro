@@ -20,6 +20,16 @@ INPUT_KEYBOARD = 1
 
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_ABSOLUTE = 0x8000
+# Without this, Windows maps an ABSOLUTE move's 0-65535 coordinates onto the
+# PRIMARY monitor only -- but screen_to_absolute() below normalizes against
+# the FULL virtual desktop (SM_XVIRTUALSCREEN/CXVIRTUALSCREEN), specifically
+# so multi-monitor setups (or any primary monitor not sitting at the virtual
+# desktop's origin) work at all. Missing this flag is a well-known SendInput
+# gotcha and silently sends every move to the wrong place on exactly those
+# setups -- the cursor can end up clamped to the primary monitor's edge or
+# jump somewhere unrelated to the intended target, which reads as "the mouse
+# barely moves/is stuck" even though SendInput itself never errors.
+MOUSEEVENTF_VIRTUALDESK = 0x4000
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_RIGHTDOWN = 0x0008
