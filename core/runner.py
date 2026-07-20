@@ -181,7 +181,19 @@ AUTO_UPGRADE_CLICK_SETTLE = 0.6
 TEAM_PANEL_TIMEOUT = 5.0
 TEAM_LOADOUT_CLICK_1 = (800, 324)  # Loadout 1's row
 TEAM_LOADOUT_ROW_HEIGHT = 126
-TEAM_LOADOUT_MAX_SUPPORTED = 3
+TEAM_LOADOUT_MAX_SUPPORTED = 8
+# Loadouts 4-8 need the list scrolled first -- a click-drag on the list
+# itself (not a wheel scroll), same anchor point for both scroll sizes.
+# The smaller drag (~1 row height) reveals 4-6 at the SAME row positions
+# the 1-3 formula above already computes (the list just shifts to put
+# them there); the larger drag re-anchors the list differently, landing 7
+# and 8 at their own fixed positions instead of following that formula.
+TEAM_LOADOUT_SCROLL_ANCHOR = (895, 285)
+TEAM_LOADOUT_SCROLL_SMALL = 124  # reaches Loadout 4-6
+TEAM_LOADOUT_SCROLL_LARGE = 300  # reaches Loadout 7-8
+TEAM_LOADOUT_SLOT_7_Y = 410
+TEAM_LOADOUT_SLOT_8_Y = 536
+TEAM_LOADOUT_SCROLL_SETTLE = 0.3  # lets the drag's scroll animation finish before clicking a row
 
 # Wait for Wave (see _run_wait_wave_tick) -- the "<current> / <max> wave"
 # HUD badge, in the docked game window's own client coordinates.
@@ -1334,7 +1346,27 @@ class MacroRunner:
             return
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        row_y = TEAM_LOADOUT_CLICK_1[1] + (team_num - 1) * TEAM_LOADOUT_ROW_HEIGHT
+        if team_num > 3:
+            # A click-drag on the list itself, not a wheel scroll -- 7/8
+            # need a bigger drag that re-anchors the list differently
+            # (their own fixed row positions below), while 4-6's smaller
+            # drag just shifts the list enough to put them at the same row
+            # positions the 1-3 formula already computes.
+            scroll_amount = TEAM_LOADOUT_SCROLL_LARGE if team_num >= 7 else TEAM_LOADOUT_SCROLL_SMALL
+            anchor_x = left + TEAM_LOADOUT_SCROLL_ANCHOR[0]
+            anchor_y = top + TEAM_LOADOUT_SCROLL_ANCHOR[1]
+            self._log(f"[Macro] Scrolling the Loadout list to reach {team_num}...")
+            self._mouse.drag(anchor_x, anchor_y, anchor_x, anchor_y + scroll_amount)
+            time.sleep(TEAM_LOADOUT_SCROLL_SETTLE)
+            if self._checkpoint(stop_event):
+                return
+
+        if team_num == 7:
+            row_y = TEAM_LOADOUT_SLOT_7_Y
+        elif team_num == 8:
+            row_y = TEAM_LOADOUT_SLOT_8_Y
+        else:
+            row_y = TEAM_LOADOUT_CLICK_1[1] + (team_num - 1) * TEAM_LOADOUT_ROW_HEIGHT
         self._mouse.click(left + TEAM_LOADOUT_CLICK_1[0], top + row_y)
         self._log(f"[Macro] Clicked Loadout {team_num}.")
         if self._checkpoint(stop_event):
