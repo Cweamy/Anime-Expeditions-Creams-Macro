@@ -388,6 +388,24 @@ class MacroRunner:
         if match is not None:
             self._log(f"[Macro] Stopping -- clicking Leave Stage (score {match['score']:.2f}) to quit to menu.")
             vision.click_match(self._mouse, self._current_hwnd, match)
+            time.sleep(0.5)
+            self._click_return_to_lobby_if_found(self._current_hwnd)
+
+    def _click_return_to_lobby_if_found(self, hwnd) -> None:
+        # Leave Stage can bring up its own "Return to Lobby" confirmation
+        # (return.png) rather than backing out on its own -- optional/
+        # best-effort like nav_disband and friends: a one-shot look, not a
+        # wait, since most Leave Stage clicks never show this at all.
+        try:
+            match = vision.find_image(hwnd, "return")
+        except vision.TemplateNotFound:
+            return
+        if match is None:
+            return
+        debug_path = self._debug_save(hwnd, "return", match)
+        suffix = f" Debug: {debug_path}" if debug_path else ""
+        self._log(f"[Macro] Found \"Return to Lobby\" (score {match['score']:.2f}) -- clicking it.{suffix}")
+        vision.click_match(self._mouse, hwnd, match)
 
     def _debug_save(self, hwnd, name: str, match: dict) -> str:
         """Gated behind Settings > Debug > "Debug Match Screenshots" (off by
@@ -610,6 +628,7 @@ class MacroRunner:
             self._log(f"[Macro] Found Leave Stage (score {leave_match['score']:.2f}) -- clicking it.")
             vision.click_match(self._mouse, hwnd, leave_match)
             time.sleep(SETTLE_DELAY)
+            self._click_return_to_lobby_if_found(hwnd)
         if self._checkpoint(stop_event):
             return False
         self._spam_back_until_gone(hwnd, stop_event)
@@ -1232,6 +1251,7 @@ class MacroRunner:
         if not self._click_and_verify_gone(hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT):
             self._log('[Macro] "Leave Stage" not found -- stopping.')
             return False
+        self._click_return_to_lobby_if_found(hwnd)
         return True
 
     def _finish_match_result_background(self, stats_image, reward_images, result: str, map_name: str,

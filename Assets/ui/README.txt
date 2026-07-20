@@ -106,6 +106,13 @@ reconnect.png / reconnect_2.png / retry.png
   re-docks that on its own, and the runner picks up the new hwnd via
   self._current_hwnd once _attempt_rejoin confirms the lobby loaded.
 
+return.png
+  Optional. core.runner._click_return_to_lobby_if_found -- Leave Stage
+  can bring up its own "Return to Lobby" confirmation instead of backing
+  out on its own; checked (one-shot, not a wait) right after every Leave
+  Stage click (post-match, mid-task recovery, and on Stop) and clicked if
+  found.
+
 nav_settings.png / nav_search.png / toggle_true.png / toggle_false.png /
 nav_settings_on.png
   Used by core.runner._open_settings_search/_search_and_set_toggle to
