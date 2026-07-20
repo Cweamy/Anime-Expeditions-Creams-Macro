@@ -183,6 +183,15 @@ TEAM_LOADOUT_CLICK_1 = (800, 324)  # Loadout 1's row
 TEAM_LOADOUT_ROW_HEIGHT = 126
 TEAM_LOADOUT_MAX_SUPPORTED = 3
 
+# Wait for Wave (see _run_wait_wave_tick) -- the "<current> / <max> wave"
+# HUD badge, in the docked game window's own client coordinates.
+WAVE_REGION = (467, 21, 104, 61)
+# OCR here is several real Tesseract subprocess spawns (see core.wave/
+# core.ocr's multi-mask sweep) -- checked on this cadence, not every single
+# Battle-tick poll, so a long wait for a distant wave doesn't spend most of
+# its time re-running OCR against a number that hasn't changed yet.
+WAIT_WAVE_POLL_INTERVAL = 2.0
+
 # Fallbacks if main.py doesn't pass real calibrated regions through (mirrors
 # main.py's REWARD_REGION_DEFAULTS/STATS_REGION_DEFAULTS).
 DEFAULT_REWARD_REGION = {"x": 212, "y": 429, "width": 504, "height": 106}
@@ -744,6 +753,8 @@ class MacroRunner:
                 self._run_wait_ms_tick(stop_event, block, self._battle_block_index + 1)
                 done = True
                 self._battle_block_state = {}
+            elif btype == "wait_wave":
+                done = self._run_wait_wave_tick(hwnd, block, self._battle_block_index + 1)
             else:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
                            f'("{btype}") -- not runnable in Battle yet.')
@@ -885,6 +896,55 @@ class MacroRunner:
             if self._checkpoint(stop_event):
                 return
             time.sleep(min(0.1, deadline - time.time()))
+
+    def _run_wait_wave_tick(self, hwnd, block: dict, block_num: int) -> bool:
+        """Waits until the current wave has reached OR already passed the
+        configured target -- not exact equality, so a wave that ticks over
+        between polls (or was already past target the first time this is
+        checked) still counts as done instead of waiting forever for a
+        number that will never be read again. Checked periodically (see
+        WAIT_WAVE_POLL_INTERVAL), not every single Battle-tick poll --
+        each OCR read is several real Tesseract subprocess spawns.
+        Returns True once done (target reached/passed, or the block's own
+        target can't be resolved at all); False to keep waiting.
+        """
+        label = f'Battle block #{block_num} (Wait for Wave)'
+        state = self._battle_block_state
+        try:
+            target = int(block.get("params", {}).get("wave") or 1)
+        except (TypeError, ValueError):
+            self._log(f'{label}: no target wave set -- skipping.')
+            return True
+
+        if "next_check" not in state:
+            state["next_check"] = 0.0
+        if time.time() < state["next_check"]:
+            return False
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        try:
+            from core.ocr import capture_region
+            from core import wave as wave_module
+            image = capture_region(left + WAVE_REGION[0], top + WAVE_REGION[1], WAVE_REGION[2], WAVE_REGION[3])
+            current, maximum = wave_module.read_wave(image)
+        except Exception as exc:
+            self._log(f'{label}: OCR failed ({exc}) -- retrying in {WAIT_WAVE_POLL_INTERVAL:.0f}s.')
+            state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
+            return False
+
+        if current is None:
+            self._log(f"{label}: couldn't read the wave counter -- retrying in {WAIT_WAVE_POLL_INTERVAL:.0f}s.")
+            state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
+            return False
+
+        if current >= target:
+            self._log(f'{label}: wave {current}/{maximum} -- reached (or already past) target {target}.')
+            return True
+
+        self._log(f'{label}: wave {current}/{maximum}, waiting for {target}.')
+        self._set_status(action=f"Waiting for wave {target} (currently {current})...")
+        state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
+        return False
 
     def _run_auto_upgrade_unit_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int) -> bool:
         """One-shot: click the unit, right-click to open its priority menu,
