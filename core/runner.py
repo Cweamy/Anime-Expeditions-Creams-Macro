@@ -740,6 +740,10 @@ class MacroRunner:
                                              macro_name, self._last_unit_ordinal)
                 done = True
                 self._battle_block_state = {}
+            elif btype == "wait_ms":
+                self._run_wait_ms_tick(stop_event, block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
             else:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
                            f'("{btype}") -- not runnable in Battle yet.')
@@ -863,6 +867,24 @@ class MacroRunner:
         self._log(f'{label}: clicked unit at {pos} -- pressing X to sell.')
         self._keyboard.tap(ord("X"))
         return True
+
+    def _run_wait_ms_tick(self, stop_event: threading.Event, block: dict, block_num: int) -> None:
+        """Just waits -- no unit/click involved. Slept in small chunks
+        (checking _checkpoint between each) rather than one bare
+        time.sleep(), so Pause/Stop still cuts in promptly during a long
+        configured wait instead of having to sit through the whole thing."""
+        try:
+            ms = int(block.get("params", {}).get("ms") or 0)
+        except (TypeError, ValueError):
+            ms = 0
+        ms = max(0, ms)
+        self._log(f'Battle block #{block_num} (Wait): waiting {ms}ms.')
+        self._set_status(action=f"Waiting {ms}ms...")
+        deadline = time.time() + ms / 1000.0
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return
+            time.sleep(min(0.1, deadline - time.time()))
 
     def _run_auto_upgrade_unit_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int) -> bool:
         """One-shot: click the unit, right-click to open its priority menu,
