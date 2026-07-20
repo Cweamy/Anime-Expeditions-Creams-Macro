@@ -82,6 +82,8 @@ PLAY_CLICK_RETRY_ATTEMPTS = 3
 # Victory/Defeat that could never come.
 START_GAME_CLICK_RETRY_ATTEMPTS = 3
 START_GAME_CLICK_VERIFY_SETTLE = 1.0  # after clicking, how long to wait before checking it's actually gone
+START_GAME_BUTTON_WAIT_TIMEOUT = 5.0  # how long to poll for Start Game right after Pre Start hands off
+EXPEDITION_WAVE_TIMEOUT = 8.0  # how long to wait for Continue_2/extract after clicking exp_continue/exp_extract
 
 # Stage-select screen (after picking a map): a fixed vertical list of rows,
 # same x for every row, y stepping by one row height per stage -- Level 1
@@ -105,6 +107,27 @@ ACT_ROW_HEIGHT = 129
 # (see ui/app.js's TASK_DATA.story comment) -- no difficulty click happens
 # for those stages at all, so there's nothing to look up for them here.
 SPECIAL_STAGES_NO_DIFFICULTY = ("Infinite", "Mastery")
+
+# Expedition has no stage-row picker like Story/Raid -- just a map (School
+# Grounds is whatever's selected by default when the screen opens, so it has
+# no reference image at all; Flower Forest/Rose Kingdom are each picked by
+# image search, see EXPEDITION_MAP_IMAGES) and a difficulty stepper: one "+"
+# button at a fixed spot that increments the level by 1 per click, starting
+# from 1. Difficulty "2" is one click, "3" is two, "1" is none.
+EXPEDITION_MAP_IMAGES = {
+    "Flower Forest": "expedition_flower_forest",
+    "Rose Kingdom": "expedition_rose_kingdom",
+}
+EXPEDITION_DIFFICULTY_CLICK = (1094, 456)
+EXPEDITION_DIFFICULTY_CLICK_DELAY = 0.1  # lets each increment register before the next click
+EXPEDITION_CAMERA_HOLD_MS = 150  # Pre Start's camera-zoom O-hold, Expedition only (see core.camera's default 2000ms)
+
+# Clicking the stage row (or the map, for Expedition) fires an animation on
+# the difficulty picker that immediately clicking it can outrun -- the click
+# lands before the panel/toggle has actually settled into place.
+DIFFICULTY_CLICK_DELAY = 1.0
+
+RETURN_TO_LOBBY_CHECK_TIMEOUT = 2.5  # how long to poll for the "Return to Lobby" confirmation after Leave Stage
 
 # Defaults for the stage-detail panel's Normal/Hard toggle and the region
 # Enter Matchmaking is searched for in -- overridable per-run via the
@@ -390,13 +413,20 @@ class MacroRunner:
             time.sleep(0.5)
             self._click_return_to_lobby_if_found(self._current_hwnd)
 
-    def _click_return_to_lobby_if_found(self, hwnd) -> None:
+    def _click_return_to_lobby_if_found(self, hwnd, stop_event: threading.Event = None) -> None:
         # Leave Stage can bring up its own "Return to Lobby" confirmation
         # (return.png) rather than backing out on its own -- optional/
-        # best-effort like nav_disband and friends: a one-shot look, not a
-        # wait, since most Leave Stage clicks never show this at all.
+        # best-effort like nav_disband and friends, so a real miss (it never
+        # shows) is cheap. But a single instant find_image right after the
+        # Leave Stage click was firing before the confirmation had even
+        # animated in, so a real popup was being missed too -- reported as
+        # "clicks Leave Stage, then just sits there" even though Return to
+        # Lobby was genuinely up on screen a moment later. Short poll
+        # instead of one-shot fixes that without meaningfully slowing down
+        # the common case where it never appears.
         try:
-            match = vision.find_image(hwnd, "return")
+            match = vision.wait_for_image(
+                hwnd, "return", timeout=RETURN_TO_LOBBY_CHECK_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound:
             return
         if match is None:
@@ -624,7 +654,7 @@ class MacroRunner:
             self._log(f"[Macro] Found Leave Stage (score {leave_match['score']:.2f}) -- clicking it.")
             vision.click_match(self._mouse, hwnd, leave_match)
             time.sleep(SETTLE_DELAY)
-            self._click_return_to_lobby_if_found(hwnd)
+            self._click_return_to_lobby_if_found(hwnd, stop_event)
         if self._checkpoint(stop_event):
             return False
         self._spam_back_until_gone(hwnd, stop_event)
@@ -660,21 +690,31 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return False
 
-        stage = task.get("stage") or "1"
-        if not self._select_stage(hwnd, stop_event, stage, mode):
-            return False
-        if self._checkpoint(stop_event):
-            return False
-
-        # Raid's Acts are locked to Hard in-game, same as Story's
-        # Infinite/Mastery (see TASK_DATA.raid.fixedDifficulty) -- no
-        # difficulty picker exists for it, so no click happens for it.
-        if mode == "raid":
-            self._log('[Macro] Raid is locked to Hard in-game -- no difficulty click needed.')
-        elif stage in SPECIAL_STAGES_NO_DIFFICULTY:
-            self._log(f'[Macro] "{stage}" is locked to Hard in-game -- no difficulty click needed.')
+        if mode == "expedition":
+            # No stage-row picker to click through -- just the difficulty
+            # stepper, straight after the map.
+            time.sleep(DIFFICULTY_CLICK_DELAY)
+            self._select_expedition_difficulty(hwnd, stop_event, task.get("difficulty") or "1")
         else:
-            self._select_difficulty(hwnd, task.get("difficulty") or "Normal", coords)
+            stage = task.get("stage") or "1"
+            if not self._select_stage(hwnd, stop_event, stage, mode):
+                return False
+            if self._checkpoint(stop_event):
+                return False
+
+            # Raid's Acts are locked to Hard in-game, same as Story's
+            # Infinite/Mastery (see TASK_DATA.raid.fixedDifficulty) -- no
+            # difficulty picker exists for it, so no click happens for it.
+            if mode == "raid":
+                self._log('[Macro] Raid is locked to Hard in-game -- no difficulty click needed.')
+            elif stage in SPECIAL_STAGES_NO_DIFFICULTY:
+                self._log(f'[Macro] "{stage}" is locked to Hard in-game -- no difficulty click needed.')
+            else:
+                # The stage-detail panel is still animating in right after
+                # the stage-row click -- clicking Normal/Hard immediately
+                # landed before the panel (and its toggle) had settled.
+                time.sleep(DIFFICULTY_CLICK_DELAY)
+                self._select_difficulty(hwnd, task.get("difficulty") or "Normal", coords)
         if self._checkpoint(stop_event):
             return False
 
@@ -685,9 +725,10 @@ class MacroRunner:
         # straight to Enter Matchmaking instead, since this doesn't
         # reliably show up the same way for it.
         if task.get("play_mode") != "matchmaking":
+            confirm_image = "exp_select_stage" if mode == "expedition" else "nav_select_stage"
             self._set_status(action="Clicking Select Stage...")
-            if not self._click_and_verify_gone(hwnd, stop_event, "nav_select_stage", STAGE_SCREEN_TIMEOUT):
-                self._log('[Macro] "nav_select_stage" never showed up -- stopping.')
+            if not self._click_and_verify_gone(hwnd, stop_event, confirm_image, STAGE_SCREEN_TIMEOUT):
+                self._log(f'[Macro] "{confirm_image}" never showed up -- stopping.')
                 return False
         if self._checkpoint(stop_event):
             return False
@@ -697,7 +738,7 @@ class MacroRunner:
         # is exactly why it kept sitting there waiting on it and looking
         # like it was "going to matchmaking" regardless of this setting.
         if task.get("play_mode") == "matchmaking":
-            if not self._click_enter_matchmaking(hwnd, stop_event, coords):
+            if not self._click_enter_matchmaking(hwnd, stop_event, coords, mode):
                 return False
             if self._checkpoint(stop_event):
                 return False
@@ -739,7 +780,7 @@ class MacroRunner:
         self._wait_out_start_game_warning(hwnd, stop_event)
         if self._checkpoint(stop_event):
             return None
-        start_name, start_match = self._find_start_game_button(hwnd)
+        start_name, start_match = self._find_start_game_button(hwnd, stop_event, START_GAME_BUTTON_WAIT_TIMEOUT)
         if start_match is None:
             # Not fatal: Start Game may already have been pressed by the
             # leader (or Auto Vote Start already handles it) earlier in
@@ -782,7 +823,8 @@ class MacroRunner:
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
         self._battle_block_state = {}
-        return self._wait_for_match_result(hwnd, stop_event, battle_blocks, first_repeat, task.get("macro"))
+        return self._wait_for_match_result(hwnd, stop_event, battle_blocks, first_repeat, task.get("macro"),
+                                             task.get("mode"))
 
     def _load_battle_blocks(self, task: dict) -> list:
         macro_name = task.get("macro")
@@ -802,7 +844,7 @@ class MacroRunner:
                        f'open it in Creation and Save again to run its Battle blocks.')
             return []
         if "battle" in blocks:
-            return blocks.get("battle") or []
+            return self._strip_auto_upgrade_for_expedition(blocks.get("battle") or [], task)
         # Three-phase legacy shape (before/during/after, from before Pre
         # Start/Battle existed) -- Battle-eligible content lived in
         # "during"+"after", the same combination ui/app.js's
@@ -817,10 +859,24 @@ class MacroRunner:
             self._log(f'[Macro] Template "{macro_name}" is saved in an old format -- running its Battle '
                        f'blocks from the legacy during/after lists. Open it in Creation and Save again '
                        f'to migrate it properly.')
-        return legacy_battle
+        return self._strip_auto_upgrade_for_expedition(legacy_battle, task)
+
+    def _strip_auto_upgrade_for_expedition(self, blocks: list, task: dict) -> list:
+        # Auto Upgrade Unit reads the unit's upgrade-cost/affordability UI to
+        # decide when to click -- Expedition's version of that panel isn't
+        # what it was built against, so it just spins without ever actually
+        # upgrading. Rather than have it silently fail on every run, skip
+        # the block entirely for Expedition tasks (Pre Start's copy of this
+        # same block is skipped the same way -- see _run_prestart_blocks).
+        if task.get("mode") != "expedition":
+            return blocks
+        filtered = [b for b in blocks if b.get("type") != "auto_upgrade_unit"]
+        if len(filtered) != len(blocks):
+            self._log("[Macro] Skipping Auto Upgrade Unit block(s) -- not reliable on Expedition, ignoring them.")
+        return filtered
 
     def _wait_for_match_result(self, hwnd, stop_event: threading.Event, battle_blocks: list = None,
-                                 first_repeat: bool = True, macro_name: str = None):
+                                 first_repeat: bool = True, macro_name: str = None, mode: str = None) -> str:
         self._log("[Macro] Battle in progress -- watching for Victory/Defeat...")
         self._set_status(action="Battle in progress...")
         battle_blocks = battle_blocks or []
@@ -832,6 +888,14 @@ class MacroRunner:
                 self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat, macro_name)
                 if self._checkpoint(stop_event):
                     return None
+
+            if mode == "expedition":
+                result = self._check_expedition_wave_result(hwnd, stop_event)
+                if result is not None:
+                    return result
+                time.sleep(MATCH_RESULT_POLL_INTERVAL)
+                continue
+
             try:
                 victory_match = vision.find_image(hwnd, "victory")
             except vision.TemplateNotFound as exc:
@@ -851,6 +915,46 @@ class MacroRunner:
             time.sleep(MATCH_RESULT_POLL_INTERVAL)
         self._log(f"[Macro] Timed out after {MATCH_RESULT_TIMEOUT / 60:.0f} min waiting for Victory/Defeat.")
         self._save_debug_screenshot_unconditional(hwnd, "match_result_timeout")
+        return None
+
+    def _check_expedition_wave_result(self, hwnd, stop_event: threading.Event) -> str:
+        """Expedition doesn't show a Victory popup mid-run -- exp_continue
+        shows up at least once per run (click it, then Continue_2 to
+        actually move on to the next wave) and, once there are no waves
+        left, exp_extract shows up instead (click it, then extract,
+        landing on the reward screen -- the same terminal state Victory is
+        for Story/Raid). Returns "win" once extracted, "loss" if a click's
+        follow-up never showed up, or None while still mid-run (the caller
+        just keeps polling)."""
+        try:
+            continue_match = vision.find_image(hwnd, "exp_continue")
+        except vision.TemplateNotFound:
+            continue_match = None
+        if continue_match is not None:
+            debug_path = self._debug_save(hwnd, "exp_continue", continue_match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f'[Macro] Found "exp_continue" (score {continue_match["score"]:.2f}) -- clicking it.{suffix}')
+            vision.click_match(self._mouse, hwnd, continue_match)
+            if not self._click_found_image(hwnd, "Continue_2", EXPEDITION_WAVE_TIMEOUT, stop_event):
+                self._log('[Macro] "Continue_2" never showed up after exp_continue -- stopping.')
+                return "loss"
+            return None
+
+        try:
+            extract_match = vision.find_image(hwnd, "exp_extract")
+        except vision.TemplateNotFound:
+            extract_match = None
+        if extract_match is not None:
+            debug_path = self._debug_save(hwnd, "exp_extract", extract_match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f'[Macro] Found "exp_extract" (score {extract_match["score"]:.2f}) -- clicking it.{suffix}')
+            vision.click_match(self._mouse, hwnd, extract_match)
+            if not self._click_found_image(hwnd, "extract", EXPEDITION_WAVE_TIMEOUT, stop_event):
+                self._log('[Macro] "extract" never showed up after exp_extract -- stopping.')
+                return "loss"
+            self._log("[Macro] Extracted -- on the reward screen.")
+            return "win"
+
         return None
 
     def _save_debug_screenshot_unconditional(self, hwnd, name: str) -> str:
@@ -1247,7 +1351,7 @@ class MacroRunner:
         if not self._click_and_verify_gone(hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT):
             self._log('[Macro] "Leave Stage" not found -- stopping.')
             return False
-        self._click_return_to_lobby_if_found(hwnd)
+        self._click_return_to_lobby_if_found(hwnd, stop_event)
         return True
 
     def _finish_match_result_background(self, stats_image, reward_images, result: str, map_name: str,
@@ -1271,6 +1375,13 @@ class MacroRunner:
         # just a passive log line, this stage data now IS how quantities
         # get reported. Returns (names, amounts), both possibly empty/None
         # if stage_data.json has nothing for this map/stage/difficulty.
+        # Expedition has no entry in stage_data.json at all -- its stage/
+        # difficulty values ("1"/"2"/"3", no Act number) would otherwise
+        # alias onto the SAME map's Story Act 1 data below (get_stage falls
+        # back to "Normal" for any difficulty that isn't literally "Hard"),
+        # silently showing real Story rewards mislabeled as Expedition's.
+        if task.get("mode") == "expedition":
+            return None, None
         try:
             from . import stage_data
             map_name, stage, difficulty = task.get("map"), task.get("stage") or "1", task.get("difficulty") or "Normal"
@@ -1449,8 +1560,15 @@ class MacroRunner:
         # isn't gated by first_repeat the way the walk below is.
         self._log("[Macro] Pre Start: setting up the camera...")
         self._set_status(action="Setting up camera...")
+        # Expedition's camera doesn't need anywhere near the standard 2s
+        # zoom-out hold -- a much shorter one is enough there and the extra
+        # ~1.85s per match adds up over a repeat run.
+        hold_ms = EXPEDITION_CAMERA_HOLD_MS if task.get("mode") == "expedition" else None
         try:
-            camera.run_camera_setup(self._mouse, self._keyboard, hwnd)
+            if hold_ms is not None:
+                camera.run_camera_setup(self._mouse, self._keyboard, hwnd, hold_ms=hold_ms)
+            else:
+                camera.run_camera_setup(self._mouse, self._keyboard, hwnd)
             self._log("[Macro] Camera setup done.")
         except Exception as exc:
             self._log(f"[Macro] Camera setup failed: {exc}")
@@ -1646,7 +1764,7 @@ class MacroRunner:
                        f'open it in Creation and Save again to run its Pre Start blocks.')
             return
         prestart_blocks = blocks.get("prestart") if "prestart" in blocks else blocks.get("before")
-        prestart_blocks = prestart_blocks or []
+        prestart_blocks = self._strip_auto_upgrade_for_expedition(prestart_blocks or [], task)
         if not prestart_blocks:
             self._log(f'[Macro] Template "{macro_name}" has no Pre Start blocks.')
             return
@@ -2235,22 +2353,34 @@ class MacroRunner:
         vision.click_match(self._mouse, hwnd, skip_match)
         return True
 
-    def _find_start_game_button(self, hwnd):
-        """Tries nav_start_game, then nav_start_game_2, then
-        nav_start_game_3 in order -- different visual variants of the same
+    def _find_start_game_button(self, hwnd, stop_event: threading.Event = None, timeout: float = 0):
+        """Tries nav_start_game, then nav_start_game_2, nav_start_game_3,
+        nav_start_game_4 in order -- different visual variants of the same
         button seen in practice, so the actual "start the round" click
         (see _play_one_match) isn't dependent on just one of them matching.
         Returns (name, match) for whichever was found first, or (None,
         None) if none of them were -- missing/not-yet-added variants are
-        skipped silently, same as any other optional template."""
-        for name in ("nav_start_game", "nav_start_game_2", "nav_start_game_3"):
-            try:
-                match = vision.find_image(hwnd, name)
-            except vision.TemplateNotFound:
-                continue
-            if match is not None:
-                return name, match
-        return None, None
+        skipped silently, same as any other optional template.
+
+        timeout=0 (the default) is a single instant pass -- used right
+        after a click to check it's gone, where waiting around would just
+        slow the retry loop down. Pass a real timeout for the FIRST check
+        (right as Pre Start hands off), since the button can still be
+        animating in at that exact moment and a one-shot check there was
+        landing before it existed at all, especially on Expedition where
+        Pre Start's place_unit clicks run right up until this point."""
+        deadline = time.time() + max(0.0, timeout)
+        while True:
+            for name in ("nav_start_game", "nav_start_game_2", "nav_start_game_3", "nav_start_game_4"):
+                try:
+                    match = vision.find_image(hwnd, name)
+                except vision.TemplateNotFound:
+                    continue
+                if match is not None:
+                    return name, match
+            if time.time() >= deadline or (stop_event is not None and stop_event.is_set()):
+                return None, None
+            time.sleep(0.3)
 
     def _wait_out_start_game_warning(self, hwnd, stop_event: threading.Event) -> None:
         """Best-effort, like nav_disband: a warning popup (e.g. an
@@ -2446,8 +2576,35 @@ class MacroRunner:
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._mouse.click(left + x, top + y)
 
-    def _click_enter_matchmaking(self, hwnd, stop_event: threading.Event, coords: dict) -> bool:
-        region = (
+    def _select_expedition_difficulty(self, hwnd, stop_event: threading.Event, difficulty: str) -> None:
+        # One "+" button that steps the level up by 1 per click, starting
+        # from 1 -- see EXPEDITION_DIFFICULTY_CLICK's comment.
+        try:
+            clicks = max(0, int(difficulty) - 1)
+        except (TypeError, ValueError):
+            clicks = 0
+        if clicks == 0:
+            self._log(f'[Macro] Difficulty "{difficulty}" is the default -- no click needed.')
+            return
+        self._log(f'[Macro] Clicking difficulty "+" {clicks} time(s) at {EXPEDITION_DIFFICULTY_CLICK} '
+                   f'for difficulty {difficulty}.')
+        self._set_status(action=f'Setting difficulty {difficulty}...')
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        x, y = left + EXPEDITION_DIFFICULTY_CLICK[0], top + EXPEDITION_DIFFICULTY_CLICK[1]
+        for _ in range(clicks):
+            if stop_event.is_set():
+                return
+            self._mouse.click(x, y)
+            time.sleep(EXPEDITION_DIFFICULTY_CLICK_DELAY)
+
+    def _click_enter_matchmaking(self, hwnd, stop_event: threading.Event, coords: dict, mode: str = None) -> bool:
+        # Expedition's matchmaking button is its own image (exp_enter_
+        # matchmaking) at an uncalibrated position -- no matchmaking_region_*
+        # exists for it, so it's searched full-window instead of the
+        # Story/Raid region restriction.
+        is_expedition = mode == "expedition"
+        image_name = "exp_enter_matchmaking" if is_expedition else "enter_matchmaking"
+        region = None if is_expedition else (
             coords["matchmaking_region_x"], coords["matchmaking_region_y"],
             coords["matchmaking_region_w"], coords["matchmaking_region_h"],
         )
@@ -2455,7 +2612,7 @@ class MacroRunner:
         self._set_status(action="Waiting for Enter Matchmaking...")
         try:
             match = vision.wait_for_image(
-                hwnd, "enter_matchmaking", region=region,
+                hwnd, image_name, region=region,
                 timeout=MATCHMAKING_WAIT_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] Can't find Enter Matchmaking: {exc}")
@@ -2464,7 +2621,7 @@ class MacroRunner:
             if not stop_event.is_set():
                 self._log("[Macro] Enter Matchmaking never showed up -- stopping.")
             return False
-        debug_path = self._debug_save(hwnd, "enter_matchmaking", match)
+        debug_path = self._debug_save(hwnd, image_name, match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
         self._log(f"[Macro] Found Enter Matchmaking (score {match['score']:.2f}) -- clicking it.{suffix}")
         vision.click_match(self._mouse, hwnd, match)
@@ -2517,11 +2674,17 @@ class MacroRunner:
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] Can't check the lobby: {exc}")
             return False
-        if match is None:
-            if not stop_event.is_set():
-                self._log("[Macro] Doesn't look like you're on the lobby (Play button not found) -- stopping.")
+        if match is not None:
+            return True
+        if stop_event.is_set():
             return False
-        return True
+        # No Play button after a full LOBBY_CHECK_TIMEOUT wait looks exactly
+        # like a silent disconnect that never even triggered Roblox's own
+        # Reconnect/Retry prompt (see _handle_disconnect) -- rather than
+        # just give up here, try the same deep-link rejoin a detected
+        # disconnect already uses instead of stopping the whole run over it.
+        self._log("[Macro] Play button never showed up -- attempting a rejoin via deep link.")
+        return self._attempt_rejoin(hwnd, stop_event)
 
     def _click_play(self, hwnd, stop_event: threading.Event) -> bool:
         self._set_status(action="Clicking Play...")
@@ -2587,6 +2750,17 @@ class MacroRunner:
             return False
 
         self._set_status(action=f'Selecting map "{map_name}"...')
+
+        # Expedition doesn't use Story's scrolling map carousel -- it's a
+        # small fixed set of map cards, each found by its own reference
+        # image (or, for School Grounds, not found/clicked at all -- see
+        # EXPEDITION_MAP_IMAGES).
+        if mode == "expedition":
+            if self._select_expedition_map(hwnd, stop_event, map_name):
+                return True
+            self._spam_back_until_gone(hwnd, stop_event)
+            return False
+
         log_and_status = lambda msg: (self._log(msg), self._set_status(action=msg.split("] ", 1)[-1]))
         kwargs = {"debug_screenshots": self._debug_screenshots}
         if scroll_power is not None:
@@ -2598,6 +2772,27 @@ class MacroRunner:
 
         self._spam_back_until_gone(hwnd, stop_event)
         return False
+
+    def _select_expedition_map(self, hwnd, stop_event: threading.Event, map_name: str) -> bool:
+        image_name = EXPEDITION_MAP_IMAGES.get(map_name)
+        if image_name is None:
+            self._log(f'[Macro] "{map_name}" is selected by default on the Expedition screen -- no click needed.')
+            return True
+        self._log(f'[Macro] Looking for Expedition map "{map_name}"...')
+        try:
+            match = vision.wait_for_image(hwnd, image_name, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't find \"{map_name}\": {exc}")
+            return False
+        if match is None:
+            if not stop_event.is_set():
+                self._log(f'[Macro] "{map_name}" never showed up -- stopping.')
+            return False
+        debug_path = self._debug_save(hwnd, image_name, match)
+        suffix = f" Debug: {debug_path}" if debug_path else ""
+        self._log(f'[Macro] Found "{map_name}" (score {match["score"]:.2f}) -- clicking it.{suffix}')
+        vision.click_match(self._mouse, hwnd, match)
+        return True
 
     def _spam_back_until_gone(self, hwnd, stop_event: threading.Event) -> None:
         # A failed map search can leave the run sitting on any of several
@@ -2689,6 +2884,25 @@ class MacroRunner:
             if stop_event.is_set():
                 return False
             time.sleep(0.3)  # let the prompt actually close before clicking the gamemode card
+
+        if mode == "expedition":
+            self._log("[Macro] Menu open -- searching for Expedition...")
+            self._set_status(action="Clicking Expedition...")
+            try:
+                match = vision.wait_for_image(
+                    hwnd, "expedition", timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+            except vision.TemplateNotFound as exc:
+                self._log(f"[Macro] Can't find Expedition: {exc}")
+                return False
+            if match is None:
+                if not stop_event.is_set():
+                    self._log("[Macro] Expedition card never showed up -- stopping.")
+                return False
+            debug_path = self._debug_save(hwnd, "expedition", match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f"[Macro] Found Expedition (score {match['score']:.2f}) -- clicking it.{suffix}")
+            vision.click_match(self._mouse, hwnd, match)
+            return True
 
         if mode == "raid":
             self._log("[Macro] Menu open -- searching for Raid...")

@@ -12,10 +12,13 @@ import time
 from . import window as wm
 
 
-def run_camera_setup(mouse, keyboard, hwnd) -> None:
-    """Blocking -- takes ~3s. Caller is responsible for the focus dance
-    (wm.show_window/activate_window) beforehand; this only does the actual
-    drag + zoom-hold, same as every other input-sending routine in core/.
+def run_camera_setup(mouse, keyboard, hwnd, hold_ms: float = 2000) -> None:
+    """Blocking -- takes ~(1s drag + hold_ms). Caller is responsible for the
+    focus dance (wm.show_window/activate_window) beforehand; this only does
+    the actual drag + zoom-hold, same as every other input-sending routine
+    in core/. hold_ms is how long O is held for the zoom-out -- 2000 by
+    default (the standard macro viewpoint), overridable for Settings >
+    Debug > "Camera Setup 2" to test other hold times.
 
     The drag uses *relative* SendInput moves (Mouse.nudge), not absolute
     repositioning: with right-click held, Roblox rotates the camera from raw
@@ -42,5 +45,5 @@ def run_camera_setup(mouse, keyboard, hwnd) -> None:
     time.sleep(0.15)
 
     keyboard.key_down(ord("O"))
-    time.sleep(2.0)
+    time.sleep(max(0.0, hold_ms) / 1000)
     keyboard.key_up(ord("O"))

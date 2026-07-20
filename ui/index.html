@@ -608,6 +608,40 @@
         </section>
       </div>
 
+      <div class="settings-category" data-cat="general" style="margin-top: 20px;">
+        <section class="rp-panel">
+          <header class="rp-panel-head">
+            <span class="rp-head-tag" style="--rp-tag: var(--slate);">Control</span>
+            <span class="rp-head-title">Roblox Window</span>
+            <span class="rp-head-rule"></span>
+          </header>
+
+          <div class="setting-row" style="padding: 14px;">
+            <div>
+              <div class="setting-label">Select Roblox Window</div>
+              <div class="setting-desc">Choose the Roblox window to use manually. Nothing attaches automatically.</div>
+            </div>
+            <select id="roblox-window-select" class="task-select" style="width: 220px; flex-shrink: 0;"></select>
+          </div>
+
+          <div class="setting-row" style="padding: 14px;">
+            <div>
+              <div class="setting-label">Attach Selected Roblox</div>
+              <div class="setting-desc">Manually attach the selected Roblox window into the macro window.</div>
+            </div>
+            <button id="btn-attach-roblox" onclick="attachSelectedRoblox(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Attach</button>
+          </div>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Un-Attach Roblox</div>
+              <div class="setting-desc">Detach the currently docked Roblox window from the macro window.</div>
+            </div>
+            <button id="btn-unattach-roblox" onclick="unattachRoblox(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--rose); border-color: var(--border);">Un-Attach</button>
+          </div>
+        </section>
+      </div>
+
       <div class="settings-category" data-cat="debug" style="margin-top: 20px;">
         <section class="rp-panel">
           <header class="rp-panel-head">
@@ -616,12 +650,24 @@
             <span class="rp-head-rule"></span>
           </header>
 
-          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+          <div class="setting-row" style="padding: 14px;">
             <div>
               <div class="setting-label">Camera Setup</div>
               <div class="setting-desc">Right-click drag down to tilt the camera fully, then holds O for 2s to zoom out.</div>
             </div>
             <button id="btn-camera-setup" onclick="runCameraSetup(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Run</button>
+          </div>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Camera Setup 2</div>
+              <div class="setting-desc">Same as above, but with a custom O-hold time (ms) instead of the fixed 2s.</div>
+            </div>
+            <div class="flex items-center gap-2" style="flex-shrink: 0;">
+              <input type="number" id="camera-setup-2-ms" value="2000" min="0" step="100"
+                     class="block-input" style="width: 70px;" placeholder="ms">
+              <button id="btn-camera-setup-2" onclick="runCameraSetup2(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Run</button>
+            </div>
           </div>
         </section>
       </div>

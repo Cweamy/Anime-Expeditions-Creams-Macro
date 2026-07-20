@@ -44,10 +44,17 @@ class GameDocker:
         any window still parented under the one being destroyed, so a
         reparent that silently failed would take Roblox down with it."""
         with self._lock:
-            if not self.docked:
-                return True  # never docked (or already undocked): leave Roblox exactly as it is
             if not game_hwnd or not wm.is_window(game_hwnd):
                 self.docked = False
+                return True
+            if not self.docked and wm.get_parent(game_hwnd) == 0:
+                # Genuinely already standalone -- nothing to do. Checked
+                # against the real OS parent, not just self.docked: a
+                # dock() racing on another thread (e.g. the watchdog mid-
+                # settle) can leave the window actually reparented before
+                # this flag catches up, and trusting the flag alone here
+                # used to leave it silently still parented/hidden with
+                # nothing left tracking it.
                 return True
 
             detached = wm.set_parent(game_hwnd, 0) and wm.get_parent(game_hwnd) == 0

@@ -298,6 +298,40 @@ def find_roblox_window() -> int:
     return matches[0] if matches else 0
 
 
+def get_window_pid(hwnd: int) -> int:
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value
+
+
+def list_roblox_windows() -> list:
+    """Every currently open, standalone Roblox window (same title+process
+    check as find_roblox_window, but doesn't stop at the first match) --
+    for letting someone with multiple Roblox instances open (alts, several
+    accounts) pick which one to dock instead of always getting whichever
+    happens to enumerate first. A window that's already docked is reparented
+    under the GUI window and hidden, so EnumWindows (top-level only) and the
+    IsWindowVisible check both naturally exclude it -- this only ever lists
+    ones that AREN'T already attached."""
+    results = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def _enum_proc(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        if "roblox" in buf.value.lower() and get_process_name(hwnd) == ROBLOX_PROCESS_NAME:
+            results.append({"hwnd": hwnd, "pid": get_window_pid(hwnd), "title": buf.value})
+        return True
+
+    user32.EnumWindows(_enum_proc, 0)
+    return results
+
+
 def is_window(hwnd: int) -> bool:
     """Is this handle still a real window at all? Deliberately IsWindow, not
     IsWindowVisible: dock()/undock()/the watchdog all use this to mean "has

@@ -114,6 +114,14 @@ class Api:
         self.docker = GameDocker()
         self.game_hwnd = None
         self.gui_hwnd = None
+        # Manual multi-instance attach (Settings > Debug > "Select Roblox
+        # Window") -- see _dock_watchdog and attach_roblox_window/
+        # detach_roblox_window below. pinned_hwnd forces the watchdog's next
+        # dock to a specific window instead of whatever find_roblox_window()
+        # would grab on its own; dock_suspended stops the watchdog from
+        # instantly re-attaching after an explicit Un-Attach.
+        self.pinned_hwnd = None
+        self.dock_suspended = False
         self.stopping = threading.Event()
         self.logger = Logger()
         self.session_start = time.time()
@@ -781,6 +789,54 @@ class Api:
         self.push_log(f"[Debug] Saved screenshot to {path}")
         return {"ok": True, "path": path}
 
+    def list_roblox_windows(self) -> list:
+        # Settings > Debug > "Select Roblox Window": every standalone Roblox
+        # window NOT already docked (see core.window.list_roblox_windows),
+        # for picking a specific one when multiple are open.
+        try:
+            return wm.list_roblox_windows()
+        except Exception:
+            return []
+
+    def attach_roblox_window(self, hwnd) -> dict:
+        # Settings > Debug > "Attach Selected Roblox": pins the dock
+        # watchdog's next attempt to this specific window instead of
+        # whichever one find_roblox_window() would grab on its own (see
+        # _dock_watchdog's pinned_hwnd handling). If something else is
+        # currently docked, let it go first so the watchdog's normal dock
+        # step is free to reparent the newly chosen window in cleanly.
+        try:
+            hwnd = int(hwnd)
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_hwnd"}
+        if not wm.is_window(hwnd):
+            return {"ok": False, "reason": "not_found"}
+
+        if self.docker.docked and self.game_hwnd and self.game_hwnd != hwnd:
+            self.docker.undock(self.game_hwnd)
+        self.game_hwnd = None
+        self.docker.docked = False
+        self.dock_suspended = False
+        self.pinned_hwnd = hwnd
+        self.push_log(f"[Debug] Attaching Roblox window (pid {wm.get_window_pid(hwnd)})...")
+        return {"ok": True}
+
+    def detach_roblox_window(self) -> dict:
+        # Settings > Debug > "Un-Attach Roblox": detaches whatever's
+        # currently docked and suspends the watchdog's auto re-dock (see
+        # _dock_watchdog's dock_suspended check) until Attach is used again
+        # -- without that, the watchdog would just find the same still-open
+        # window on its next tick and redock it right back.
+        hwnd = self.game_hwnd
+        self.dock_suspended = True
+        self.pinned_hwnd = None
+        if hwnd and wm.is_window(hwnd):
+            self.docker.undock(hwnd)
+        self.game_hwnd = None
+        self.push_ui("showWaiting")
+        self.push_log("[Debug] Roblox un-attached -- won't auto re-dock until you Attach again.")
+        return {"ok": True}
+
     def debug_camera_setup(self) -> dict:
         # Settings > Debug > "Camera Setup": puts the Roblox camera into the
         # standard macro viewpoint. Actual sequence lives in core.camera
@@ -805,6 +861,33 @@ class Api:
                 self.push_log("[Debug] Camera setup done -- tilted down, zoomed out.")
             except Exception as exc:
                 self.push_log(f"[Debug] Camera setup failed: {exc}")
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True}
+
+    def debug_camera_setup_2(self, hold_ms) -> dict:
+        # Settings > Debug > "Camera Setup 2": same drag-down-then-zoom
+        # sequence as Camera Setup, but with a caller-supplied O-hold
+        # duration instead of the fixed 2s -- for testing how long the
+        # zoom-out actually needs.
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+        try:
+            hold_ms = max(0.0, float(hold_ms))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_hold_ms"}
+
+        wm.show_window(hwnd)
+        wm.activate_window(hwnd)
+
+        def run():
+            from core import camera
+            try:
+                camera.run_camera_setup(self.mouse, self.keyboard, hwnd, hold_ms=hold_ms)
+                self.push_log(f"[Debug] Camera setup 2 done ({hold_ms:.0f}ms hold).")
+            except Exception as exc:
+                self.push_log(f"[Debug] Camera setup 2 failed: {exc}")
 
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True}
@@ -1308,7 +1391,26 @@ def _launch_ui():
                     api.push_ui("showWaiting")
                     api.push_log("Roblox window closed, waiting for it again.")
 
-                hwnd = wm.find_roblox_window()  # title AND process name: a Chrome tab titled "Roblox" won't match
+                # Explicit Un-Attach (Settings > Debug): skip auto-detect
+                # entirely until the user picks a window and clicks Attach
+                # again -- otherwise find_roblox_window() below would just
+                # find the same still-open window and instantly redock it,
+                # making Un-Attach a no-op.
+                if api.dock_suspended:
+                    time.sleep(2)
+                    continue
+
+                # A manual Attach pins the NEXT dock to a specific window
+                # (see attach_roblox_window) instead of whatever
+                # find_roblox_window() would grab on its own -- with
+                # multiple Roblox windows open, that's always just the
+                # first one EnumWindows happens to return, not necessarily
+                # the one actually picked.
+                if api.pinned_hwnd and wm.is_window(api.pinned_hwnd):
+                    hwnd = api.pinned_hwnd
+                else:
+                    api.pinned_hwnd = None
+                    hwnd = wm.find_roblox_window()  # title AND process name: a Chrome tab titled "Roblox" won't match
                 if hwnd and (not api.docker.docked or hwnd != api.game_hwnd):
                     api.push_log("Roblox found, settling before docking...")
                     api.game_hwnd = hwnd
@@ -1323,6 +1425,22 @@ def _launch_ui():
                         api.push_log("Roblox window disappeared before docking, will retry.")
                         api.game_hwnd = None
                         time.sleep(2)
+                        continue
+
+                    # Un-Attach (or a different Attach pick) can land WHILE
+                    # this settle sleep was running -- without this check,
+                    # the dock below would commit anyway, ignoring it: the
+                    # window would end up reparented and hidden with
+                    # api.game_hwnd already cleared back to None (Detach
+                    # already ran), so nothing would be left tracking it to
+                    # ever show it again. That's exactly what "Roblox just
+                    # disappears and stays gone until I close the macro"
+                    # was -- a still-hidden, still-parented child window
+                    # that only went away when closing the app destroyed it.
+                    if api.dock_suspended or (api.pinned_hwnd and api.pinned_hwnd != hwnd):
+                        api.push_log("Dock aborted -- the Roblox Window selection changed while settling.")
+                        api.game_hwnd = None
+                        time.sleep(1)
                         continue
 
                     roblox_wm.hwnd = hwnd
@@ -1360,6 +1478,7 @@ def _launch_ui():
                         # default/other screens now, and Roblox is a native window that
                         # would otherwise render on top of them regardless of DOM state.
                         wm.hide_window(hwnd)
+                        api.pinned_hwnd = None  # dock succeeded -- back to normal auto-tracking of this hwnd
                         api.push_ui("showDocked")
                         api.push_log("Roblox docked.")
                     else:

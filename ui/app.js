@@ -673,6 +673,53 @@ async function loadSettingsUI() {
     document.getElementById('stats-h').value = s.height;
   } catch (e) {}
   loadWebhookUI();
+  refreshRobloxWindowList();
+}
+
+// Settings > Debug > "Select Roblox Window": lists every standalone Roblox
+// window that ISN'T already docked (core.window.list_roblox_windows
+// naturally excludes the attached one -- it's reparented/hidden, so
+// EnumWindows never sees it), for multi-instance setups where more than
+// one Roblox is open at once.
+async function refreshRobloxWindowList() {
+  const sel = document.getElementById('roblox-window-select');
+  if (!sel) return;
+  let windows = [];
+  try { windows = await pywebview.api.list_roblox_windows(); } catch (e) { windows = []; }
+  const prev = sel.value;
+  sel.innerHTML = windows.length
+    ? windows.map(w => `<option value="${w.hwnd}">${w.title || 'Roblox'} (pid ${w.pid})</option>`).join('')
+    : '<option value="">No other Roblox windows found</option>';
+  if (windows.some(w => String(w.hwnd) === prev)) sel.value = prev;
+}
+
+async function attachSelectedRoblox(btn) {
+  const sel = document.getElementById('roblox-window-select');
+  const hwnd = sel && sel.value;
+  if (!hwnd) { addLog('[Debug] No Roblox window selected to attach.'); return; }
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Attaching...';
+  try {
+    const result = await pywebview.api.attach_roblox_window(hwnd);
+    btn.textContent = result.ok ? 'Attached' : `Failed (${result.reason || 'error'})`;
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; refreshRobloxWindowList(); }, 2400);
+}
+
+async function unattachRoblox(btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Detaching...';
+  try {
+    const result = await pywebview.api.detach_roblox_window();
+    btn.textContent = result.ok ? 'Detached' : `Failed (${result.reason || 'error'})`;
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; refreshRobloxWindowList(); }, 2000);
 }
 
 async function saveRewardRegion() {
@@ -882,6 +929,25 @@ async function runCameraSetup(btn) {
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 3200);
 }
 
+// Settings > Debug > "Camera Setup 2" -- same sequence as Camera Setup, but
+// with a user-entered O-hold time (ms) instead of the fixed 2s.
+async function runCameraSetup2(btn) {
+  const original = btn.textContent;
+  const msInput = document.getElementById('camera-setup-2-ms');
+  const holdMs = Math.max(0, parseInt(msInput && msInput.value, 10) || 0);
+  switchScreen('dashboard');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  await new Promise(resolve => setTimeout(resolve, 400));
+  try {
+    const result = await pywebview.api.debug_camera_setup_2(holdMs);
+    btn.textContent = result.ok ? 'Started' : `Failed (${result.reason || 'error'})`;
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, Math.max(3200, holdMs + 1200));
+}
+
 // Settings > Debug > "Test Walking Path" -- replays a saved WASD recording
 // (see core.paths.replay_events) against the live game so a Custom Path can
 // be sanity-checked on its own. Run/Stop swap visibility instead of one
@@ -1078,7 +1144,11 @@ const TASK_DATA = {
     types: ['Regular', 'Daily', 'Weekly'],
     numbers: ['1', '2', '3'],
   },
-  expedition: { label: 'Expedition' },
+  expedition: {
+    label: 'Expedition',
+    maps: ['School Grounds', 'Flower Forest', 'Rose Kingdom'],
+    difficulties: ['1', '2', '3'],
+  },
 };
 
 let taskCards = [];
@@ -1254,9 +1324,11 @@ function taskSummary(t) {
     title += ` · ${t.map} · ${/^\d+$/.test(t.stage) ? 'Stage ' + t.stage : t.stage}`;
   } else if (t.mode === 'challenge') {
     title += ` · ${t.challenge_type}${t.challenge_type === 'Regular' ? ' #' + t.challenge_number : ''}`;
+  } else if (t.mode === 'expedition') {
+    title += ` · ${t.map}`;
   }
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
-  const diff = (t.mode === 'story' && !specialStage) ? t.difficulty
+  const diff = ((t.mode === 'story' && !specialStage) || t.mode === 'expedition') ? t.difficulty
              : (d.fixedDifficulty || specialStage) ? 'Hard' : '';
   const meta = [
     `×${t.repeat}`,
@@ -1323,10 +1395,12 @@ function renderTaskBuilder() {
   } else if (t.mode === 'challenge') {
     fields.push(field('Challenge Type', sel('challenge_type', d.types, ty => ty + ' Challenge')));
     if (t.challenge_type === 'Regular') fields.push(field('Number', sel('challenge_number', d.numbers, n => '#' + n)));
+  } else if (t.mode === 'expedition') {
+    fields.push(field('Expedition', sel('map', d.maps)));
   }
 
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
-  if (t.mode === 'story' && !specialStage) {
+  if ((t.mode === 'story' && !specialStage) || t.mode === 'expedition') {
     fields.push(field('Difficulty', sel('difficulty', d.difficulties)));
   } else if (d.fixedDifficulty || specialStage) {
     fields.push(field('Difficulty', `<span class="task-chip" style="align-self: flex-start;">Hard &middot; locked</span>`));
@@ -1393,6 +1467,7 @@ async function refreshTaskQueue() {
     let s = d.label;
     if (t.mode === 'story' || t.mode === 'raid') s += ` · ${t.map} · ${/^\d+$/.test(t.stage) ? 'Stage ' + t.stage : t.stage}`;
     if (t.mode === 'challenge') s += ` · ${t.challenge_type}`;
+    if (t.mode === 'expedition') s += ` · ${t.map}`;
     return `${s} ×${t.repeat}`;
   }
 
