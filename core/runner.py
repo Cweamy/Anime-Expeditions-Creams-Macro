@@ -1179,16 +1179,19 @@ class MacroRunner:
             # picks entirely (see _run_task_setup, which only runs once per
             # task, not once per repeat).
             self._set_status(action=f"{label} -- clicking Repeat Stage...")
-            if not self._click_found_image(hwnd, "repeat_stage", NAV_CLICK_TIMEOUT, stop_event):
+            if not self._click_and_verify_gone(hwnd, stop_event, "repeat_stage", NAV_CLICK_TIMEOUT):
                 self._log('[Macro] "Repeat Stage" not found -- can\'t continue this task\'s repeats, stopping.')
                 return False
             return True
 
         # Last repeat of this task (or the whole queue) -- back out to the
         # lobby so the next task's setup (or a clean stop) starts from a
-        # known state instead of sitting on the result screen.
+        # known state instead of sitting on the result screen. Verified/
+        # retried, not a one-shot click -- a dropped click here used to
+        # just leave the run sitting on the result screen forever with
+        # nothing else ever noticing or retrying.
         self._set_status(action=f"{label} -- clicking Leave Stage...")
-        if not self._click_found_image(hwnd, "leave_stage", NAV_CLICK_TIMEOUT, stop_event):
+        if not self._click_and_verify_gone(hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT):
             self._log('[Macro] "Leave Stage" not found -- stopping.')
             return False
         return True
@@ -2112,6 +2115,52 @@ class MacroRunner:
         self._log(f'[Macro] Found "{name}" (score {match["score"]:.2f}) -- clicking it.{suffix}')
         vision.click_match(self._mouse, hwnd, match)
         return match
+
+    def _click_and_verify_gone(self, hwnd, stop_event: threading.Event, name: str, timeout: float,
+                                 retry_attempts: int = 3, verify_settle: float = 1.0) -> bool:
+        """Like _click_found_image, but re-checks the button actually
+        disappeared afterward and re-clicks (with a focus reassert) if it's
+        still there, up to retry_attempts times -- same "click found it but
+        Roblox never got it" flakiness the Play/Start Game clicks needed
+        this same treatment for. Used for Leave Stage/Repeat Stage: a
+        dropped click here leaves the whole run just sitting on the result
+        screen indefinitely, since nothing else would ever notice or retry
+        on its own. Returns whether the button was found at all -- not
+        whether it definitely disappeared, since after retry_attempts a
+        stuck button falls through to the caller's own recovery path rather
+        than being treated as "never found in the first place"."""
+        match = None
+        for attempt in range(1, retry_attempts + 1):
+            try:
+                match = vision.wait_for_image(hwnd, name, timeout=timeout, stop_event=stop_event)
+            except vision.TemplateNotFound as exc:
+                self._log(f"[Macro] {exc}")
+                return False
+            if match is None:
+                if stop_event is None or not stop_event.is_set():
+                    self._log(f'[Macro] Couldn\'t find "{name}" -- stopping.')
+                return False
+
+            debug_path = self._debug_save(hwnd, name, match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f'[Macro] Found "{name}" (score {match["score"]:.2f}) -- clicking it '
+                       f'(attempt {attempt}/{retry_attempts}).{suffix}')
+            if not wm.activate_window(hwnd):
+                self._log(f"[Macro] Couldn't confirm focus before clicking \"{name}\" -- click may not register.")
+            vision.click_match(self._mouse, hwnd, match)
+            time.sleep(verify_settle)
+            if self._checkpoint(stop_event):
+                return True
+
+            try:
+                still_there = vision.find_image(hwnd, name)
+            except vision.TemplateNotFound:
+                still_there = None
+            if still_there is None:
+                return True
+            if attempt == retry_attempts:
+                self._log(f'[Macro] "{name}" still showing after {retry_attempts} clicks -- continuing anyway.')
+        return True
 
     def _click_start_game_2_if_found(self, hwnd) -> bool:
         # nav_start_game_2 -- a second Start Game/confirm button that can
