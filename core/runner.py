@@ -894,13 +894,6 @@ class MacroRunner:
         self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
         time.sleep(0.1)
 
-        hotkey = block.get("hotkey")
-        if hotkey:
-            vk = keys.key_name_to_vk(hotkey)
-            if vk is not None:
-                self._keyboard.tap(vk)
-                time.sleep(0.1)
-
         self._set_status(action=f"Upgrading unit ({state['remaining']} left)...")
         self._mouse.click(left + pos[0], top + pos[1])
         time.sleep(BATTLE_BLOCK_CLICK_SETTLE)

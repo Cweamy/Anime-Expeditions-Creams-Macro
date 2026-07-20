@@ -1510,7 +1510,7 @@ function addBlock(type, phase, atIndex) {
   if (type === 'setting_change') { block.kind = 'toggle'; block.value = 'off'; }
   if (type === 'place_unit') { block.hotkey = ''; }
   if (type === 'walk') { block.params.path = ''; }
-  if (type === 'upgrade_unit') { block.params.index = ''; block.params.times = 1; block.hotkey = ''; }
+  if (type === 'upgrade_unit') { block.params.index = ''; block.params.times = 1; }
   if (type === 'auto_upgrade_unit') { block.params.index = ''; block.params.priority = 1; }
   if (type === 'sell_unit') { block.params.index = ''; }
   const list = creationPhases[phase];
@@ -1947,13 +1947,7 @@ const blkField = (label, inner) => `
 
 // Upgrade Unit: which placed unit (#index) + how many upgrade presses.
 function renderUpgradeControls(b) {
-  // Hotkey (optional): pressed to (re)select the unit right before clicking
-  // its placed position, same as Place Unit's own hotkey -- covers a unit
-  // whose click target has scrolled/shifted, where reselecting by key first
-  // is more reliable than trusting the recorded position alone.
-  const hotkey = blkField('Hotkey', `<button type="button" class="keybind-btn" onclick="startBlockHotkeyCapture('${b.id}', 'hotkey', this)">${b.hotkey ? b.hotkey.toUpperCase() : 'Set key'}</button>`);
   return blkField('Unit', renderUnitIndexSelect(b, 'index'))
-    + hotkey
     + blkField('Times', `<input class="block-input" type="number" min="1" value="${Number(b.params.times) || 1}" oninput="updateBlockParam('${b.id}', 'times', this.value)">`);
 }
 
