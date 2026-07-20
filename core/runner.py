@@ -622,8 +622,32 @@ class MacroRunner:
         data = tpl.load_template(macro_name)
         blocks = data.get("blocks") or {}
         if isinstance(blocks, list):
-            return []  # old-format template -- same as _run_prestart_blocks, needs re-saving
-        return blocks.get("battle") or []
+            # Oldest flat-list format -- ui/app.js's loadSelectedTemplate()
+            # migrates this into prestart/battle client-side the moment you
+            # open it in Creation, but never re-saves it to disk on its
+            # own -- until you open + Save it again, this stays stuck.
+            # Logged here too (already logged by _run_prestart_blocks for
+            # Pre Start) so missing Battle blocks is never a silent no-op.
+            self._log(f'[Macro] Template "{macro_name}" is saved in an old format -- '
+                       f'open it in Creation and Save again to run its Battle blocks.')
+            return []
+        if "battle" in blocks:
+            return blocks.get("battle") or []
+        # Three-phase legacy shape (before/during/after, from before Pre
+        # Start/Battle existed) -- Battle-eligible content lived in
+        # "during"+"after", the same combination ui/app.js's
+        # migrateLegacyBlocks() uses when it migrates this shape
+        # client-side. _run_prestart_blocks already has an equivalent
+        # fallback to "before" for Pre Start; this was the missing half --
+        # without it, an unmigrated template's Battle blocks just silently
+        # never ran, which is exactly what got reported as "Battle blocks
+        # aren't firing."
+        legacy_battle = (blocks.get("during") or []) + (blocks.get("after") or [])
+        if legacy_battle:
+            self._log(f'[Macro] Template "{macro_name}" is saved in an old format -- running its Battle '
+                       f'blocks from the legacy during/after lists. Open it in Creation and Save again '
+                       f'to migrate it properly.')
+        return legacy_battle
 
     def _wait_for_match_result(self, hwnd, stop_event: threading.Event, battle_blocks: list = None,
                                  first_repeat: bool = True, macro_name: str = None):
