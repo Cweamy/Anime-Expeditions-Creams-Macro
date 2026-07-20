@@ -10,6 +10,7 @@ to Discord if a webhook is configured. Equipment include/exclude, and the
 rest of the Battle-phase block types (Walk/Wait/Setting), plug in once those
 exist.
 """
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -120,6 +121,23 @@ SOLO_START_TIMEOUT = 10.0  # Solo mode's direct Start button, in place of Enter 
 TELEPORT_IN_TIMEOUT = 30.0
 SOLO_START_RETRY_ATTEMPTS = 3
 SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT = 20.0  # generous per chunk -- a slow teleport shouldn't burn through attempts
+# How long teleportstuck.png (optional -- see Assets/ui/README.txt) must be
+# CONTINUOUSLY visible during a teleport-in wait before the game is treated
+# as broken and needing a rejoin, rather than just a slow loading screen.
+# reconnect.png/reconnect_2.png/retry.png (Roblox's own disconnect prompt)
+# are a DEFINITE signal on their own -- no continuous-visibility wait needed,
+# unlike teleportstuck's spinner which can be a false alarm for a moment.
+TELEPORT_STUCK_TIMEOUT = 10.0
+TELEPORT_POLL_INTERVAL = 0.3
+RECONNECT_IMAGE_NAMES = ("reconnect", "reconnect_2", "retry")
+
+# Roblox deep link used to rejoin after a detected disconnect -- reopens
+# (or, if the client fully closed, relaunches) straight into this specific
+# experience instead of leaving the run stuck on a Reconnect prompt forever.
+PLACE_ID = "84515722934860"
+REJOIN_DEEPLINK = f"roblox://experiences/start?placeId={PLACE_ID}"
+REJOIN_TIMEOUT = 90.0  # relaunching Roblox from scratch can take a while
+REJOIN_POLL_INTERVAL = 2.0
 
 # Whether Start Game is even present depends on being the party leader, so
 # this is a quick presence check, not a long wait. Short on purpose: Start
@@ -243,6 +261,7 @@ class MacroRunner:
         self._paused_logged = False
         self._debug_screenshots = False
         self._current_hwnd = None       # set at the top of _run -- lets _checkpoint reach Leave Stage on stop
+        self._hwnd_getter = None        # set at the top of _run -- lets _attempt_rejoin find a re-docked hwnd
         self._left_stage_this_run = False
         # Placed-unit screen positions from THIS match's Pre Start (see
         # _run_place_unit_block), keyed by the unit's #ordinal among place_unit
@@ -376,6 +395,10 @@ class MacroRunner:
             self._set_status(action="Idle")
             return
         self._current_hwnd = hwnd
+        # Kept for _attempt_rejoin -- after a rejoin relaunches Roblox, the
+        # dock watchdog (main.py) re-docks it under a NEW hwnd on its own;
+        # this is how the runner finds out what that new hwnd actually is.
+        self._hwnd_getter = hwnd_getter
 
         # A click has to actually reach the game, not this panel -- same
         # focus-fix every other live-input action in this app uses.
@@ -410,6 +433,12 @@ class MacroRunner:
                 if not map_name:
                     self._log(f"[Macro] Task {task_index}/{len(tasks)} has no map set -- skipping it.")
                     continue
+
+                # A disconnect/rejoin during a previous task (see
+                # _attempt_rejoin) may have re-docked Roblox under a new
+                # hwnd -- pick that up before starting the next task.
+                if self._current_hwnd and wm.is_window(self._current_hwnd):
+                    hwnd = self._current_hwnd
 
                 # A mid-task failure (a stuck battle, a missed click, ...)
                 # doesn't kill the whole overnight run -- _run_task recovers to
@@ -448,6 +477,13 @@ class MacroRunner:
         for recovery_attempt in range(1, TASK_RECOVERY_ATTEMPTS + 1):
             if self._checkpoint(stop_event):
                 return False
+            # A disconnect handled during the previous attempt (see
+            # _attempt_rejoin) may have re-docked Roblox under a NEW hwnd --
+            # self._current_hwnd is what tracks that, so every retry picks
+            # up wherever the game actually ended up rather than continuing
+            # to act on a hwnd that might already be dead.
+            if self._current_hwnd and wm.is_window(self._current_hwnd):
+                hwnd = self._current_hwnd
             if recovery_attempt > 1:
                 self._log(f'[Macro] Retrying task {task_index}/{task_count} from the lobby '
                            f'(attempt {recovery_attempt}/{TASK_RECOVERY_ATTEMPTS})...')
@@ -459,7 +495,8 @@ class MacroRunner:
             # ONCE per task -- every repeat after that re-enters the same
             # stage directly via Repeat Stage (see _handle_match_result),
             # skipping the lobby/gamemode/map/stage picks entirely.
-            if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords, scroll_power, scroll_nudges):
+            if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords, scroll_power,
+                                          scroll_nudges, webhook):
                 if stop_event.is_set():
                     return False
                 if not self._recover_to_lobby(hwnd, stop_event):
@@ -490,7 +527,7 @@ class MacroRunner:
                     return False
 
                 if not is_last_repeat:
-                    if not self._wait_teleport_in(hwnd, stop_event):
+                    if not self._wait_teleport_in(hwnd, stop_event, webhook, task):
                         if stop_event.is_set():
                             return False
                         task_failed = True
@@ -532,7 +569,7 @@ class MacroRunner:
         return self._ensure_lobby(hwnd, stop_event)
 
     def _run_task_setup(self, hwnd, stop_event: threading.Event, task: dict, mode: str, map_name: str,
-                          coords: dict, scroll_power: int, scroll_nudges: int) -> bool:
+                          coords: dict, scroll_power: int, scroll_nudges: int, webhook: dict = None) -> bool:
         """Lobby -> Play -> Story/Raid -> map -> stage/act -> difficulty ->
         confirm -> matchmaking/solo -> teleport-in. Runs once per TASK, not
         once per repeat -- see the repeat loop in _run."""
@@ -596,12 +633,12 @@ class MacroRunner:
                 return False
             if self._checkpoint(stop_event):
                 return False
-            if not self._wait_teleport_in(hwnd, stop_event):
+            if not self._wait_teleport_in(hwnd, stop_event, webhook, task):
                 return False
         else:
             self._log("[Macro] Solo mode -- clicking Start (retrying up to "
                        f"{SOLO_START_RETRY_ATTEMPTS} times if it doesn't teleport).")
-            if not self._click_start_and_wait_teleport(hwnd, stop_event):
+            if not self._click_start_and_wait_teleport(hwnd, stop_event, webhook, task):
                 return False
         return not self._checkpoint(stop_event)
 
@@ -1741,26 +1778,154 @@ class MacroRunner:
 
         self._log(f'[Macro] Setting "{name}" ({kind or "?"}) -- unsupported kind, skipping.')
 
-    def _wait_teleport_in(self, hwnd, stop_event: threading.Event) -> bool:
+    def _wait_teleport_in(self, hwnd, stop_event: threading.Event, webhook: dict = None,
+                            task: dict = None) -> bool:
         # nav_unitmanager only renders once you're actually in the match (not
         # during the loading/teleport transition), so waiting for it is the
         # confirmation the teleport actually finished.
         self._log("[Macro] Waiting to teleport in-game...")
         self._set_status(action="Waiting to teleport in-game...")
-        try:
-            match = vision.wait_for_image(
-                hwnd, "nav_unitmanager", timeout=TELEPORT_IN_TIMEOUT, stop_event=stop_event)
-        except vision.TemplateNotFound as exc:
-            self._log(f"[Macro] Can't confirm teleport-in: {exc}")
+        result = self._wait_for_teleport_or_stuck(hwnd, stop_event, TELEPORT_IN_TIMEOUT)
+        if result == "ok":
+            self._log("[Macro] Teleported in-game.")
+            return True
+        if result in ("stuck", "disconnected"):
+            self._handle_disconnect(hwnd, stop_event, webhook, task, result)
             return False
-        if match is None:
-            if not stop_event.is_set():
-                self._log("[Macro] Never teleported in-game (Unit Manager not found) -- stopping.")
-            return False
-        self._log("[Macro] Teleported in-game.")
-        return True
+        if result == "timeout" and not stop_event.is_set():
+            self._log("[Macro] Never teleported in-game (Unit Manager not found) -- stopping.")
+        return False
 
-    def _click_start_and_wait_teleport(self, hwnd, stop_event: threading.Event) -> bool:
+    def _wait_for_teleport_or_stuck(self, hwnd, stop_event: threading.Event, timeout: float) -> str:
+        """Polls for nav_unitmanager (teleport-in confirmed), Roblox's own
+        Reconnect/Retry prompt (a definite disconnect, no continuous-
+        visibility wait needed), and teleportstuck (a hung loading screen,
+        which CAN be a momentary false alarm so it only counts once it's
+        been continuously visible for TELEPORT_STUCK_TIMEOUT) side by side --
+        a stuck/disconnected teleport never resolves into either success or
+        a clean "gone" the way other timeouts do, it just sits there
+        forever, so this is the only way to tell "still loading, be
+        patient" apart from "actually broken, needs a rejoin". Returns
+        "ok", "disconnected", "stuck", "stopped", or "timeout". Both
+        reconnect/retry and teleportstuck are optional -- a missing crop
+        just disables that half of the check, same as any other best-effort
+        image search in this file."""
+        deadline = time.time() + timeout
+        stuck_since = None
+        stuck_template_missing = False
+        while time.time() < deadline:
+            if stop_event.is_set():
+                return "stopped"
+            try:
+                match = vision.find_image(hwnd, "nav_unitmanager")
+            except vision.TemplateNotFound as exc:
+                self._log(f"[Macro] Can't confirm teleport-in: {exc}")
+                return "timeout"
+            if match is not None:
+                return "ok"
+
+            for name in RECONNECT_IMAGE_NAMES:
+                try:
+                    reconnect_match = vision.find_image(hwnd, name)
+                except vision.TemplateNotFound:
+                    continue  # that particular crop hasn't been added -- try the next one
+                if reconnect_match is not None:
+                    return "disconnected"
+
+            if not stuck_template_missing:
+                try:
+                    stuck_match = vision.find_image(hwnd, "teleportstuck")
+                except vision.TemplateNotFound:
+                    stuck_match = None
+                    stuck_template_missing = True  # don't keep re-searching for a crop that was never added
+                if stuck_match is not None:
+                    if stuck_since is None:
+                        stuck_since = time.time()
+                    elif time.time() - stuck_since >= TELEPORT_STUCK_TIMEOUT:
+                        return "stuck"
+                else:
+                    stuck_since = None  # only counts while CONTINUOUSLY visible
+
+            time.sleep(TELEPORT_POLL_INTERVAL)
+        return "timeout"
+
+    def _handle_disconnect(self, hwnd, stop_event: threading.Event, webhook: dict, task: dict,
+                             reason: str) -> None:
+        """A stuck/disconnected teleport is unrecoverable by waiting longer
+        or retrying a click -- only an actual rejoin fixes it. Logs the
+        disconnect to Discord (if configured) and attempts one, updating
+        self._current_hwnd on success so the next task-setup retry (see
+        _run_task's recovery loop, which re-reads self._current_hwnd) picks
+        up wherever the game ended up re-docked. Always returns None --
+        callers treat this attempt as failed either way and let the normal
+        task-recovery loop decide whether to retry."""
+        why = "Roblox's own Reconnect/Retry prompt appeared" if reason == "disconnected" \
+            else f"the teleport was stuck for over {TELEPORT_STUCK_TIMEOUT:.0f}s"
+        self._log(f"[Macro] Disconnected from Roblox ({why}) -- attempting to rejoin.")
+        self._save_debug_screenshot_unconditional(hwnd, "teleport_disconnected")
+        self._send_disconnect_webhook(webhook, task, why)
+        self._attempt_rejoin(hwnd, stop_event)
+
+    def _send_disconnect_webhook(self, webhook: dict, task: dict, why: str) -> None:
+        url = (webhook or {}).get("url")
+        if not url or not webhook.get("enabled"):
+            return
+        from . import webhook as webhook_module
+        embed = {
+            "title": "Disconnected -- Rejoining",
+            "description": f"{why.capitalize()}. Attempting to rejoin via deep link.",
+            "color": 0xE8935A,
+            "fields": [{"name": "Map", "value": (task or {}).get("map") or "-", "inline": True}],
+            "footer": {"text": "Cream's Macro | Anime Expeditions"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        mention_id = (webhook or {}).get("mention_id")
+        content = f"<@{mention_id}>" if mention_id else ""
+        try:
+            result = webhook_module.send(url, embed, content=content, silent=bool(webhook.get("silent")))
+            if not result.get("ok"):
+                self._log(f"[Macro] Disconnect webhook send failed: {result.get('reason')}")
+        except Exception as exc:
+            self._log(f"[Macro] Disconnect webhook send failed: {exc}")
+
+    def _attempt_rejoin(self, hwnd, stop_event: threading.Event) -> bool:
+        """Launches the Roblox deep link and waits for the lobby (nav_play)
+        to come back, polling self._hwnd_getter() rather than trusting the
+        original hwnd -- if Roblox had fully closed, the deep link spawns a
+        brand new process/window, and main.py's dock watchdog re-docks it
+        under a NEW hwnd on its own; this is how a rejoin picks that up
+        instead of continuing to poll a dead window handle. Updates
+        self._current_hwnd on success. Returns whether the lobby was
+        actually reached again."""
+        self._set_status(action="Disconnected -- rejoining...")
+        try:
+            os.startfile(REJOIN_DEEPLINK)
+        except OSError as exc:
+            self._log(f"[Macro] Couldn't launch the rejoin link: {exc}")
+            return False
+        self._log("[Macro] Rejoin link launched -- waiting for the game to load back in...")
+
+        deadline = time.time() + REJOIN_TIMEOUT
+        while time.time() < deadline:
+            if stop_event.is_set():
+                return False
+            time.sleep(REJOIN_POLL_INTERVAL)
+            current_hwnd = self._hwnd_getter() if self._hwnd_getter else hwnd
+            if not current_hwnd or not wm.is_window(current_hwnd):
+                continue
+            try:
+                match = vision.find_image(current_hwnd, "nav_play", region=NAV_PLAY_REGION)
+            except vision.TemplateNotFound:
+                match = None
+            if match is not None:
+                self._log("[Macro] Rejoined -- back on the lobby.")
+                self._current_hwnd = current_hwnd
+                return True
+        self._log(f"[Macro] Rejoin didn't reach the lobby within {REJOIN_TIMEOUT:.0f}s -- giving up.")
+        return False
+
+    def _click_start_and_wait_teleport(self, hwnd, stop_event: threading.Event, webhook: dict = None,
+                                          task: dict = None) -> bool:
         """Solo mode's Start click used to fire once, and if it didn't
         actually register in-game (a frame too early, an overlay in the way)
         the run just sat there until the teleport wait ran out with nothing
@@ -1815,15 +1980,17 @@ class MacroRunner:
 
             self._log("[Macro] Waiting to teleport in-game...")
             self._set_status(action="Waiting to teleport in-game...")
-            try:
-                match = vision.wait_for_image(
-                    hwnd, "nav_unitmanager", timeout=SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't confirm teleport-in: {exc}")
-                return False
-            if match is not None:
+            result = self._wait_for_teleport_or_stuck(hwnd, stop_event, SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT)
+            if result == "ok":
                 self._log("[Macro] Teleported in-game.")
                 return True
+            if result in ("stuck", "disconnected"):
+                # Broken, not slow -- re-clicking Start or waiting through
+                # more attempts won't fix a hung/disconnected server, so this
+                # bails immediately instead of burning the rest of the retry
+                # budget on something a rejoin (not a click) actually fixes.
+                self._handle_disconnect(hwnd, stop_event, webhook, task, result)
+                return False
             if stop_event.is_set():
                 return False
             self._log("[Macro] Didn't teleport yet -- checking again.")

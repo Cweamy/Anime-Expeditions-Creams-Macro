@@ -86,6 +86,27 @@ nav_start_game_3.png
   variants of the same button seen in practice, so that click isn't
   dependent on just one of them matching.
 
+teleportstuck.png
+  Optional. Checked alongside nav_unitmanager during every teleport-in wait
+  (core.runner._wait_for_teleport_or_stuck, used by both
+  _wait_teleport_in and _click_start_and_wait_teleport) -- if this is
+  found on screen CONTINUOUSLY for more than TELEPORT_STUCK_TIMEOUT (10s),
+  the game is treated as disconnected (not just slow) and a rejoin is
+  attempted (see reconnect.png below).
+
+reconnect.png / reconnect_2.png / retry.png
+  Optional. Roblox's own "Reconnect"/"Retry" prompt, shown when it actually
+  disconnects -- checked every poll during a teleport-in wait alongside
+  teleportstuck.png, but unlike it, finding ANY of these is treated as an
+  immediate, definite disconnect (no 10s continuous-visibility wait needed).
+  Either signal triggers core.runner._handle_disconnect: logs a Discord
+  webhook notice (if configured), then core.runner._attempt_rejoin opens
+  roblox://experiences/start?placeId=<PLACE_ID> to rejoin, waiting for
+  nav_play (the lobby) to confirm it worked. Roblox may re-launch into a
+  brand new window if it had fully closed -- main.py's dock watchdog
+  re-docks that on its own, and the runner picks up the new hwnd via
+  self._current_hwnd once _attempt_rejoin confirms the lobby loaded.
+
 nav_settings.png / nav_search.png / toggle_true.png / toggle_false.png /
 nav_settings_on.png
   Used by core.runner._open_settings_search/_search_and_set_toggle to
