@@ -1330,7 +1330,8 @@ def _launch_ui():
     api.push_log(f"[Macro] Display scale: {scale}%.")
     if scale != 100:
         api.push_log(f"[Macro] Windows display scale is {scale}%, not 100% -- this is a common cause of "
-                       f"clicks/detection landing slightly wrong. See Settings > System > Display.")
+                       f"clicks/detection landing slightly wrong. Set it to 100% in Settings > System > Display, "
+                       f"then restart your computer (not just the macro) so it fully takes effect.")
         api.push_ui("showScaleWarning")
     gui_wm = WindowManager(GUI_TITLE)
     roblox_wm = WindowManager(config.ROBLOX_WINDOW_TITLE)  # only used for its resize/client-rect helpers below

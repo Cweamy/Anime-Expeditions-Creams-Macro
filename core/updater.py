@@ -262,21 +262,39 @@ def stage_exe_update(new_exe_path: str) -> str:
     old_exe = current_exe + ".old"
     helper_path = os.path.join(exe_dir, "_update.bat")
     script = f"""@echo off
+setlocal enabledelayedexpansion
+echo Updating Cream's Macro -- please wait, this window closes itself...
 rem Force-kill as a safety net -- main.Api.apply_update already calls
 rem close_window() (which un-parents the docked Roblox window before
 rem closing, so it doesn't get taken down with this process) before
 rem launching this, so by the time this runs the app should already be
 rem gone. The wait loop below just covers a slow shutdown.
 taskkill /F /IM "{exe_name}" >nul 2>&1
+rem "ping" instead of "timeout" -- timeout needs a real console input
+rem handle, which this .bat (launched detached, see launch_helper) doesn't
+rem reliably have; same trick _write_source_helper_script already uses.
+set _wait=0
 :waitloop
-timeout /t 2 /nobreak >nul
+ping -n 3 127.0.0.1 >nul
 tasklist /FI "IMAGENAME eq {exe_name}" /NH 2>nul | findstr /i "{exe_name}" >nul
-if not errorlevel 1 goto waitloop
-timeout /t 1 /nobreak >nul
+if errorlevel 1 goto proceed
+set /a _wait+=1
+rem Bounded, not infinite -- a process that never actually dies (locked by
+rem AV, a permission mismatch, a protected-process edge case, ...) used to
+rem leave this waiting forever with the window just sitting there showing
+rem nothing happening. After ~30s, force-kill once more and proceed
+rem anyway: a failed move below at least surfaces a real error instead of
+rem hanging indefinitely with no explanation.
+if !_wait! lss 15 goto waitloop
+echo Still running after 30s -- forcing it closed and continuing anyway.
+taskkill /F /IM "{exe_name}" >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+:proceed
 rem Clean up leftover onefile self-extraction folders from old runs.
 for /d %%i in ("%TEMP%\\_MEI*") do rd /s /q "%%i" >nul 2>&1
 for /d %%i in ("%TEMP%\\onefile_*") do rd /s /q "%%i" >nul 2>&1
 if exist "{old_exe}" del /f "{old_exe}"
+echo Installing update...
 move /y "{current_exe}" "{old_exe}"
 move /y "{new_exe_path}" "{current_exe}"
 cd /d "{exe_dir}"

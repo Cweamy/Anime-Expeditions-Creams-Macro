@@ -43,6 +43,20 @@ MAPS_DIR = os.path.join(constants.ASSETS_DIR, "maps")
 # noise to tolerate.
 DEFAULT_THRESHOLD = 0.90
 
+# Some setups render this game's UI at a slightly different pixel size than
+# whatever a reference image was captured at, even at 100% Windows display
+# scale (confirmed against a real report: same 100% scale + a restart on
+# both ends, still a visible size mismatch when the two screenshots were
+# overlaid) -- Roblox's own UI scaling and per-monitor rendering quirks can
+# still drift independently of the OS-level DPI setting the app already
+# warns about. 1.0 is tried first and returned on a hit (see
+# find_in_gray_multiscale), so the common, correctly-scaled case pays
+# nothing extra; this list only gets walked further when 1x genuinely
+# misses. Kept to a modest +-10% range -- a real mismatch bigger than that
+# has never been reported, and a wider range costs more per miss for no
+# observed benefit.
+SCALE_FACTORS = (1.0, 0.95, 1.05, 0.90, 1.10)
+
 
 class TemplateNotFound(Exception):
     """The reference image (Assets/ui/<name>.png) doesn't exist on disk yet."""
@@ -168,6 +182,44 @@ def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold
     return {"x": x, "y": y, "w": tw, "h": th, "cx": x + tw // 2, "cy": y + th // 2, "score": float(max_val)}
 
 
+def _scaled_template(name: str, template_dir: str, scale: float) -> tuple:
+    """The same template as load_template_gray, resized -- cached per
+    (dir, name, scale) so a template that keeps missing at 1x doesn't get
+    re-resized on every single wait_for_image poll (every ~0.3s)."""
+    if scale == 1.0:
+        return load_template_gray(name, template_dir)
+    cache_key = (template_dir, name, scale)
+    if cache_key in _template_cache:
+        return _template_cache[cache_key]
+    gray, mask = load_template_gray(name, template_dir)
+    h, w = gray.shape[:2]
+    new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
+    # INTER_AREA is the recommended choice for shrinking (avoids moire/
+    # aliasing on fine text/edges); INTER_LINEAR for enlarging.
+    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+    scaled_gray = cv2.resize(gray, (new_w, new_h), interpolation=interp)
+    scaled_mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST) if mask is not None else None
+    entry = (scaled_gray, scaled_mask)
+    _template_cache[cache_key] = entry
+    return entry
+
+
+def find_in_gray_multiscale(haystack_gray: np.ndarray, name: str, template_dir: str = UI_ASSETS_DIR,
+                             threshold: float = DEFAULT_THRESHOLD) -> dict:
+    """find_in_gray, but tries the reference image at a handful of scale
+    factors around 1x (see SCALE_FACTORS) instead of only its exact
+    captured size -- absorbs a UI that renders slightly bigger/smaller on
+    someone else's setup. 1x is tried first and returned immediately on a
+    hit, so the common (correctly-scaled) case costs nothing extra; the
+    other scales only run when 1x genuinely misses."""
+    for scale in SCALE_FACTORS:
+        gray, mask = _scaled_template(name, template_dir, scale)
+        match = find_in_gray(haystack_gray, gray, threshold, mask)
+        if match is not None:
+            return match
+    return None
+
+
 DEBUG_DIR = os.path.join(constants.APP_DIR, "debug")
 
 
@@ -217,11 +269,11 @@ def find_image(hwnd: int, name: str, region: tuple = None, threshold: float = DE
     """One-shot: capture + match. Returned x/y/cx/cy are in the SAME space as
     `region` -- region-local if a region was passed, full-window client
     coords otherwise. See click_match to turn that into an actual click."""
-    template_gray, mask = load_template_gray(name, template_dir)
+    load_template_gray(name, template_dir)  # validates the file exists before capturing anything
     haystack = capture_game_gray(hwnd, region)
     if haystack is None:
         return None
-    match = find_in_gray(haystack, template_gray, threshold, mask)
+    match = find_in_gray_multiscale(haystack, name, template_dir, threshold)
     if match is None:
         return None
     if region is not None:
