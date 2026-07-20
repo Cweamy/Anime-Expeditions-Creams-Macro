@@ -18,6 +18,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need real history to list every commit in this push, not just HEAD (see the Discord step below)
 
       - uses: actions/setup-python@v5
         with:
@@ -47,19 +49,50 @@ jobs:
         # is exactly what a git-log channel is for. Built with jq (safe
         # JSON escaping) instead of hand-built/embedded-script JSON, which
         # kept fighting YAML's own quoting rules.
+        #
+        # Lists EVERY commit in this push, not just HEAD -- a push that
+        # bundles several local commits together used to only ever report
+        # the last one, silently dropping every earlier commit from the
+        # log channel with no sign anything was missing (this is exactly
+        # what "git logs aren't showing anything" turned out to be: most
+        # pushes during a long session weren't 1 commit each). github.
+        # event.before is the all-zero SHA on a branch's very first push,
+        # which has nothing to diff against -- falls back to just HEAD.
         if: always() && github.event_name == 'push'
         shell: bash
         env:
           DISCORD_GIT_LOGS_WEBHOOK: ${{ secrets.DISCORD_GIT_LOGS_WEBHOOK }}
           JOB_STATUS: ${{ job.status }}
-          COMMIT_URL: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          REPO_URL: https://github.com/${{ github.repository }}
         run: |
           if [ -z "$DISCORD_GIT_LOGS_WEBHOOK" ]; then exit 0; fi
           EMOJI="✅"
           if [ "$JOB_STATUS" != "success" ]; then EMOJI="❌"; fi
-          MSG=$(git log -1 --format='%s' | head -c 200)
-          SHA=$(git rev-parse --short HEAD)
-          AUTHOR=$(git log -1 --format='%an')
-          DESC=$(printf '%s **%s**\n%s · [`%s`](%s)' "$EMOJI" "$MSG" "$AUTHOR" "$SHA" "$COMMIT_URL")
-          PAYLOAD=$(jq -n --arg desc "$DESC" '{embeds: [{description: $desc, color: 5793266}]}')
+
+          RANGE="$BEFORE_SHA..HEAD"
+          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BEFORE_SHA" 2>/dev/null; then
+            RANGE="HEAD"
+          fi
+
+          # Oldest first, capped at 10 (Discord's max embeds per message) --
+          # a push bundling more than that is rare enough that a link to
+          # compare the full range covers it.
+          COMMIT_SHAS=$(git log "$RANGE" --format='%H' --reverse | tail -10)
+          if [ -z "$COMMIT_SHAS" ]; then COMMIT_SHAS=$(git rev-parse HEAD); fi
+
+          EMBEDS="[]"
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            MSG=$(git log -1 --format='%s' "$sha" | head -c 200)
+            SHORT=$(git rev-parse --short "$sha")
+            AUTHOR=$(git log -1 --format='%an' "$sha")
+            DESC=$(printf '**%s**\n%s · [`%s`](%s/commit/%s)' "$MSG" "$AUTHOR" "$SHORT" "$REPO_URL" "$sha")
+            EMBEDS=$(echo "$EMBEDS" | jq --arg desc "$DESC" '. + [{description: $desc, color: 5793266}]')
+          done <<< "$COMMIT_SHAS"
+
+          COUNT=$(echo "$COMMIT_SHAS" | grep -c .)
+          CONTENT="$EMOJI **$COUNT commit(s) pushed to main**"
+          PAYLOAD=$(jq -n --arg content "$CONTENT" --argjson embeds "$EMBEDS" '{content: $content, embeds: $embeds}')
           curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_GIT_LOGS_WEBHOOK" >/dev/null
