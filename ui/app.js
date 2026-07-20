@@ -107,9 +107,23 @@ function showDocked() {
   if (!hasAutoShownDashboard) {
     hasAutoShownDashboard = true;
     switchScreen('dashboard');
-  } else if (currentScreen === 'dashboard') {
+  } else if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
   }
+}
+
+// Any modal that hides the docked Roblox window while it's up (see each
+// one's own hide_game() call) -- checked by switchScreen() before it would
+// otherwise show_game() out from under one of them. #update-modal covers
+// BOTH the "update available" prompt and the auto-update progress bar
+// (applyUpdate() just toggles sections within the same modal), so this
+// covers the actual downloading/applying phase too, not just the prompt.
+function isBlockingOverlayOpen() {
+  const ids = ['update-modal', 'scale-warning-modal'];
+  return ids.some(id => {
+    const el = document.getElementById(id);
+    return el && el.style.display !== 'none' && el.style.display !== '';
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -139,10 +153,10 @@ async function showUpdateAvailable() {
 function dismissUpdateModal() {
   clearInterval(updateProgressPoll);
   document.getElementById('update-modal').style.display = 'none';
-  // Only restore Roblox if Dashboard is where it's actually supposed to
-  // be visible right now -- switchScreen() already keeps it hidden on
-  // every other screen, this shouldn't override that.
-  if (currentScreen === 'dashboard') {
+  // Only restore Roblox if Dashboard is where it's actually supposed to be
+  // visible right now (switchScreen() already keeps it hidden on every
+  // other screen) AND no other overlay (e.g. the scale warning) is still up.
+  if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
   }
 }
@@ -166,7 +180,7 @@ async function showScaleWarning() {
 
 function dismissScaleWarning() {
   document.getElementById('scale-warning-modal').style.display = 'none';
-  if (currentScreen === 'dashboard') {
+  if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
   }
 }
@@ -308,8 +322,20 @@ function switchScreen(name) {
 
   try {
     if (window.pywebview) {
-      if (name === 'dashboard') pywebview.api.show_game();
-      else pywebview.api.hide_game();
+      // Roblox is a native child window that renders on top of any DOM
+      // overlay regardless of CSS z-index (same reason showUpdateAvailable/
+      // showScaleWarning call hide_game() themselves) -- if one of those is
+      // currently up, showing it back would put Roblox right on top of it.
+      // This specifically covers switchScreen('dashboard') firing WHILE one
+      // is open (e.g. showDocked()'s first-time auto-switch to Dashboard,
+      // if Roblox docks after the update check already popped its modal) --
+      // previously this had no such check at all, so the auto-update
+      // progress overlay (living in the same #update-modal the "available"
+      // prompt already hides Roblox for) could end up hidden behind Roblox
+      // the moment docking happened to land after it was shown. The modal's
+      // own dismiss handler is what restores show_game() once it closes.
+      if (name === 'dashboard' && !isBlockingOverlayOpen()) pywebview.api.show_game();
+      else if (name !== 'dashboard') pywebview.api.hide_game();
     }
   } catch (e) {}
 
