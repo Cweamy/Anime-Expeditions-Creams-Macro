@@ -71,11 +71,20 @@ warning.png
   up to 10s for it to clear before searching for Start Game at all.
 
 nav_start_game_2.png
-  Optional (core.runner._click_start_game_2_if_found). A second Start
-  Game / confirm button that can show up alongside the warning above
-  (e.g. a "Start Anyway" prompt) -- found and clicked, this skips the
-  warning wait entirely instead of sitting through the full timeout for
-  something that was already dismissable right away.
+  Two uses: (1) optional, core.runner._click_start_game_2_if_found -- a
+  second Start Game / confirm button that can show up alongside the
+  warning above (e.g. a "Start Anyway" prompt) -- found and clicked, this
+  skips the warning wait entirely instead of sitting through the full
+  timeout for something that was already dismissable right away. (2) a
+  fallback variant for the actual "start the round" click -- see
+  nav_start_game_3.png below.
+
+nav_start_game_3.png
+  Optional. core.runner._find_start_game_button tries nav_start_game,
+  then nav_start_game_2, then this one, in order, for the actual "start
+  the round" click (core.runner._play_one_match) -- different visual
+  variants of the same button seen in practice, so that click isn't
+  dependent on just one of them matching.
 
 Add more <name>.png files here as new macro steps need to recognize other
 buttons/screens -- core.vision.find_image(hwnd, "<name>", ...) will pick

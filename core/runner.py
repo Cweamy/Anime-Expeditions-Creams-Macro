@@ -606,15 +606,12 @@ class MacroRunner:
         self._wait_out_start_game_warning(hwnd, stop_event)
         if self._checkpoint(stop_event):
             return None
-        try:
-            start_match = vision.find_image(hwnd, "nav_start_game")
-        except vision.TemplateNotFound as exc:
-            self._log(f"[Macro] {exc}")
-            start_match = None
+        start_name, start_match = self._find_start_game_button(hwnd)
         if start_match is not None:
-            debug_path = self._debug_save(hwnd, "nav_start_game", start_match)
+            debug_path = self._debug_save(hwnd, start_name, start_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found Start Game (score {start_match['score']:.2f}) -- clicking it.{suffix}")
+            self._log(f"[Macro] Found Start Game ({start_name}, score {start_match['score']:.2f}) -- "
+                       f"clicking it.{suffix}")
             vision.click_match(self._mouse, hwnd, start_match)
         else:
             # Not fatal: Start Game may already have been pressed by the
@@ -1758,6 +1755,23 @@ class MacroRunner:
                    f"clicking it to skip the warning wait.")
         vision.click_match(self._mouse, hwnd, skip_match)
         return True
+
+    def _find_start_game_button(self, hwnd):
+        """Tries nav_start_game, then nav_start_game_2, then
+        nav_start_game_3 in order -- different visual variants of the same
+        button seen in practice, so the actual "start the round" click
+        (see _play_one_match) isn't dependent on just one of them matching.
+        Returns (name, match) for whichever was found first, or (None,
+        None) if none of them were -- missing/not-yet-added variants are
+        skipped silently, same as any other optional template."""
+        for name in ("nav_start_game", "nav_start_game_2", "nav_start_game_3"):
+            try:
+                match = vision.find_image(hwnd, name)
+            except vision.TemplateNotFound:
+                continue
+            if match is not None:
+                return name, match
+        return None, None
 
     def _wait_out_start_game_warning(self, hwnd, stop_event: threading.Event) -> None:
         """Best-effort, like nav_disband: a warning popup (e.g. an
