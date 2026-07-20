@@ -613,10 +613,10 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return None
 
-        # Equipment include/exclude still isn't wired up yet -- Team itself
-        # is (see _apply_team_loadout, run earlier in Pre Start).
-        self._set_status(action="Battle. (Equipment include/exclude isn't wired up yet.)")
-        self._log("[Macro] Moving into Battle. (Equipment include/exclude isn't wired up yet.)")
+        # Team Loadout (including its Include/Exclude equipment choice) is
+        # applied earlier in Pre Start -- see _apply_team_loadout.
+        self._set_status(action="Battle...")
+        self._log("[Macro] Moving into Battle.")
 
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
