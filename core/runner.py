@@ -762,6 +762,10 @@ class MacroRunner:
                 self._run_wait_ms_tick(stop_event, block, self._battle_block_index + 1)
                 done = True
                 self._battle_block_state = {}
+            elif btype == "walk":
+                self._run_walk_block_tick(stop_event, block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
             elif btype == "wait_wave":
                 done = self._run_wait_wave_tick(hwnd, block, self._battle_block_index + 1)
             else:
@@ -905,6 +909,28 @@ class MacroRunner:
             if self._checkpoint(stop_event):
                 return
             time.sleep(min(0.1, deadline - time.time()))
+
+    def _run_walk_block_tick(self, stop_event: threading.Event, block: dict, block_num: int) -> None:
+        """One-shot: replays a recorded walk path -- the same core.paths
+        record/load/replay system the pinned Pre Start Walk Path row
+        already uses (see _run_prestart), just picked by name here instead
+        of by map. Picks up wherever the player currently is; no position
+        tracking needed, same as every other Battle block that just fires
+        an action rather than needing to know where a unit was placed."""
+        path_name = block.get("params", {}).get("path") or ""
+        label = f'Battle block #{block_num} (Walk)'
+        if not path_name:
+            self._log(f'{label}: no path selected -- skipping.')
+            return
+        self._log(f'{label}: walking path "{path_name}"...')
+        self._set_status(action=f'Walking "{path_name}"...')
+        data = walk_paths.load_path(path_name)
+        events = data.get("events", [])
+        if not events:
+            self._log(f'{label}: path "{path_name}" has no recorded movement -- skipping.')
+            return
+        walk_paths.replay_events(events, self._keyboard, stop_event)
+        self._log(f'{label}: walk finished.')
 
     def _run_wait_wave_tick(self, hwnd, block: dict, block_num: int) -> bool:
         """Waits until the current wave has reached OR already passed the
