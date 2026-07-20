@@ -711,7 +711,7 @@ class MacroRunner:
         Pre Start block so they only fire on the task's first entry into
         this stage, not on every repeat (see _run_prestart). Returns
         "win"/"loss", or None on failure/stop."""
-        if not self._start_game_or_reset_via_settings(hwnd, stop_event, task.get("play_mode"), webhook, task):
+        if not self._start_game_or_reset_via_settings(hwnd, stop_event, task.get("play_mode")):
             return None
         if self._checkpoint(stop_event):
             return None
@@ -2379,8 +2379,7 @@ class MacroRunner:
         self._log(f"[Macro] Closing Settings.{suffix}")
         vision.click_match(self._mouse, hwnd, settings_match)
 
-    def _start_game_or_reset_via_settings(self, hwnd, stop_event: threading.Event, play_mode: str = "solo",
-                                            webhook: dict = None, task: dict = None) -> bool:
+    def _start_game_or_reset_via_settings(self, hwnd, stop_event: threading.Event, play_mode: str = "solo") -> bool:
         # Party leadership and Auto Vote Start are both matchmaking-only
         # concepts -- Solo mode has no party at all, so there's no leader
         # to check for and nothing to reset via Settings. This used to run
@@ -2414,73 +2413,15 @@ class MacroRunner:
                        f"Running Pre Start before pressing it.")
             return True
 
-        self._log('[Macro] No Start Game button found -- likely because Auto Vote Start is enabled '
-                   '(it replaces the manual Start button with an auto-starting vote) rather than not '
-                   "being the party leader. Please disable Auto Vote Start in Settings if this keeps "
-                   "happening -- checking/disabling it now so the round doesn't start before Pre Start runs.")
-        self._set_status(action="Opening Settings for Auto Vote Start...")
-        search_box_pos = self._open_settings_search(hwnd, stop_event)
-        if search_box_pos is None:
-            return False
-        if self._checkpoint(stop_event):
-            return False
-
-        self._search_and_set_toggle(hwnd, stop_event, search_box_pos, "Auto Vote Start", desired_on=False)
-        if self._checkpoint(stop_event):
-            return False
-
-        self._log("[Macro] Clicking back into the search box...")
-        self._mouse.click(*search_box_pos)
-        time.sleep(0.2)
-        self._keyboard.combo(keys.VK_CONTROL, ord("A"))  # select the existing search text...
-        self._keyboard.tap(keys.VK_DELETE)                # ...and clear it before typing the next search
-        if self._checkpoint(stop_event):
-            return False
-
-        self._set_status(action='Searching settings for "Restart Game"...')
-        self._log('[Macro] Typing "restart game"...')
-        self._keyboard.type_text("restart game")
-        time.sleep(SETTLE_DELAY)
-        if self._checkpoint(stop_event):
-            return False
-
-        if not self._click_found_image(hwnd, "restart_btn", NAV_CLICK_TIMEOUT, stop_event):
-            return False
-        if self._checkpoint(stop_event):
-            return False
-
-        # restart_btn2 -- a confirmation prompt Restart Game brings up (e.g.
-        # "Are you sure?"), clicked right after the first press to actually
-        # commit to it.
-        if not self._click_found_image(hwnd, "restart_btn2", NAV_CLICK_TIMEOUT, stop_event):
-            return False
-        if self._checkpoint(stop_event):
-            return False
-
-        screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "restart_game")
-        self._send_event_webhook(
-            webhook, task, "Restarting Game",
-            "No Start Game button found (likely Auto Vote Start) -- restarting the game via Settings.",
-            0xE8935A, screenshot_path)
-
-        # The restart itself may have already closed Settings on its own --
-        # this is just a cleanup check, not a required step, so it's a
-        # one-shot look (after a settle delay for the restart to actually
-        # take effect) rather than a long wait, and finding nothing here is
-        # success too, not a failure of the whole flow.
-        time.sleep(SETTLE_DELAY)
-        try:
-            settings_match = vision.find_image(hwnd, "nav_settings_on")
-        except vision.TemplateNotFound as exc:
-            self._log(f"[Macro] {exc}")
-            return True
-        if settings_match is None:
-            self._log("[Macro] Settings already closed after restart.")
-            return True
-        debug_path = self._debug_save(hwnd, "nav_settings_on", settings_match)
-        suffix = f" Debug: {debug_path}" if debug_path else ""
-        self._log(f"[Macro] Settings still open (score {settings_match['score']:.2f}) -- closing it.{suffix}")
-        vision.click_match(self._mouse, hwnd, settings_match)
+        # No Start Game button just means Auto Vote Start is on -- most
+        # people run with it on deliberately (it's a legitimate feature,
+        # not a misconfiguration), so this no longer fights it by disabling
+        # it and restarting the game. The vote-started round teleports in
+        # on its own; _wait_teleport_in downstream is what actually confirms
+        # that happened, this just needs to not treat its absence as a
+        # failure.
+        self._log('[Macro] No Start Game button found -- Auto Vote Start is likely on, letting it '
+                   "auto-start the round instead of disabling it.")
         return True
 
     def _select_difficulty(self, hwnd, difficulty: str, coords: dict) -> None:
