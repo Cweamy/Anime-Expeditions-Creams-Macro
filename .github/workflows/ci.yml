@@ -46,18 +46,19 @@ jobs:
         # Only for actual pushes to main, not PRs (a fork's PR run has no
         # access to repo secrets anyway) -- always() so this still posts
         # even if a step above failed, since a "did the build break" ping
-        # is exactly what a git-log channel is for. Built with jq (safe
-        # JSON escaping) instead of hand-built/embedded-script JSON, which
-        # kept fighting YAML's own quoting rules.
+        # is exactly what a git-log channel is for.
         #
         # Lists EVERY commit in this push, not just HEAD -- a push that
         # bundles several local commits together used to only ever report
         # the last one, silently dropping every earlier commit from the
-        # log channel with no sign anything was missing (this is exactly
-        # what "git logs aren't showing anything" turned out to be: most
-        # pushes during a long session weren't 1 commit each). github.
-        # event.before is the all-zero SHA on a branch's very first push,
-        # which has nothing to diff against -- falls back to just HEAD.
+        # log channel with no sign anything was missing. See
+        # .github/scripts/post_git_log.py for the actual logic -- moved out
+        # of an inline bash+jq block after THAT version passed every local
+        # test yet still sent Discord invalid JSON on the real runner (an
+        # HTTP 400 only visible once the step was changed to stop
+        # discarding curl's response), a shell-quoting bug not worth
+        # continuing to chase in YAML when Python's json module can't
+        # produce invalid JSON by construction.
         if: always() && github.event_name == 'push'
         shell: bash
         env:
@@ -65,45 +66,4 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           BEFORE_SHA: ${{ github.event.before }}
           REPO_URL: https://github.com/${{ github.repository }}
-        run: |
-          if [ -z "$DISCORD_GIT_LOGS_WEBHOOK" ]; then exit 0; fi
-          EMOJI="✅"
-          if [ "$JOB_STATUS" != "success" ]; then EMOJI="❌"; fi
-
-          RANGE="$BEFORE_SHA..HEAD"
-          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ] \
-             || ! git cat-file -e "$BEFORE_SHA" 2>/dev/null; then
-            RANGE="HEAD"
-          fi
-
-          # Oldest first, capped at 10 (Discord's max embeds per message) --
-          # a push bundling more than that is rare enough that a link to
-          # compare the full range covers it.
-          COMMIT_SHAS=$(git log "$RANGE" --format='%H' --reverse | tail -10)
-          if [ -z "$COMMIT_SHAS" ]; then COMMIT_SHAS=$(git rev-parse HEAD); fi
-
-          EMBEDS="[]"
-          while IFS= read -r sha; do
-            if [ -z "$sha" ]; then continue; fi
-            MSG=$(git log -1 --format='%s' "$sha" | head -c 200)
-            SHORT=$(git rev-parse --short "$sha")
-            AUTHOR=$(git log -1 --format='%an' "$sha")
-            DESC=$(printf '**%s**\n%s · [`%s`](%s/commit/%s)' "$MSG" "$AUTHOR" "$SHORT" "$REPO_URL" "$sha")
-            EMBEDS=$(echo "$EMBEDS" | jq --arg desc "$DESC" '. + [{description: $desc, color: 5793266}]')
-          done <<< "$COMMIT_SHAS"
-
-          COUNT=$(echo "$COMMIT_SHAS" | grep -c .)
-          CONTENT="$EMOJI **$COUNT commit(s) pushed to main**"
-          PAYLOAD=$(jq -n --arg content "$CONTENT" --argjson embeds "$EMBEDS" '{content: $content, embeds: $embeds}')
-          # -w/-o instead of the old -s ...>/dev/null: a bad payload used to
-          # fail completely silently (curl itself still exits 0 on an HTTP
-          # error without -f), which is exactly how this went unnoticed
-          # before -- print the actual response so a future failure shows
-          # up in the Actions log instead of just "nothing happened".
-          HTTP_STATUS=$(curl -s -o /tmp/discord_response.txt -w '%{http_code}' \
-            -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_GIT_LOGS_WEBHOOK")
-          echo "Discord response: HTTP $HTTP_STATUS"
-          cat /tmp/discord_response.txt
-          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
-            echo "::warning::Discord git-log webhook returned HTTP $HTTP_STATUS -- see response body above."
-          fi
+        run: python .github/scripts/post_git_log.py
