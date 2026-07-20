@@ -642,6 +642,24 @@
         </section>
       </div>
 
+      <div class="settings-category" data-cat="general" style="margin-top: 20px;">
+        <section class="rp-panel">
+          <header class="rp-panel-head">
+            <span class="rp-head-tag" style="--rp-tag: var(--slate);">Control</span>
+            <span class="rp-head-title">OCR</span>
+            <span class="rp-head-rule"></span>
+          </header>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Install Tesseract OCR</div>
+              <div class="setting-desc">Needed for reading match stats/rewards. One-click install via winget -- no manual download.</div>
+            </div>
+            <button id="btn-install-tesseract" onclick="installTesseract(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Install</button>
+          </div>
+        </section>
+      </div>
+
       <div class="settings-category" data-cat="debug" style="margin-top: 20px;">
         <section class="rp-panel">
           <header class="rp-panel-head">

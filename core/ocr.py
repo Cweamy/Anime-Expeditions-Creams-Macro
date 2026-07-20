@@ -50,6 +50,16 @@ class TesseractNotAvailable(Exception):
     (a separate native binary, not something pip installs) isn't found."""
 
 
+def reset_tesseract_cache() -> None:
+    """Clears the memoized "is tesseract there" result -- called after
+    core.tesseract_installer.install_tesseract() succeeds so the very next
+    OCR read re-probes and picks up the freshly installed engine instead of
+    still raising off the stale "confirmed unavailable" result cached
+    before the install ran."""
+    global _resolved_tesseract_cmd
+    _resolved_tesseract_cmd = None
+
+
 def get_pytesseract():
     global _resolved_tesseract_cmd
 

@@ -789,6 +789,23 @@ class Api:
         self.push_log(f"[Debug] Saved screenshot to {path}")
         return {"ok": True, "path": path}
 
+    def install_tesseract(self) -> dict:
+        # Settings > General > "Install Tesseract OCR": one-click install via
+        # winget (see core.tesseract_installer) for anyone who's hit
+        # TesseractNotAvailable (match-stats OCR) instead of having to find/
+        # run the UB-Mannheim installer by hand. Runs on a background thread
+        # since the winget download/install can take a while; the button's
+        # own JS polls for completion the same way Camera Setup's does.
+        def run():
+            from core import tesseract_installer, ocr
+            ok = tesseract_installer.install_tesseract(log=self.push_log)
+            if ok:
+                ocr.reset_tesseract_cache()
+            self.push_ui("tesseractInstallDone" if ok else "tesseractInstallFailed")
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True}
+
     def list_roblox_windows(self) -> list:
         # Settings > Debug > "Select Roblox Window": every standalone Roblox
         # window NOT already docked (see core.window.list_roblox_windows),

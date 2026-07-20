@@ -962,6 +962,42 @@ async function runCameraSetup2(btn) {
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, Math.max(3200, holdMs + 1200));
 }
 
+// Settings > General > "Install Tesseract OCR" -- unlike Camera Setup's
+// fixed-timeout buttons, install_tesseract() actually signals real
+// completion via push_ui (tesseractInstallDone/tesseractInstallFailed,
+// see main.py), since a winget install can take anywhere from a few
+// seconds to a couple minutes and a guessed timeout would either cut the
+// button state off early or make a fast install look stuck.
+let tesseractInstallBtn = null;
+
+async function installTesseract(btn) {
+  if (tesseractInstallBtn) return;  // already running
+  tesseractInstallBtn = btn;
+  btn.dataset.original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Installing...';
+  try {
+    const result = await pywebview.api.install_tesseract();
+    if (!result.ok) { finishTesseractInstall(false); }
+  } catch (e) {
+    finishTesseractInstall(false);
+  }
+}
+
+function finishTesseractInstall(success) {
+  const btn = tesseractInstallBtn;
+  if (!btn) return;
+  btn.textContent = success ? 'Installed' : 'Failed';
+  setTimeout(() => {
+    btn.textContent = btn.dataset.original || 'Install';
+    btn.disabled = false;
+    tesseractInstallBtn = null;
+  }, 3200);
+}
+
+window.tesseractInstallDone = () => finishTesseractInstall(true);
+window.tesseractInstallFailed = () => finishTesseractInstall(false);
+
 // Settings > Debug > "Test Walking Path" -- replays a saved WASD recording
 // (see core.paths.replay_events) against the live game so a Custom Path can
 // be sanity-checked on its own. Run/Stop swap visibility instead of one
