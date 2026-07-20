@@ -110,4 +110,16 @@ jobs:
             --arg desc "$TRIMMED" \
             --arg url "$RELEASE_URL" \
             '{embeds: [{title: $title, description: $desc, url: $url, color: 5793266}]}')
-          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_UPDATE_LOGS_WEBHOOK" >/dev/null
+          # -s alone swallows the response body entirely -- a rejected
+          # payload (bad JSON, wrong/deleted webhook, ...) still exits 0
+          # and looks like success in the Actions log with no way to tell
+          # why nothing showed up in Discord. -w appends the HTTP status so
+          # a non-2xx actually fails the step with the response visible.
+          HTTP_STATUS=$(curl -s -o /tmp/discord_response.txt -w "%{http_code}" \
+            -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_UPDATE_LOGS_WEBHOOK")
+          echo "Discord responded with HTTP $HTTP_STATUS"
+          cat /tmp/discord_response.txt
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::error::Discord webhook post failed (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
