@@ -1451,6 +1451,10 @@ class MacroRunner:
                 self._log('[Macro] Team panel never opened (no "team" match) -- skipping.')
             return
         vision.click_match(self._mouse, hwnd, team_match)
+        # The Loadout list animates in right after this click -- without a
+        # settle, the very next click (the Loadout row itself) can land
+        # before it's actually finished sliding into place.
+        time.sleep(SETTLE_DELAY)
         if self._checkpoint(stop_event):
             return
 
