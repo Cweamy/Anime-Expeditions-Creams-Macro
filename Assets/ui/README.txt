@@ -1,6 +1,8 @@
 Reference images the macro's image search (core/vision.py, core/runner.py)
 looks for by name. Each is a small, tightly cropped screenshot of just the
-button/text being searched for -- not a full screen capture.
+button/text being searched for -- not a full screen capture. See
+Assets/README.txt for how this folder relates to the others (item_icons,
+maps, stage_data.json).
 
 Filenames must match the `name` string a runner call passes to
 core.vision.find_image(hwnd, "<name>", ...) EXACTLY -- core.vision.
