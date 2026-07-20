@@ -414,6 +414,20 @@ class MacroRunner:
             self._log("[Macro] Couldn't confirm Roblox actually took focus -- clicks may not register "
                        "until it does. Continuing anyway.")
 
+        # SendInput cannot reach a window owned by a HIGHER-privilege
+        # process than this one -- Windows drops it with no error at all,
+        # which looks exactly like "finds the button, clicks it, nothing
+        # happens, cursor doesn't even move" (a persistent user report even
+        # after several unrelated click-reliability fixes). Checked once
+        # here rather than every click since elevation doesn't change
+        # mid-run, and this is advisory only -- it can't fix a mismatch,
+        # only explain one if it exists.
+        if wm.is_process_elevated(hwnd) and not wm.is_self_elevated():
+            self._log("[Macro] Roblox appears to be running as Administrator, but this macro isn't -- "
+                       "Windows silently blocks simulated clicks/keys from a non-elevated app to an "
+                       "elevated one. If clicks aren't registering, close both and relaunch this macro "
+                       "as Administrator too (right-click > Run as administrator).")
+
         loop_pass = 1
         while True:
             # Re-read the queue every pass instead of once up front -- with
@@ -1318,7 +1332,15 @@ class MacroRunner:
         is_win = result == "win"
         map_name = task.get("map") or "-"
         stage = task.get("stage") or "-"
-        difficulty = task.get("difficulty") or "-"
+        mode = task.get("mode") or "story"
+        # Raid and Infinite/Mastery stages are locked to Hard in-game (see
+        # _run_task_setup's identical check) -- the task's own difficulty
+        # setting never actually applies there, so reporting it verbatim
+        # was showing e.g. "Normal" for a run that was really Hard.
+        if mode == "raid" or stage in SPECIAL_STAGES_NO_DIFFICULTY:
+            difficulty = "Hard"
+        else:
+            difficulty = task.get("difficulty") or "-"
 
         fields = [
             {"name": "Map", "value": map_name, "inline": True},

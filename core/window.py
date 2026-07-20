@@ -7,6 +7,7 @@ from . import config
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 
 # Pointer-sized return value: without this, ctypes' default c_int return
 # truncates the handle on 64-bit Windows and GWL_HWNDPARENT reads back garbage.
@@ -29,6 +30,17 @@ user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BO
 user32.SetForegroundWindow.restype = wintypes.BOOL
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+# HANDLE-returning/consuming calls used by is_process_elevated -- like
+# GetWindowLongPtrW above, ctypes' default c_int return/args would
+# truncate a 64-bit HANDLE, so these need explicit pointer-sized types.
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+advapi32.OpenProcessToken.restype = wintypes.BOOL
+advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+advapi32.GetTokenInformation.restype = wintypes.BOOL
+advapi32.GetTokenInformation.argtypes = [
+    wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ROBLOX_PROCESS_NAME = "robloxplayerbeta.exe"
@@ -212,6 +224,54 @@ def get_process_name(hwnd: int) -> str:
     kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
     kernel32.CloseHandle(handle)
     return os.path.basename(buf.value).lower()
+
+
+def is_process_elevated(hwnd: int) -> bool:
+    """Whether hwnd's owning process is running with an elevated
+    (Administrator) token. SendInput cannot inject input into a window
+    owned by a HIGHER-integrity-level process than the sender's own --
+    Windows drops it silently, no exception, no error, which matches
+    reports of "finds Play correctly but the click just never registers,
+    cursor doesn't even move" exactly: if Roblox ever ends up elevated
+    (self-elevated, launched via "Run as administrator", certain anti-
+    cheat/launcher setups) while this macro runs as a normal user, every
+    SendInput call keeps silently failing no matter how many times a click
+    is retried. Returns False (assume not elevated) if the check itself
+    fails for any reason -- this only ever backs an advisory log message,
+    never a control-flow decision, so a wrong guess here should default to
+    NOT warning rather than risk a false alarm."""
+    TOKEN_QUERY = 0x0008
+    TOKEN_ELEVATION = 20
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if pid.value == 0:
+        return False
+    h_process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not h_process:
+        return False
+    try:
+        h_token = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(h_process, TOKEN_QUERY, ctypes.byref(h_token)):
+            return False
+        try:
+            elevation = wintypes.DWORD()
+            size = wintypes.DWORD()
+            ok = advapi32.GetTokenInformation(
+                h_token, TOKEN_ELEVATION, ctypes.byref(elevation), ctypes.sizeof(elevation), ctypes.byref(size))
+            return bool(ok) and bool(elevation.value)
+        finally:
+            kernel32.CloseHandle(h_token)
+    except OSError:
+        return False
+    finally:
+        kernel32.CloseHandle(h_process)
+
+
+def is_self_elevated() -> bool:
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except OSError:
+        return False
 
 
 def find_roblox_window() -> int:
