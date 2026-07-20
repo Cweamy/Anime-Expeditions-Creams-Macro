@@ -559,7 +559,19 @@ class MacroRunner:
                     return False
 
                 if not is_last_repeat:
-                    if not self._wait_teleport_in(hwnd, stop_event, webhook, task):
+                    if task.get("play_mode") == "matchmaking":
+                        # Leave Stage (see _handle_match_result -- matchmaking
+                        # always leaves, never Repeat Stage) puts us back on
+                        # the lobby, not mid-match -- the next repeat needs
+                        # the FULL lobby -> map -> stage -> Enter Matchmaking
+                        # sequence again, not just a teleport-in wait.
+                        if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords,
+                                                      scroll_power, scroll_nudges, webhook):
+                            if stop_event.is_set():
+                                return False
+                            task_failed = True
+                            break
+                    elif not self._wait_teleport_in(hwnd, stop_event, webhook, task):
                         if stop_event.is_set():
                             return False
                         task_failed = True
@@ -1194,7 +1206,16 @@ class MacroRunner:
         self._mouse.move_to(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
         time.sleep(0.1)
 
-        if repeat:
+        # Matchmaking never uses Repeat Stage, even with more repeats left --
+        # a matchmade lobby is a one-shot party for that specific match, not
+        # something "repeat the same stage" can just re-queue into the way
+        # it can for Story/Solo, so every matchmaking repeat has to leave
+        # and go through Enter Matchmaking again from the lobby (see
+        # _run_task's repeat loop, which re-runs _run_task_setup instead of
+        # _wait_teleport_in whenever this is why it's about to see Leave
+        # Stage clicked with more repeats still left).
+        is_matchmaking = task.get("play_mode") == "matchmaking"
+        if repeat and not is_matchmaking:
             # More repeats left on this task -- Repeat Stage re-queues the
             # same stage directly, skipping the lobby/gamemode/map/stage
             # picks entirely (see _run_task_setup, which only runs once per
