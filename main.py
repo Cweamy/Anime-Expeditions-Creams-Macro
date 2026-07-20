@@ -166,7 +166,7 @@ class Api:
         # background-thread pattern as the startup one so a slow/failed
         # GitHub request can't freeze the UI.
         def run():
-            self._update_info = updater.check_for_update()
+            self._update_info = updater.check_for_update(log=self.push_log)
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True}
 
@@ -1254,7 +1254,7 @@ def _launch_ui():
         # details once it actually has something to show.
         time.sleep(4)
         try:
-            api._update_info = updater.check_for_update()
+            api._update_info = updater.check_for_update(log=api.push_log)
         except Exception as exc:
             api.push_log(f"[Update] Check failed: {exc}")
             return

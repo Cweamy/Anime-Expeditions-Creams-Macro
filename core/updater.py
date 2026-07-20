@@ -36,6 +36,14 @@ from . import constants
 
 GITHUB_REPO = "Cweamy/Anime-Expeditions-Creams-Macro"
 RELEASES_LATEST_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
+# GitHub replaces spaces with dots in uploaded asset filenames (confirmed
+# against real releases), so build_pyinstaller.py's "Creams Macro - Anime
+# Expeditions.exe" actually ends up hosted under this name -- used as a
+# best-effort fallback download link if the API call in check_for_update
+# gets rate-limited (see its docstring), same fallback the sibling Anime
+# Squadron project's core.updater already needed for the same reason.
+FALLBACK_EXE_NAME = "Creams.Macro.-.Anime.Expeditions.exe"
 # BUNDLE_DIR, not APP_DIR -- VERSION ships as part of the app itself (it's
 # what identifies which release you're running), not user-owned data.
 VERSION_FILE = os.path.join(constants.BUNDLE_DIR, "VERSION")
@@ -63,21 +71,63 @@ def _parse_version(tag: str) -> tuple:
     return tuple(int(n) for n in nums) if nums else (0,)
 
 
-def check_for_update(timeout: float = 6.0) -> dict:
-    """Never raises -- a failed check (offline, rate-limited, no releases
-    yet) just reports not available so it can't break startup."""
+def _latest_tag_via_redirect(timeout: float, log=None) -> str:
+    """github.com/OWNER/REPO/releases/latest 302-redirects to the tagged
+    release page -- reading the Location header off that redirect tells us
+    the latest tag without ever touching api.github.com, which caps
+    unauthenticated requests at 60/hour *per IP*. Many unrelated users can
+    share a public IP (school/office networks, large-scale CGNAT some ISPs
+    use), so that limit can get exhausted across a whole user base, not
+    just from one person restarting the app a lot -- and a rate-limited
+    (403) response used to look identical to "already up to date", since a
+    non-200 status just fell into the catch-all except and reported
+    "available": False either way. Ported from the sibling Anime Squadron
+    project's core.updater, which hit and fixed this exact failure mode
+    first. Returns "" if the redirect lookup itself fails for any reason.
+    """
+    try:
+        resp = requests.head(RELEASES_PAGE_URL, allow_redirects=False, timeout=timeout)
+        location = resp.headers.get("Location", "")
+        if "/releases/tag/" in location:
+            return location.rsplit("/releases/tag/", 1)[-1]
+    except Exception as exc:
+        if log:
+            log(f"[Update] Redirect-based version check failed: {exc}")
+    return ""
+
+
+def check_for_update(timeout: float = 6.0, log=None) -> dict:
+    """Never raises -- a failed check (offline, no releases yet) just
+    reports not available so it can't break startup."""
     current = get_current_version()
+    tag = _latest_tag_via_redirect(timeout, log)
+    if not tag or _parse_version(tag) <= _parse_version(current):
+        return {"available": False}
+
+    # A newer tag genuinely exists -- worth spending one real API call
+    # (subject to the 60/hr limit the redirect check above avoids for the
+    # common "nothing new" case) to get exact asset URLs and release notes.
     try:
         resp = requests.get(RELEASES_LATEST_URL, timeout=timeout,
                              headers={"Accept": "application/vnd.github+json"})
         resp.raise_for_status()
         data = resp.json()
-    except Exception:
-        return {"available": False}
-
-    tag = data.get("tag_name") or ""
-    if not tag or _parse_version(tag) <= _parse_version(current):
-        return {"available": False}
+    except Exception as exc:
+        if log:
+            log(f"[Update] Release metadata request failed ({exc}) -- "
+                f"falling back to a direct link for {tag}.")
+        # Metadata call failed/rate-limited, but the redirect above already
+        # confirmed a newer tag exists -- still report it, with a
+        # best-effort constructed link instead of exact asset metadata.
+        return {
+            "available": True,
+            "version": tag,
+            "current_version": current,
+            "url": f"https://github.com/{GITHUB_REPO}/releases/tag/{tag}",
+            "zip_url": f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip",
+            "exe_url": f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{FALLBACK_EXE_NAME}",
+            "notes": "",
+        }
 
     # "bootstrapper" must be excluded here -- every release has TWO .exe
     # assets (the real app and the small bootstrapper, see release.yml),
@@ -95,7 +145,8 @@ def check_for_update(timeout: float = 6.0) -> dict:
         "current_version": current,
         "url": data.get("html_url") or f"https://github.com/{GITHUB_REPO}/releases",
         "zip_url": data.get("zipball_url") or f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip",
-        "exe_url": exe_asset["browser_download_url"] if exe_asset else None,
+        "exe_url": exe_asset["browser_download_url"] if exe_asset else
+                   f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{FALLBACK_EXE_NAME}",
         "notes": (data.get("body") or "").strip(),
     }
 
