@@ -1400,7 +1400,18 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return False
 
-        self._apply_team_loadout(hwnd, stop_event, task)
+        # Team Loadout only makes sense the FIRST time a task enters a stage --
+        # it sets up units/equipment before the match even starts, so
+        # re-applying it on every repeat (this used to run unconditionally,
+        # same bug the walk below already had a fix for) was pointlessly
+        # re-pressing H and re-picking a loadout mid-repeat-cycle, which
+        # could land on the wrong screen entirely if the panel wasn't in the
+        # exact state it expects and produce exactly the kind of "it bugs
+        # out" behavior this was reported as.
+        if first_repeat:
+            self._apply_team_loadout(hwnd, stop_event, task)
+        else:
+            self._log("[Macro] Repeat of the same stage -- skipping Team Loadout (already applied on entry).")
         if self._checkpoint(stop_event):
             return False
 
