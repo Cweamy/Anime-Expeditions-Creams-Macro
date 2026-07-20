@@ -515,7 +515,7 @@ class MacroRunner:
                 self._set_status(current_repeat=f"{repeat_index} / {repeat_total}")
                 battle_started = time.time()
                 result = self._play_one_match(hwnd, stop_event, task, default_walk_paths,
-                                                first_repeat=(repeat_index == 1))
+                                                first_repeat=(repeat_index == 1), webhook=webhook)
                 if result is None:
                     if stop_event.is_set():
                         return False
@@ -549,6 +549,11 @@ class MacroRunner:
 
         self._log(f'[Macro] Task {task_index}/{task_count} still failing after '
                    f'{TASK_RECOVERY_ATTEMPTS} attempts -- giving up on it.')
+        screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "task_gave_up")
+        self._send_event_webhook(
+            webhook, task, "Task Gave Up",
+            f"Task {task_index}/{task_count} still failing after {TASK_RECOVERY_ATTEMPTS} recovery "
+            f"attempts -- moving on to the next task.", 0xE05A6D, screenshot_path)
         return True
 
     def _recover_to_lobby(self, hwnd, stop_event: threading.Event) -> bool:
@@ -650,7 +655,7 @@ class MacroRunner:
         return not self._checkpoint(stop_event)
 
     def _play_one_match(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
-                          first_repeat: bool = True):
+                          first_repeat: bool = True, webhook: dict = None):
         """Assumes teleport-in already happened -- the initial one from
         _run_task_setup, or a repeat's re-teleport after Repeat Stage (see
         _handle_match_result). Start Game settings check, Pre Start, the
@@ -659,7 +664,7 @@ class MacroRunner:
         Pre Start block so they only fire on the task's first entry into
         this stage, not on every repeat (see _run_prestart). Returns
         "win"/"loss", or None on failure/stop."""
-        if not self._start_game_or_reset_via_settings(hwnd, stop_event, task.get("play_mode")):
+        if not self._start_game_or_reset_via_settings(hwnd, stop_event, task.get("play_mode"), webhook, task):
             return None
         if self._checkpoint(stop_event):
             return None
@@ -703,7 +708,11 @@ class MacroRunner:
                 if attempt == START_GAME_CLICK_RETRY_ATTEMPTS:
                     self._log(f"[Macro] Start Game still showing after {START_GAME_CLICK_RETRY_ATTEMPTS} "
                                f"clicks -- the round may not have actually started. Continuing anyway.")
-                    self._save_debug_screenshot_unconditional(hwnd, "start_game_click_stuck")
+                    screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "start_game_click_stuck")
+                    self._send_event_webhook(
+                        webhook, task, "Start Game Click Not Registering",
+                        f"Clicked Start Game {START_GAME_CLICK_RETRY_ATTEMPTS} times but it's still showing -- "
+                        f"the round may not have actually started.", 0xE05A6D, screenshot_path)
         if self._checkpoint(stop_event):
             return None
 
@@ -786,19 +795,23 @@ class MacroRunner:
         self._save_debug_screenshot_unconditional(hwnd, "match_result_timeout")
         return None
 
-    def _save_debug_screenshot_unconditional(self, hwnd, name: str) -> None:
+    def _save_debug_screenshot_unconditional(self, hwnd, name: str) -> str:
         """A full-window screenshot saved regardless of Settings > Debug >
         "Debug Match Screenshots" -- for failures rare and diagnostically
         useful enough (a long timeout, a menu that never opened) that it's
         worth it unconditionally rather than only when that toggle happened
         to already be on, so a user's bug report actually comes with
-        evidence of what was on screen instead of a blind guess."""
+        evidence of what was on screen instead of a blind guess. Returns
+        the saved path (also attachable to a Discord webhook, see
+        _send_event_webhook), or None if it couldn't be saved."""
         try:
             left, top, right, bottom = wm.get_window_rect_screen(hwnd)
             path = vision.save_region_debug(hwnd, name, (0, 0, right - left, bottom - top))
             self._log(f"[Macro] Saved a screenshot for troubleshooting: {path}")
+            return path
         except Exception as exc:
             self._log(f"[Macro] Couldn't save a debug screenshot: {exc}")
+            return None
 
     def _run_battle_blocks_tick(self, hwnd, stop_event: threading.Event, battle_blocks: list, first_repeat: bool,
                                   macro_name: str = None) -> None:
@@ -1881,31 +1894,49 @@ class MacroRunner:
         why = "Roblox's own Reconnect/Retry prompt appeared" if reason == "disconnected" \
             else f"the teleport was stuck for over {TELEPORT_STUCK_TIMEOUT:.0f}s"
         self._log(f"[Macro] Disconnected from Roblox ({why}) -- attempting to rejoin.")
-        self._save_debug_screenshot_unconditional(hwnd, "teleport_disconnected")
-        self._send_disconnect_webhook(webhook, task, why)
+        screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "teleport_disconnected")
+        self._send_event_webhook(webhook, task, "Disconnected -- Rejoining",
+                                   f"{why.capitalize()}. Attempting to rejoin via deep link.",
+                                   0xE8935A, screenshot_path)
         self._attempt_rejoin(hwnd, stop_event)
 
-    def _send_disconnect_webhook(self, webhook: dict, task: dict, why: str) -> None:
+    def _send_event_webhook(self, webhook: dict, task: dict, title: str, description: str, color: int,
+                              screenshot_path: str = None, extra_fields: list = None) -> None:
+        """Shared by every "worth a Discord ping" runner event that ISN'T a
+        Victory/Defeat result (see _send_result_webhook for that one) --
+        disconnects, a Restart Game, a Start Game click that never actually
+        registered, a task finally giving up after every recovery attempt.
+        Reuses the same task-result webhook config (url/enabled/mention/
+        silent) rather than a second separate webhook, and attaches a
+        screenshot via webhook.send_file when one's given so these read as
+        "here's what was actually on screen", not just a line of text."""
         url = (webhook or {}).get("url")
         if not url or not webhook.get("enabled"):
             return
         from . import webhook as webhook_module
+        fields = [{"name": "Map", "value": (task or {}).get("map") or "-", "inline": True}]
+        if extra_fields:
+            fields.extend(extra_fields)
         embed = {
-            "title": "Disconnected -- Rejoining",
-            "description": f"{why.capitalize()}. Attempting to rejoin via deep link.",
-            "color": 0xE8935A,
-            "fields": [{"name": "Map", "value": (task or {}).get("map") or "-", "inline": True}],
+            "title": title,
+            "description": description,
+            "color": color,
+            "fields": fields,
             "footer": {"text": "Cream's Macro | Anime Expeditions"},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         mention_id = (webhook or {}).get("mention_id")
         content = f"<@{mention_id}>" if mention_id else ""
+        silent = bool(webhook.get("silent"))
         try:
-            result = webhook_module.send(url, embed, content=content, silent=bool(webhook.get("silent")))
+            if screenshot_path:
+                result = webhook_module.send_file(url, embed, screenshot_path, content=content, silent=silent)
+            else:
+                result = webhook_module.send(url, embed, content=content, silent=silent)
             if not result.get("ok"):
-                self._log(f"[Macro] Disconnect webhook send failed: {result.get('reason')}")
+                self._log(f'[Macro] "{title}" webhook send failed: {result.get("reason")}')
         except Exception as exc:
-            self._log(f"[Macro] Disconnect webhook send failed: {exc}")
+            self._log(f'[Macro] "{title}" webhook send failed: {exc}')
 
     def _attempt_rejoin(self, hwnd, stop_event: threading.Event) -> bool:
         """Launches the Roblox deep link and waits for the lobby (nav_play)
@@ -2218,7 +2249,8 @@ class MacroRunner:
         self._log(f"[Macro] Closing Settings.{suffix}")
         vision.click_match(self._mouse, hwnd, settings_match)
 
-    def _start_game_or_reset_via_settings(self, hwnd, stop_event: threading.Event, play_mode: str = "solo") -> bool:
+    def _start_game_or_reset_via_settings(self, hwnd, stop_event: threading.Event, play_mode: str = "solo",
+                                            webhook: dict = None, task: dict = None) -> bool:
         # Party leadership and Auto Vote Start are both matchmaking-only
         # concepts -- Solo mode has no party at all, so there's no leader
         # to check for and nothing to reset via Settings. This used to run
@@ -2294,6 +2326,12 @@ class MacroRunner:
             return False
         if self._checkpoint(stop_event):
             return False
+
+        screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "restart_game")
+        self._send_event_webhook(
+            webhook, task, "Restarting Game",
+            "No Start Game button found (likely Auto Vote Start) -- restarting the game via Settings.",
+            0xE8935A, screenshot_path)
 
         # The restart itself may have already closed Settings on its own --
         # this is just a cleanup check, not a required step, so it's a

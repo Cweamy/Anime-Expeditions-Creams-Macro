@@ -1,7 +1,10 @@
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
+
+import requests
 
 # Any Discord client build (stable/canary/PTB) and both the current and
 # legacy API host resolve webhooks identically -- matched by suffix instead
@@ -77,4 +80,43 @@ def send(url: str, embed: dict, content: str = "", silent: bool = False) -> dict
             pass
         return {"ok": False, "reason": f"HTTP {exc.code}: {body}" if body else f"HTTP {exc.code}"}
     except (urllib.error.URLError, OSError) as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+def send_file(url: str, embed: dict, screenshot_path: str, content: str = "", silent: bool = False) -> dict:
+    """Like send(), but attaches a screenshot -- for events worth SEEING,
+    not just reading about (a stuck Start Game click, a disconnect, a task
+    finally giving up). Discord's webhook endpoint only accepts a file
+    alongside JSON as multipart/form-data (the payload as a "payload_json"
+    field, not the request body directly), which needs actual multipart
+    encoding -- urllib has no built-in support for that, hence `requests`
+    here instead of send()'s plain urllib request.
+
+    Falls back to a screenshot-less send() if the file itself can't be
+    read, rather than losing the notification entirely over a missing/
+    unreadable debug screenshot."""
+    if not url:
+        return {"ok": False, "reason": "no webhook URL configured"}
+    if not screenshot_path or not os.path.isfile(screenshot_path):
+        return send(url, embed, content=content, silent=silent)
+
+    payload = {"embeds": [embed]}
+    if content:
+        payload["content"] = content
+    if silent:
+        payload["flags"] = SUPPRESS_NOTIFICATIONS_FLAG
+    embed["image"] = {"url": f"attachment://{os.path.basename(screenshot_path)}"}
+
+    try:
+        with open(screenshot_path, "rb") as f:
+            files = {"file": (os.path.basename(screenshot_path), f, "image/png")}
+            data = {"payload_json": json.dumps(payload)}
+            resp = requests.post(url, data=data, files=files,
+                                  headers={"User-Agent": USER_AGENT}, timeout=15)
+        if 200 <= resp.status_code < 300:
+            return {"ok": True, "reason": ""}
+        return {"ok": False, "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+    except OSError as exc:
+        return {"ok": False, "reason": f"couldn't read screenshot: {exc}"}
+    except requests.RequestException as exc:
         return {"ok": False, "reason": str(exc)}
