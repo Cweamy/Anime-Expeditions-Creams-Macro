@@ -663,22 +663,16 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return False
 
-        # nav_select_stage is only WAITED on here, not clicked -- it's just
-        # confirmation the stage/difficulty pick actually landed before
-        # moving on to Start, not a button that itself needs pressing.
-        # Solo-only: matchmaking goes straight to Enter Matchmaking instead,
-        # since this doesn't reliably show up the same way for it.
+        # nav_select_stage is a confirm button that finalizes the stage/
+        # difficulty pick -- Start/Enter Matchmaking doesn't actually
+        # appear/work until it's pressed, so it needs an actual (verified,
+        # retried) click, not just a wait. Solo-only: matchmaking goes
+        # straight to Enter Matchmaking instead, since this doesn't
+        # reliably show up the same way for it.
         if task.get("play_mode") != "matchmaking":
-            self._set_status(action="Waiting for stage selection...")
-            try:
-                select_stage_match = vision.wait_for_image(
-                    hwnd, "nav_select_stage", timeout=STAGE_SCREEN_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] {exc}")
-                return False
-            if select_stage_match is None:
-                if not stop_event.is_set():
-                    self._log('[Macro] "nav_select_stage" never showed up -- stopping.')
+            self._set_status(action="Clicking Select Stage...")
+            if not self._click_and_verify_gone(hwnd, stop_event, "nav_select_stage", STAGE_SCREEN_TIMEOUT):
+                self._log('[Macro] "nav_select_stage" never showed up -- stopping.')
                 return False
         if self._checkpoint(stop_event):
             return False
