@@ -61,9 +61,6 @@ confirm.png
 include.png / exclude.png
   Used by Team Loadout application to pick Include or Exclude for
   equipment (whichever the task's template has set) after Confirm.
-  exclude.png hasn't been added yet -- until it is, an "Exclude" template
-  just logs and skips the equipment click (team/loadout itself still
-  applies fine either way).
 
 warning.png
   Optional (core.runner._wait_out_start_game_warning): if a warning popup
