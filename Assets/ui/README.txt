@@ -86,6 +86,15 @@ nav_start_game_3.png
   variants of the same button seen in practice, so that click isn't
   dependent on just one of them matching.
 
+nav_settings.png / nav_search.png / toggle_true.png / toggle_false.png /
+nav_settings_on.png
+  Used by core.runner._open_settings_search/_search_and_set_toggle to
+  open Settings, search a setting by name, and read/click its on/off
+  toggle. Shared by the Auto Vote Start reset in
+  _start_game_or_reset_via_settings and any Setting block of "toggle"
+  kind (_run_setting_block) -- same search-and-toggle mechanic either
+  way, just a different setting name/desired state.
+
 Add more <name>.png files here as new macro steps need to recognize other
 buttons/screens -- core.vision.find_image(hwnd, "<name>", ...) will pick
 up any file added under this folder automatically, no code change needed

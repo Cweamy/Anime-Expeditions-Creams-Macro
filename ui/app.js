@@ -615,6 +615,8 @@ async function loadSettingsUI() {
     document.getElementById('toggle-start-minimized').classList.toggle('on', !!s.start_minimized);
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
     if (debugScreenshotsEl) debugScreenshotsEl.classList.toggle('on', !!s.debug_screenshots);
+    const loopQueueEl = document.getElementById('toggle-loop-queue');
+    if (loopQueueEl) loopQueueEl.classList.toggle('on', !!s.loop_queue);
     applyTheme(s.theme || 'default', true);
     const scrollPowerEl = document.getElementById('story-scroll-power');
     if (scrollPowerEl) scrollPowerEl.value = s.story_scroll_power ?? 3;
@@ -1450,8 +1452,8 @@ const BLOCK_TYPES = {
   walk:               { label: 'Walk',              group: 'Pathing', color: 'var(--teal)', params: [] },
   wait_ms:            { label: 'Wait (ms)',         group: 'Timing', color: 'var(--amber)', params: [{ key: 'ms', type: 'number', placeholder: 'ms', default: 500 }] },
   wait_wave:          { label: 'Wait for Wave',     group: 'Timing', color: 'var(--amber)', params: [{ key: 'wave', type: 'number', placeholder: 'wave', default: 1 }] },
-  // Value's meaning depends on kind (hotkey: a key name, toggle: 'on'/'off',
-  // slider: 0-2) -- one variable-shape control instead of three near-
+  // Value's meaning depends on kind (hotkey: a typed key spec like "hold w",
+  // toggle: 'on'/'off') -- one variable-shape control instead of two near-
   // identical block types, see renderSettingControls().
   setting_change:     { label: 'Setting',           group: 'Setup',  color: 'var(--slate)', params: [{ key: 'name', type: 'text', placeholder: 'setting name', default: '' }] },
 };
@@ -1463,7 +1465,7 @@ const PHASES = ['prestart', 'battle'];
 const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle' };
 const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat' };
 const PHASE_ALLOWED = {
-  prestart: ['place_unit', 'setting_change'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit'],
   battle: Object.keys(BLOCK_TYPES),
 };
 
@@ -1499,7 +1501,7 @@ function addBlock(type, phase, atIndex) {
   const def = BLOCK_TYPES[type];
   if (!def) return;
   if (!PHASE_ALLOWED[phase].includes(type)) {
-    addLog(`[Creation] Only Place Unit and Setting blocks can go in Pre Start -- "${def.label}" belongs in Battle.`);
+    addLog(`[Creation] Only Place Unit, Setting, and Auto Upgrade Unit blocks can go in Pre Start -- "${def.label}" belongs in Battle.`);
     return;
   }
   const params = {};
@@ -1799,17 +1801,15 @@ function renderParamInput(b, p) {
            oninput="updateBlockParam('${b.id}', '${p.key}', this.value)">`;
 }
 
-// Setting block: the value control's shape follows `kind` -- a key-capture
-// button, an On/Off toggle, or a 0-2 slider -- so this can't be expressed as
-// one of the static `params` field types renderParamInput handles. Place
-// Unit's hotkey field shares the same capture mechanism (see
-// startBlockHotkeyCapture below), just writing to a different block field.
+// Setting block: the value control's shape follows `kind` -- a typed custom
+// key spec, or an On/Off toggle -- so this can't be expressed as one of the
+// static `params` field types renderParamInput handles.
 function setSettingKind(id, kind) {
   const loc = findBlockLocation(id);
   if (!loc) return;
   const b = creationPhases[loc.phase][loc.idx];
   b.kind = kind;
-  b.value = kind === 'toggle' ? 'off' : kind === 'slider' ? 0 : '';
+  b.value = kind === 'toggle' ? 'off' : '';
   renderPhases();
 }
 
@@ -1818,13 +1818,12 @@ function setSettingValue(id, value) {
   if (loc) creationPhases[loc.phase][loc.idx].value = value;
 }
 
-// Generic block-field hotkey capture -- {blockId, field} says which block
-// and which of its fields ('value' for a Setting block set to Hotkey,
-// 'hotkey' for a Place Unit block) the next keypress writes into. Shares
-// mapKeyName() with the global Settings > Hotkeys capture (see
-// startRebind()'s keydown listener) so a captured key reads the same way
-// everywhere, but is a no-op whenever nothing is capturing, so it never
-// fights that other listener over the same keypress.
+// Place Unit's hotkey field still uses real key-CAPTURE (press a key, it's
+// bound) -- {blockId, field} says which block/field the next keypress
+// writes into. Shares mapKeyName() with the global Settings > Hotkeys
+// capture (see startRebind()'s keydown listener), but is a no-op whenever
+// nothing is capturing, so it never fights that other listener over the
+// same keypress.
 let capturingHotkeyTarget = null;
 
 function startBlockHotkeyCapture(blockId, field, btn) {
@@ -1850,25 +1849,17 @@ function renderSettingControls(b) {
     <select class="block-input" style="width:auto;" onchange="setSettingKind('${b.id}', this.value)">
       <option value="hotkey" ${b.kind === 'hotkey' ? 'selected' : ''}>Hotkey</option>
       <option value="toggle" ${b.kind === 'toggle' ? 'selected' : ''}>Toggle</option>
-      <option value="slider" ${b.kind === 'slider' ? 'selected' : ''}>Slider</option>
     </select>`;
 
   if (b.kind === 'hotkey') {
-    return kindSel + `<button type="button" class="keybind-btn" onclick="startBlockHotkeyCapture('${b.id}', 'value', this)">${b.value ? b.value.toUpperCase() : 'Click to set'}</button>`;
-  }
-  if (b.kind === 'slider') {
-    const v = b.value ?? 0;
-    // The readout is a real number input, not a label -- click it and type
-    // an exact value instead of only being able to drag the (0.1-step,
-    // fiddly-by-drag) range thumb to it.
+    // A typed spec, not a captured keypress -- lets a Setting block send a
+    // key the game needs HELD (e.g. "hold w" to walk, or "hold w 800ms" for
+    // an exact duration) instead of only a single tap. core.keys.py's
+    // blacklist rejects Windows/Meta-style names server-side regardless of
+    // what's typed here.
     return kindSel + `
-      <div class="setting-slider-group">
-        <input type="range" min="0" max="2" step="0.1" value="${v}" class="setting-slider"
-               oninput="setSettingValue('${b.id}', this.value); this.nextElementSibling.value = this.value">
-        <input type="number" min="0" max="2" step="0.1" value="${v}" class="setting-slider-val"
-               onclick="event.stopPropagation()"
-               onchange="setSettingValue('${b.id}', this.value); this.previousElementSibling.value = this.value">
-      </div>`;
+      <input class="block-input" type="text" value="${b.value || ''}" placeholder="e.g. w, hold w, hold w 800ms"
+             onchange="setSettingValue('${b.id}', this.value)" onclick="event.stopPropagation()">`;
   }
   return kindSel + `
     <div class="seg-toggle" style="width: auto;">
@@ -2365,7 +2356,7 @@ function renderPhases() {
   el.innerHTML = PHASES.map(phase => {
     const blocks = creationPhases[phase];
     const emptyText = phase === 'prestart'
-      ? 'Drag Place Unit or Setting blocks here -- only those are possible before the match starts.'
+      ? 'Drag Place Unit, Setting, or Auto Upgrade Unit blocks here -- only those are possible before the match starts.'
       : 'Drag blocks here -- upgrades, sells, waits, anything goes mid-battle.';
     const emptyDiv = `<div class="text-xs text-center" style="color: var(--text-muted); padding: 16px 0;">${emptyText}</div>`;
     // In Pre Start only Setting blocks sit above Walk Path (a setting that
@@ -2556,8 +2547,11 @@ async function refreshTemplateList() {
 function blockFromSaved(b) {
   const block = { id: newBlockId(), type: b.type, params: b.params, once: !!b.once };
   if (b.type === 'setting_change') {
-    block.kind = b.kind || 'toggle';
-    block.value = b.value !== undefined ? b.value : (block.kind === 'slider' ? 0 : 'off');
+    // "slider" was removed as a kind -- a template saved before that still
+    // carrying one migrates to Toggle/Off rather than rendering a kind the
+    // picker no longer offers.
+    block.kind = b.kind === 'slider' ? 'toggle' : (b.kind || 'toggle');
+    block.value = b.value !== undefined && b.kind !== 'slider' ? b.value : (block.kind === 'toggle' ? 'off' : '');
   }
   if (b.type === 'place_unit') {
     block.hotkey = b.hotkey || '';

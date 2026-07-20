@@ -266,7 +266,8 @@ class MacroRunner:
 
     def start(self, hwnd_getter, get_tasks, scroll_power: int = None, coords: dict = None,
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
-              reward_region: dict = None, stats_region: dict = None, webhook: dict = None) -> dict:
+              reward_region: dict = None, stats_region: dict = None, webhook: dict = None,
+              loop_queue: bool = False) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -278,7 +279,7 @@ class MacroRunner:
         self._thread = threading.Thread(
             target=self._run,
             args=(hwnd_getter, get_tasks, self._stop_event, scroll_power, coords, scroll_nudges, default_walk_paths,
-                  reward_region, stats_region, webhook),
+                  reward_region, stats_region, webhook, bool(loop_queue)),
             daemon=True)
         self._thread.start()
         return {"ok": True}
@@ -354,17 +355,13 @@ class MacroRunner:
 
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,
-              reward_region: dict = None, stats_region: dict = None, webhook: dict = None) -> None:
+              reward_region: dict = None, stats_region: dict = None, webhook: dict = None,
+              loop_queue: bool = False) -> None:
         coords = {**DEFAULT_COORDS, **(coords or {})}
         default_walk_paths = default_walk_paths or {}
         reward_region = reward_region or DEFAULT_REWARD_REGION
         stats_region = stats_region or DEFAULT_STATS_REGION
         webhook = webhook or {}
-        tasks = get_tasks()
-        if not tasks:
-            self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
-            self._set_status(action="Idle")
-            return
 
         hwnd = hwnd_getter()
         if not hwnd or not wm.is_window(hwnd):
@@ -373,8 +370,6 @@ class MacroRunner:
             return
         self._current_hwnd = hwnd
 
-        self._log(f"[Macro] Starting run -- {len(tasks)} task(s) queued.")
-
         # A click has to actually reach the game, not this panel -- same
         # focus-fix every other live-input action in this app uses.
         wm.show_window(hwnd)
@@ -382,26 +377,50 @@ class MacroRunner:
             self._log("[Macro] Couldn't confirm Roblox actually took focus -- clicks may not register "
                        "until it does. Continuing anyway.")
 
-        for task_index, task in enumerate(tasks, start=1):
-            if self._checkpoint(stop_event):
-                return
-
-            map_name = task.get("map")
-            if not map_name:
-                self._log(f"[Macro] Task {task_index}/{len(tasks)} has no map set -- skipping it.")
-                continue
-
-            # A mid-task failure (a stuck battle, a missed click, ...)
-            # doesn't kill the whole overnight run -- _run_task recovers to
-            # the lobby and retries internally, only returning False when
-            # stop_event actually fired.
-            if not self._run_task(hwnd, stop_event, task, task_index, len(tasks), coords, scroll_power,
-                                    scroll_nudges, default_walk_paths, reward_region, stats_region, webhook):
+        loop_pass = 1
+        while True:
+            # Re-read the queue every pass instead of once up front -- with
+            # Loop Queue on, a run can sit going for hours, and the user may
+            # edit the Task screen (add/remove/reorder) between passes
+            # expecting the NEXT pass to pick up their changes rather than
+            # keep replaying a stale snapshot from when the run started.
+            tasks = get_tasks()
+            if not tasks:
+                self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
                 self._set_status(action="Idle")
                 return
 
-        self._log("[Macro] Task queue finished -- all tasks complete.")
-        self._set_status(current_task="-", current_repeat="-", map="-", action="Idle")
+            if loop_pass == 1:
+                self._log(f"[Macro] Starting run -- {len(tasks)} task(s) queued.")
+            else:
+                self._log(f"[Macro] Loop Queue: restarting from task 1 (pass {loop_pass}).")
+
+            for task_index, task in enumerate(tasks, start=1):
+                if self._checkpoint(stop_event):
+                    return
+
+                map_name = task.get("map")
+                if not map_name:
+                    self._log(f"[Macro] Task {task_index}/{len(tasks)} has no map set -- skipping it.")
+                    continue
+
+                # A mid-task failure (a stuck battle, a missed click, ...)
+                # doesn't kill the whole overnight run -- _run_task recovers to
+                # the lobby and retries internally, only returning False when
+                # stop_event actually fired.
+                if not self._run_task(hwnd, stop_event, task, task_index, len(tasks), coords, scroll_power,
+                                        scroll_nudges, default_walk_paths, reward_region, stats_region, webhook):
+                    self._set_status(action="Idle")
+                    return
+
+            if not loop_queue:
+                self._log("[Macro] Task queue finished -- all tasks complete.")
+                self._set_status(current_task="-", current_repeat="-", map="-", action="Idle")
+                return
+
+            if self._checkpoint(stop_event):
+                return
+            loop_pass += 1
 
     def _run_task(self, hwnd, stop_event: threading.Event, task: dict, task_index: int, task_count: int,
                    coords: dict, scroll_power: int, scroll_nudges: int, default_walk_paths: dict,
@@ -768,6 +787,10 @@ class MacroRunner:
                 self._battle_block_state = {}
             elif btype == "wait_wave":
                 done = self._run_wait_wave_tick(hwnd, block, self._battle_block_index + 1)
+            elif btype == "setting_change":
+                self._run_setting_block(hwnd, stop_event, block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
             else:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
                            f'("{btype}") -- not runnable in Battle yet.')
@@ -1481,7 +1504,9 @@ class MacroRunner:
             if btype == "place_unit":
                 self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name, self._last_unit_ordinal)
             elif btype == "setting_change":
-                self._run_setting_block(block, i)
+                self._run_setting_block(hwnd, stop_event, block, i)
+            elif btype == "auto_upgrade_unit":
+                self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, i)
             else:
                 self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
             time.sleep(0.2)  # brief gap between blocks so the game UI can settle
@@ -1629,23 +1654,81 @@ class MacroRunner:
         tpl.save_template(macro_name, blocks)
         self._log(f'[Macro] Saved corrected position for "{unit_name}" back into template "{macro_name}".')
 
-    def _run_setting_block(self, block: dict, index: int) -> None:
+    # Windows/Meta-style keys are blocked from the Setting block's custom
+    # hotkey box -- letting a macro send these could minimize the game,
+    # open the Start menu, or otherwise yank focus/input away from Roblox
+    # entirely, which no in-game "setting" should ever be able to do.
+    _BLACKLISTED_KEY_NAMES = {"win", "meta", "windows", "lwin", "rwin", "super", "cmd", "command"}
+    _CUSTOM_KEY_DEFAULT_HOLD_MS = 500
+
+    def _parse_custom_key_spec(self, text: str):
+        """Parses a Setting block's custom-key text box (see
+        _run_setting_block's "hotkey" kind) into (vk, hold_seconds).
+        Supported syntax: "w" (a plain tap), "hold w" (held for
+        _CUSTOM_KEY_DEFAULT_HOLD_MS), "hold w 800ms" (held for an explicit
+        duration). Returns None for empty/blacklisted/unrecognized input so
+        a bad spec is a logged skip, never a crash mid-run."""
+        text = (text or "").strip().lower()
+        if not text:
+            return None
+        parts = text.split()
+
+        hold_seconds = None
+        if parts[0] == "hold" and len(parts) >= 2:
+            key_name = parts[1]
+            hold_seconds = self._CUSTOM_KEY_DEFAULT_HOLD_MS / 1000.0
+            if len(parts) >= 3 and parts[2].endswith("ms"):
+                try:
+                    hold_seconds = int(parts[2][:-2]) / 1000.0
+                except ValueError:
+                    pass  # keep the default rather than fail the whole spec over a bad number
+        else:
+            key_name = parts[0]
+
+        if key_name in self._BLACKLISTED_KEY_NAMES:
+            return None
+        vk = keys.key_name_to_vk(key_name)
+        if vk is None:
+            return None
+        return (vk, hold_seconds)
+
+    def _run_setting_block(self, hwnd, stop_event: threading.Event, block: dict, index: int) -> None:
         name = (block.get("params") or {}).get("name") or f"#{index}"
         kind = block.get("kind")
-        if kind != "hotkey":
-            # Toggle/slider Setting blocks record a value to plan around
-            # (On/Off, 0-2) but never actually captured a key for it -- there's
-            # nothing to press for those yet, only Hotkey-kind blocks are.
-            self._log(f'[Macro] Setting "{name}" ({kind or "?"}) has no hotkey to press yet -- skipping.')
-            return
         value = block.get("value")
-        vk = keys.key_name_to_vk(value)
-        if vk is None:
-            self._log(f'[Macro] Setting "{name}": no hotkey captured yet -- skipping.')
+
+        if kind == "toggle":
+            desired_on = str(value).lower() in ("on", "true", "1", "yes")
+            self._set_status(action=f'Setting "{name}"...')
+            search_box_pos = self._open_settings_search(hwnd, stop_event)
+            if search_box_pos is None:
+                self._log(f'[Macro] Setting "{name}": couldn\'t open Settings -- skipping.')
+                return
+            if self._checkpoint(stop_event):
+                return
+            self._search_and_set_toggle(hwnd, stop_event, search_box_pos, name, desired_on)
+            if self._checkpoint(stop_event):
+                return
+            self._close_settings_if_open(hwnd, stop_event)
             return
-        self._set_status(action=f'Setting "{name}"...')
-        self._log(f'[Macro] Setting "{name}": pressing hotkey "{value}".')
-        self._keyboard.tap(vk)
+
+        if kind == "hotkey":
+            parsed = self._parse_custom_key_spec(value)
+            if parsed is None:
+                self._log(f'[Macro] Setting "{name}": custom key "{value}" is blacklisted or unrecognized -- '
+                           f'skipping.')
+                return
+            vk, hold_seconds = parsed
+            self._set_status(action=f'Setting "{name}"...')
+            if hold_seconds is not None:
+                self._log(f'[Macro] Setting "{name}": holding "{value}" for {hold_seconds * 1000:.0f}ms.')
+                self._keyboard.tap(vk, hold=hold_seconds)
+            else:
+                self._log(f'[Macro] Setting "{name}": pressing "{value}".')
+                self._keyboard.tap(vk)
+            return
+
+        self._log(f'[Macro] Setting "{name}" ({kind or "?"}) -- unsupported kind, skipping.')
 
     def _wait_teleport_in(self, hwnd, stop_event: threading.Event) -> bool:
         # nav_unitmanager only renders once you're actually in the match (not
@@ -1840,6 +1923,104 @@ class MacroRunner:
             time.sleep(WARNING_POLL_INTERVAL)
         self._log("[Macro] Warning didn't clear (or Start Game didn't show up) in time -- continuing anyway.")
 
+    def _open_settings_search(self, hwnd, stop_event: threading.Event):
+        """Opens Settings and clicks its search box. Returns the search
+        box's screen position (reusable for as many searches as needed --
+        the box itself never moves once found, so later callers don't need
+        a second image search against a panel that's since reflowed around
+        whatever the first search changed), or None if Settings/the search
+        box couldn't be found at all."""
+        if not self._click_found_image(hwnd, "nav_settings", NAV_CLICK_TIMEOUT, stop_event):
+            return None
+        if self._checkpoint(stop_event):
+            return None
+        # The Settings panel opens with a scale/slide-in animation -- without
+        # this, nav_search can get matched (even at a perfect 1.00 score)
+        # against a mid-animation frame, whose search box isn't at its final
+        # settled position yet. The click then lands wherever that transient
+        # frame put it instead of where the box actually ends up, missing it
+        # entirely. SETTLE_DELAY is comfortably longer than the animation.
+        time.sleep(SETTLE_DELAY)
+        search_match = self._click_found_image(hwnd, "nav_search", NAV_CLICK_TIMEOUT, stop_event)
+        if not search_match:
+            return None
+        if self._checkpoint(stop_event):
+            return None
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        return (left + search_match["cx"], top + search_match["cy"])
+
+    def _search_and_set_toggle(self, hwnd, stop_event: threading.Event, search_box_pos, setting_name: str,
+                                 desired_on: bool) -> bool:
+        """Types setting_name into an already-open Settings search box
+        (see _open_settings_search) and clicks its toggle if it isn't
+        already in the desired on/off state. Shared by the Auto Vote Start
+        handling below and any Setting block of "toggle" kind (see
+        _run_setting_block) -- same search-and-toggle mechanic either way,
+        just a different setting name/desired state. Returns whether the
+        setting's toggle was found at all (not whether a click happened --
+        already being in the right state is also success)."""
+        self._set_status(action=f'Searching settings for "{setting_name}"...')
+        self._log(f'[Macro] Typing "{setting_name}"...')
+        self._mouse.click(*search_box_pos)
+        time.sleep(0.2)  # let the search field actually take focus before typing
+        self._keyboard.combo(keys.VK_CONTROL, ord("A"))  # select any existing search text...
+        self._keyboard.tap(keys.VK_DELETE)                # ...and clear it before typing this search
+        self._keyboard.type_text(setting_name)
+        time.sleep(SETTLE_DELAY)  # let the filtered settings list render before reading its toggle
+        if self._checkpoint(stop_event):
+            return False
+
+        try:
+            on_match = vision.find_image(hwnd, "toggle_true")
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] {exc}")
+            return False
+        is_on = on_match is not None
+
+        if is_on == desired_on:
+            self._log(f'[Macro] "{setting_name}" already {"on" if desired_on else "off"} -- nothing to click.')
+            return True
+
+        # Not in the desired state -- toggle_true/toggle_false share the
+        # same click target either way (clicking the switch flips it), so
+        # whichever of the two actually matched is what gets clicked.
+        toggle_match = on_match
+        if toggle_match is None:
+            try:
+                toggle_match = vision.find_image(hwnd, "toggle_false")
+            except vision.TemplateNotFound as exc:
+                self._log(f"[Macro] {exc}")
+                return False
+        if toggle_match is None:
+            self._log(f'[Macro] "{setting_name}" not found in Settings -- skipping.')
+            return False
+        debug_path = self._debug_save(hwnd, "toggle_true" if is_on else "toggle_false", toggle_match)
+        suffix = f" Debug: {debug_path}" if debug_path else ""
+        self._log(f'[Macro] "{setting_name}" is {"on" if is_on else "off"} -- '
+                   f'turning it {"off" if is_on else "on"}.{suffix}')
+        vision.click_match(self._mouse, hwnd, toggle_match)
+        return True
+
+    def _close_settings_if_open(self, hwnd, stop_event: threading.Event) -> None:
+        """One-shot cleanup shared by anything that opened Settings via
+        _open_settings_search and is done with it -- a look, not a wait,
+        since not finding it open is success too (some flows, like a
+        Restart Game confirm, can already close Settings on their own)."""
+        time.sleep(SETTLE_DELAY)
+        if self._checkpoint(stop_event):
+            return
+        try:
+            settings_match = vision.find_image(hwnd, "nav_settings_on")
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] {exc}")
+            return
+        if settings_match is None:
+            return
+        debug_path = self._debug_save(hwnd, "nav_settings_on", settings_match)
+        suffix = f" Debug: {debug_path}" if debug_path else ""
+        self._log(f"[Macro] Closing Settings.{suffix}")
+        vision.click_match(self._mouse, hwnd, settings_match)
+
     def _start_game_or_reset_via_settings(self, hwnd, stop_event: threading.Event, play_mode: str = "solo") -> bool:
         # Party leadership and Auto Vote Start are both matchmaking-only
         # concepts -- Solo mode has no party at all, so there's no leader
@@ -1879,53 +2060,13 @@ class MacroRunner:
                    "being the party leader. Please disable Auto Vote Start in Settings if this keeps "
                    "happening -- checking/disabling it now so the round doesn't start before Pre Start runs.")
         self._set_status(action="Opening Settings for Auto Vote Start...")
-        if not self._click_found_image(hwnd, "nav_settings", NAV_CLICK_TIMEOUT, stop_event):
+        search_box_pos = self._open_settings_search(hwnd, stop_event)
+        if search_box_pos is None:
             return False
-        if self._checkpoint(stop_event):
-            return False
-        # The Settings panel opens with a scale/slide-in animation -- without
-        # this, nav_search can get matched (even at a perfect 1.00 score)
-        # against a mid-animation frame, whose search box isn't at its final
-        # settled position yet. The click then lands wherever that transient
-        # frame put it instead of where the box actually ends up, missing it
-        # entirely. SETTLE_DELAY is comfortably longer than the animation.
-        time.sleep(SETTLE_DELAY)
-        search_match = self._click_found_image(hwnd, "nav_search", NAV_CLICK_TIMEOUT, stop_event)
-        if not search_match:
-            return False
-        if self._checkpoint(stop_event):
-            return False
-        # Saved so the search box can be clicked back into later (see the
-        # "restart game" search below) WITHOUT a second image search -- once
-        # the list is filtered and a toggle's been clicked, the panel has
-        # reflowed around that, and re-matching nav_search's image against
-        # that changed layout is exactly the kind of transitional-frame risk
-        # SETTLE_DELAY exists to dodge in the first place. The box itself
-        # doesn't move, so its position from the very first click is
-        # already good for every future search.
-        left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        search_box_pos = (left + search_match["cx"], top + search_match["cy"])
-
-        self._set_status(action='Searching settings for "Auto Vote Start"...')
-        self._log('[Macro] Typing "Auto Vote Start"...')
-        time.sleep(0.2)  # let the search field actually take focus before typing
-        self._keyboard.type_text("Auto Vote Start")
-        time.sleep(SETTLE_DELAY)  # let the filtered settings list render before reading its toggle
         if self._checkpoint(stop_event):
             return False
 
-        try:
-            toggle_match = vision.find_image(hwnd, "toggle_true")
-        except vision.TemplateNotFound as exc:
-            self._log(f"[Macro] {exc}")
-            toggle_match = None
-        if toggle_match is not None:
-            debug_path = self._debug_save(hwnd, "toggle_true", toggle_match)
-            suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Auto Vote Start is on (score {toggle_match['score']:.2f}) -- turning it off.{suffix}")
-            vision.click_match(self._mouse, hwnd, toggle_match)
-        else:
-            self._log("[Macro] Auto Vote Start already off -- nothing to click.")
+        self._search_and_set_toggle(hwnd, stop_event, search_box_pos, "Auto Vote Start", desired_on=False)
         if self._checkpoint(stop_event):
             return False
 

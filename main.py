@@ -314,6 +314,7 @@ class Api:
             "story_scroll_power": data.get("story_scroll_power", 3),
             "story_scroll_nudges": data.get("story_scroll_nudges", 8),
             "debug_screenshots": data.get("debug_screenshots", False),
+            "loop_queue": data.get("loop_queue", False),
         }
 
     def get_tasks(self) -> list:
@@ -390,9 +391,10 @@ class Api:
         reward_region = self.get_reward_region()
         stats_region = self.get_stats_region()
         webhook_settings = self.get_webhook_settings()
+        loop_queue = data.get("loop_queue", False)
         return self.runner.start(
             lambda: self.game_hwnd, self.get_tasks, scroll_power, coords, scroll_nudges, debug_screenshots,
-            default_walk_paths, reward_region, stats_region, webhook_settings)
+            default_walk_paths, reward_region, stats_region, webhook_settings, loop_queue)
 
     def debug_story_map_region(self) -> dict:
         # Settings > Debug > "Story Map Region": saves exactly the band
