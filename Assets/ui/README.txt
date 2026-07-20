@@ -54,6 +54,17 @@ team.png
   After pressing H, the runner waits for this to confirm the team-select
   panel actually opened, then clicks it before picking a Loadout row.
 
+confirm.png
+  Used by Team Loadout application, right after clicking a Loadout row --
+  confirms the choice before moving on to the equipment pick.
+
+include.png / exclude.png
+  Used by Team Loadout application to pick Include or Exclude for
+  equipment (whichever the task's template has set) after Confirm.
+  exclude.png hasn't been added yet -- until it is, an "Exclude" template
+  just logs and skips the equipment click (team/loadout itself still
+  applies fine either way).
+
 warning.png
   Optional (core.runner._wait_out_start_game_warning): if a warning popup
   is blocking Start Game right after Pre Start finishes, the runner waits

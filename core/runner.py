@@ -1285,12 +1285,14 @@ class MacroRunner:
 
     def _apply_team_loadout(self, hwnd, stop_event: threading.Event, task: dict) -> None:
         """Presses H to open the team-select panel, waits for it to
-        actually open, then clicks the task's Macro Operation template's
+        actually open, clicks the task's Macro Operation template's
         configured Team Loadout slot (1-8 in Creation's picker, though only
         1-3 are positioned here -- 4+ need a scroll method not implemented
-        yet). Best-effort like every other Pre Start step: no team set, an
-        out-of-range slot, or the panel never opening all just skip with a
-        log line instead of failing the run."""
+        yet), clicks Confirm, picks Include/Exclude for equipment, then
+        presses H again to close the panel. Best-effort like every other
+        Pre Start step: no team set, an out-of-range slot, or any of the
+        expected images never showing up all just skip (the rest of the
+        sequence included) with a log line instead of failing the run."""
         macro_name = task.get("macro")
         if not macro_name:
             return
@@ -1302,6 +1304,7 @@ class MacroRunner:
         team = blocks.get("team") or ""
         if not team:
             return
+        equipment = blocks.get("equipment") if blocks.get("equipment") in ("include", "exclude") else "include"
 
         try:
             team_num = int(team)
@@ -1313,7 +1316,7 @@ class MacroRunner:
                        f'{TEAM_LOADOUT_MAX_SUPPORTED} are positioned so far) -- skipping.')
             return
 
-        self._log(f"[Macro] Applying Team Loadout {team_num}...")
+        self._log(f"[Macro] Applying Team Loadout {team_num} (equipment: {equipment})...")
         self._set_status(action=f"Applying Team Loadout {team_num}...")
         self._keyboard.tap(ord("H"))
 
@@ -1334,6 +1337,42 @@ class MacroRunner:
         row_y = TEAM_LOADOUT_CLICK_1[1] + (team_num - 1) * TEAM_LOADOUT_ROW_HEIGHT
         self._mouse.click(left + TEAM_LOADOUT_CLICK_1[0], top + row_y)
         self._log(f"[Macro] Clicked Loadout {team_num}.")
+        if self._checkpoint(stop_event):
+            return
+
+        try:
+            confirm_match = vision.wait_for_image(hwnd, "confirm", timeout=TEAM_PANEL_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't confirm the Loadout Confirm button appeared: {exc}")
+            return
+        if confirm_match is None:
+            if not stop_event.is_set():
+                self._log('[Macro] Confirm button never showed up -- stopping Team Loadout here.')
+            return
+        vision.click_match(self._mouse, hwnd, confirm_match)
+        self._log("[Macro] Clicked Confirm.")
+        if self._checkpoint(stop_event):
+            return
+
+        # Whichever of include.png/exclude.png matches the configured
+        # choice -- optional like nav_disband and friends: if that specific
+        # image hasn't been added yet, this just logs and moves on to
+        # closing the panel instead of failing the whole sequence over it.
+        try:
+            equip_match = vision.wait_for_image(hwnd, equipment, timeout=TEAM_PANEL_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound:
+            equip_match = None
+            self._log(f'[Macro] No Assets/ui/{equipment}.png yet -- skipping the equipment choice.')
+        if equip_match is not None:
+            vision.click_match(self._mouse, hwnd, equip_match)
+            self._log(f"[Macro] Equipment: {equipment}.")
+        elif not stop_event.is_set():
+            self._log(f'[Macro] "{equipment}" option never showed up -- skipping the equipment choice.')
+        if self._checkpoint(stop_event):
+            return
+
+        self._keyboard.tap(ord("H"))
+        self._log("[Macro] Closed the Team Loadout panel.")
 
     def _run_prestart_blocks(self, hwnd, stop_event: threading.Event, task: dict, first_repeat: bool = True) -> None:
         # The task's Macro Operation (Creation > template) is what actually
