@@ -84,7 +84,7 @@ jobs:
 
           EMBEDS="[]"
           while IFS= read -r sha; do
-            [ -z "$sha" ] && continue
+            if [ -z "$sha" ]; then continue; fi
             MSG=$(git log -1 --format='%s' "$sha" | head -c 200)
             SHORT=$(git rev-parse --short "$sha")
             AUTHOR=$(git log -1 --format='%an' "$sha")
@@ -95,4 +95,15 @@ jobs:
           COUNT=$(echo "$COMMIT_SHAS" | grep -c .)
           CONTENT="$EMOJI **$COUNT commit(s) pushed to main**"
           PAYLOAD=$(jq -n --arg content "$CONTENT" --argjson embeds "$EMBEDS" '{content: $content, embeds: $embeds}')
-          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_GIT_LOGS_WEBHOOK" >/dev/null
+          # -w/-o instead of the old -s ...>/dev/null: a bad payload used to
+          # fail completely silently (curl itself still exits 0 on an HTTP
+          # error without -f), which is exactly how this went unnoticed
+          # before -- print the actual response so a future failure shows
+          # up in the Actions log instead of just "nothing happened".
+          HTTP_STATUS=$(curl -s -o /tmp/discord_response.txt -w '%{http_code}' \
+            -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_GIT_LOGS_WEBHOOK")
+          echo "Discord response: HTTP $HTTP_STATUS"
+          cat /tmp/discord_response.txt
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::warning::Discord git-log webhook returned HTTP $HTTP_STATUS -- see response body above."
+          fi
