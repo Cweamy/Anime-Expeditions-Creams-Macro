@@ -936,6 +936,39 @@
     </div>
   </div>
 
+  <!-- Shown once at startup when Windows display scale isn't 100% (see
+       main._launch_ui / core.window.get_display_scale_percent) -- every
+       fixed click/search coordinate in core/runner.py was captured at
+       100% scale, so a different scale is a common, hard-to-diagnose
+       cause of clicks/detection landing slightly off. -->
+  <div id="scale-warning-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) dismissScaleWarning()">
+    <div class="modal-panel" style="max-width: 380px;">
+      <div class="modal-head">
+        <span class="modal-title">Display Scale Warning</span>
+        <span class="modal-close" onclick="dismissScaleWarning()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 10px;">
+          Your Windows display scale is <b id="scale-warning-percent" style="color: var(--rose);">-</b>, not 100%.
+          Every click/search position this macro uses was captured at 100% scale, so anything else is a common
+          cause of clicks landing slightly wrong or buttons not being found.
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+          <b>Fix:</b> Windows Settings &gt; System &gt; Display &gt; Scale &mdash; set it to <b>100%</b>, then restart the macro.
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted);">
+          If clicks/detection are still off after that, also try: set the game's own UI scale to <b>1x</b> (in-game
+          Settings), turn off <b>HDR</b> (Windows Settings &gt; Display), and if your monitor runs a high refresh
+          rate, try dropping it under 100Hz &mdash; some setups render color slightly differently at very high
+          refresh rates, which can throw off the macro's image matching.
+        </div>
+        <div class="flex items-center gap-2" style="justify-content: flex-end; margin-top: 14px;">
+          <button type="button" class="rp-btn rp-btn-start" style="padding: 6px 14px;" onclick="dismissScaleWarning()">Got it</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

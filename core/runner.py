@@ -577,7 +577,7 @@ class MacroRunner:
         Pre Start block so they only fire on the task's first entry into
         this stage, not on every repeat (see _run_prestart). Returns
         "win"/"loss", or None on failure/stop."""
-        if not self._start_game_or_reset_via_settings(hwnd, stop_event):
+        if not self._start_game_or_reset_via_settings(hwnd, stop_event, task.get("play_mode")):
             return None
         if self._checkpoint(stop_event):
             return None
@@ -1729,7 +1729,18 @@ class MacroRunner:
             time.sleep(WARNING_POLL_INTERVAL)
         self._log("[Macro] Warning didn't clear (or Start Game didn't show up) in time -- continuing anyway.")
 
-    def _start_game_or_reset_via_settings(self, hwnd, stop_event: threading.Event) -> bool:
+    def _start_game_or_reset_via_settings(self, hwnd, stop_event: threading.Event, play_mode: str = "solo") -> bool:
+        # Party leadership and Auto Vote Start are both matchmaking-only
+        # concepts -- Solo mode has no party at all, so there's no leader
+        # to check for and nothing to reset via Settings. This used to run
+        # unconditionally for solo too, which is exactly what produced the
+        # confusing "No Start Game button (not the party leader)" log on
+        # every solo run: there was never a party to be leader of, so the
+        # check always "failed" and fell through to the Auto Vote Start
+        # search, a setting that's entirely irrelevant to a solo run.
+        if play_mode != "matchmaking":
+            return True
+
         # Start Game only exists for the party leader -- a quick presence
         # check, not a long wait (see START_GAME_CHECK_TIMEOUT), decides
         # which of the two very different paths to take. Either way, this is
@@ -1752,7 +1763,10 @@ class MacroRunner:
                        f"Running Pre Start before pressing it.")
             return True
 
-        self._log("[Macro] No Start Game button (not the party leader) -- checking Auto Vote Start instead.")
+        self._log('[Macro] No Start Game button found -- likely because Auto Vote Start is enabled '
+                   '(it replaces the manual Start button with an auto-starting vote) rather than not '
+                   "being the party leader. Please disable Auto Vote Start in Settings if this keeps "
+                   "happening -- checking/disabling it now so the round doesn't start before Pre Start runs.")
         self._set_status(action="Opening Settings for Auto Vote Start...")
         if not self._click_found_image(hwnd, "nav_settings", NAV_CLICK_TIMEOUT, stop_event):
             return False

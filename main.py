@@ -154,6 +154,13 @@ class Api:
     def get_version(self) -> str:
         return updater.get_current_version()
 
+    def get_display_scale(self) -> dict:
+        # Dashboard's scale-warning popup (see showScaleWarning in
+        # ui/app.js) asks for this fresh rather than being passed a value
+        # up front, same push_ui-then-poll-for-details pattern as the
+        # update popup's get_update_info.
+        return {"percent": wm.get_display_scale_percent()}
+
     def get_update_info(self) -> dict:
         # Populated by a background check kicked off a few seconds after
         # launch (see _check_for_update_background) -- polled once by the
@@ -1205,8 +1212,21 @@ def _launch_ui():
     # above the wm.set_dpi_aware() call at module scope) actually took --
     # a non-100% value here with docking/clicks still landing wrong would
     # point elsewhere; still 100 despite real display scaling means it
-    # didn't take and every fixed coordinate in core.runner is off.
-    api.push_log(f"[Macro] Display scale: {wm.get_display_scale_percent()}%.")
+    # didn't take and every fixed coordinate in core.runner is off. Every
+    # fixed coordinate in core.runner was captured/tuned at 100% Windows
+    # display scale -- set_dpi_aware() makes the PROCESS report real
+    # physical pixels regardless of scale, but Windows still stretches
+    # what's actually drawn on screen at non-100%, which is a real (if
+    # smaller) source of drift set_dpi_aware() can't fix on its own. Below
+    # 100% shows a one-time warning telling the user to fix it at the
+    # source, same troubleshooting-log spirit as the DPI/focus fixes
+    # already in core.window.
+    scale = wm.get_display_scale_percent()
+    api.push_log(f"[Macro] Display scale: {scale}%.")
+    if scale != 100:
+        api.push_log(f"[Macro] Windows display scale is {scale}%, not 100% -- this is a common cause of "
+                       f"clicks/detection landing slightly wrong. See Settings > System > Display.")
+        api.push_ui("showScaleWarning")
     gui_wm = WindowManager(GUI_TITLE)
     roblox_wm = WindowManager(config.ROBLOX_WINDOW_TITLE)  # only used for its resize/client-rect helpers below
 

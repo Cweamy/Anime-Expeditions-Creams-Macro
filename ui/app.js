@@ -147,6 +147,30 @@ function dismissUpdateModal() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Display scale warning -- shown once at startup when Windows display scale
+// isn't 100% (see main._launch_ui). Every fixed click/search coordinate in
+// core/runner.py was captured at 100% scale; anything else is a common,
+// hard-to-diagnose cause of clicks/detection landing slightly wrong.
+// ---------------------------------------------------------------------------
+async function showScaleWarning() {
+  try {
+    const info = await pywebview.api.get_display_scale();
+    document.getElementById('scale-warning-percent').textContent = `${info.percent}%`;
+    document.getElementById('scale-warning-modal').style.display = 'flex';
+    // Same reasoning as showUpdateAvailable -- Roblox is a native child
+    // window that renders on top of this modal regardless of CSS z-index.
+    try { window.pywebview && pywebview.api.hide_game(); } catch (e) {}
+  } catch (e) {}
+}
+
+function dismissScaleWarning() {
+  document.getElementById('scale-warning-modal').style.display = 'none';
+  if (currentScreen === 'dashboard') {
+    try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
+  }
+}
+
 async function manualCheckForUpdate() {
   const badge = document.getElementById('ver-badge');
   const original = badge.textContent;
