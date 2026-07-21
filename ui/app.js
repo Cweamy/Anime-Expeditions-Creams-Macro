@@ -965,6 +965,56 @@ async function saveDebugScreenshot(btn) {
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1600);
 }
 
+// Settings > Debug > "Test Expedition Wave Check" -- same dance as
+// saveDebugScreenshot: switch to the Dashboard first so Roblox is actually
+// visible, let it settle, then ask Python to run one tick of
+// nav_start_game/exp_continue/exp_extract detection+clicking against
+// whatever's on screen right now. No active macro run needed -- lets you
+// tune this flow by navigating to the screen being tested in Roblox by
+// hand and pressing the button repeatedly, instead of restarting a whole
+// run every time. Result/errors are already logged on the Python side.
+async function testExpeditionWave(btn) {
+  const original = btn.textContent;
+  switchScreen('dashboard');
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  await new Promise(resolve => setTimeout(resolve, 400));
+  try {
+    const result = await pywebview.api.debug_test_expedition_wave();
+    if (!result.ok && result.reason === 'no_roblox') {
+      addLog('[Debug] Expedition wave check failed: Roblox not found.');
+    }
+    btn.textContent = result.ok ? 'Done' : 'Failed';
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1600);
+}
+
+// Settings > Debug > "Force Rejoin" -- manually fires the same deep-link
+// rejoin a real disconnect uses, so Roblox can be reset back to the lobby
+// between test iterations without alt-tabbing over and closing/reopening it
+// by hand. Can genuinely take up to REJOIN_TIMEOUT (90s, see core.runner) if
+// Roblox has to fully relaunch, so this awaits the real result instead of
+// resetting the button on a short fixed delay like the other debug buttons.
+async function forceRejoin(btn) {
+  const original = btn.textContent;
+  switchScreen('dashboard');
+  btn.disabled = true;
+  btn.textContent = 'Rejoining...';
+  await new Promise(resolve => setTimeout(resolve, 400));
+  try {
+    const result = await pywebview.api.debug_force_rejoin();
+    if (!result.ok && result.reason === 'no_roblox') {
+      addLog('[Debug] Force rejoin failed: Roblox not found.');
+    }
+    btn.textContent = result.ok ? 'Done' : 'Failed';
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1600);
+}
+
 // Settings > Debug > "Story Map Region" -- same dance as saveDebugScreenshot:
 // the game only renders on the Dashboard, so switch there and let it settle
 // before asking Python to grab the band core.stage_select searches.

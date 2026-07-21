@@ -170,14 +170,24 @@ exp_continue.png / continue_2.png
   wave clear -- clicking it, then waiting for continue_2.png and clicking
   that, moves on to the next wave.
 
-exp_extract.png / continue.png / extract.png
-  Expedition's end-of-run choice, which shows exp_extract.png TWICE: the
-  1st sighting is declined (click continue.png instead -- same choice as
-  exp_continue's flow, but a different button graphic -- with a cooldown
-  after so a laggy still-visible banner isn't miscounted as the 2nd
-  sighting), the 2nd sighting is actually accepted (click exp_extract.png
-  itself, then wait for extract.png and click that), landing on the reward
-  screen -- Expedition's equivalent of victory.png.
+exp_extract.png / continue.png / continue_2.png / extract.png / extract_confirm.png
+  Expedition's recurring checkpoint choice -- exp_extract.png shows up
+  once per checkpoint, offering Extract or Continue side by side. Every
+  sighting up to the task's configured "Extract After" count is declined
+  (click continue.png, then wait for continue_2.png/continue.png and click
+  that too, same two-step exp_continue's own flow uses, with a cooldown
+  after so a laggy still-visible banner isn't miscounted as the next
+  sighting); the sighting right after that is accepted (click
+  exp_extract.png itself, wait for extract.png and click that). That opens
+  a SECOND confirmation ("Extraction -- Are you sure you'd like to end
+  this run?", its own separate red Extract/Cancel buttons, a rewards
+  preview) -- extract_confirm.png is that dialog's own Extract button,
+  optional/best-effort like nav_disband.png (missing just skips this step
+  rather than failing). Clicking through both lands on the reward screen --
+  Expedition's equivalent of victory.png. A "Select an upgrade!" level-up
+  reward-card modal (select upgrade card.png) can land on top of any of
+  this, or right after Victory before Repeat/Leave Stage even renders --
+  dismissed with a middle-screen click wherever it might show up.
 
 click_anywhere_to_close.png / click_anywhere_to_close_2.png
   Optional, checked every poll tick during battle ONLY on Spirit City Act

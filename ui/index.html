@@ -736,6 +736,41 @@
         </section>
       </div>
 
+      <!-- Runs one tick of the Expedition nav_start_game/exp_continue/
+           exp_extract check against Roblox as it is right now, no active
+           macro run needed -- so tuning that flow doesn't mean restarting
+           a whole run every time just to get back to the screen being
+           tested. See MacroRunner.debug_check_expedition_wave. -->
+      <div class="settings-category" data-cat="debug" style="margin-top: 20px;">
+        <section class="rp-panel">
+          <header class="rp-panel-head">
+            <span class="rp-head-tag" style="--rp-tag: var(--slate);">Capture</span>
+            <span class="rp-head-title">Expedition Wave Check</span>
+            <span class="rp-head-rule"></span>
+          </header>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Test Expedition Wave Check</div>
+              <div class="setting-desc">Navigate to a wave/checkpoint/extract screen in Roblox by hand, then press this -- runs one detection+click tick and logs what it found, no macro run needed.</div>
+            </div>
+            <button id="btn-debug-expedition-wave" onclick="testExpeditionWave(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Run Test Tick</button>
+          </div>
+
+          <!-- Manually fires the same deep-link rejoin a real disconnect
+               triggers -- resets Roblox back to the lobby on demand, so
+               testing a code change doesn't mean alt-tabbing over and
+               closing/reopening Roblox by hand every time. -->
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Force Rejoin</div>
+              <div class="setting-desc">Relaunches Roblox straight back into the lobby via the same deep link a real disconnect uses -- handy for resetting between test runs.</div>
+            </div>
+            <button id="btn-debug-force-rejoin" onclick="forceRejoin(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);">Rejoin Now</button>
+          </div>
+        </section>
+      </div>
+
       <!-- core.stage_select's map-name search: a debug capture of exactly the
            band it scans (so a reference crop in Assets/maps/ can be
            checked/tuned against it) plus the scroll-wheel strength it uses

@@ -56,17 +56,21 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
         for nudge in range(scroll_nudges + 1):
             if stop_event is not None and stop_event.is_set():
                 return False
+            # Each map can have a second reference crop ("<map name> 2.png",
+            # space before the 2 to match this folder's own naming, not the
+            # underscore _2 convention Assets/ui uses) -- same idea as the
+            # gamemode cards' own _2 variants, tried in order.
             try:
-                match = vision.find_image(
-                    hwnd, map_name, region=NAME_BAND_REGION, threshold=MATCH_THRESHOLD,
+                match, found_name = vision.find_image_any(
+                    hwnd, (map_name, f"{map_name} 2"), region=NAME_BAND_REGION, threshold=MATCH_THRESHOLD,
                     template_dir=vision.MAPS_DIR)
             except vision.TemplateNotFound as exc:
                 log(f"[Macro] {exc}")
                 return False
             if match is not None:
-                debug_path = vision.save_match_debug(hwnd, map_name, match) if debug_screenshots else None
+                debug_path = vision.save_match_debug(hwnd, found_name, match) if debug_screenshots else None
                 suffix = f" Debug: {debug_path}" if debug_path else ""
-                log(f'[Macro] Found "{map_name}" (score {match["score"]:.2f}) -- clicking it.{suffix}')
+                log(f'[Macro] Found "{found_name}" (score {match["score"]:.2f}) -- clicking it.{suffix}')
                 vision.click_match(mouse, hwnd, match)
                 return True
             if nudge < scroll_nudges:

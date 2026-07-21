@@ -65,6 +65,29 @@ class Mouse:
         time.sleep(gap)
         self.click(x, y, button)
 
+    def shuffle_click(self, x: int, y: int, button: str = "left", hold: float = 0.05) -> None:
+        """Like click(), but hovers into the target with a few small
+        relative moves first instead of just the one tiny nudge() click()
+        already does. Some buttons (reported: Expedition's "extract"
+        confirm) apparently need genuine hover-in movement to actually
+        register a click on the game's side even though the click itself
+        visually lands -- a single absolute jump + one nudge wasn't always
+        enough. Approaches from a random-ish nearby offset and nudges in
+        toward the real point over a few steps, each a real relative
+        MOUSEEVENTF_MOVE, before finally clicking."""
+        self.move_to(x - 6, y - 4)
+        time.sleep(0.03)
+        for dx, dy in ((3, 2), (2, 1), (1, 1)):
+            self.nudge(dx, dy)
+            time.sleep(0.03)
+        self.move_to(x, y)
+        time.sleep(0.03)
+        self.nudge()
+        time.sleep(0.03)
+        self.down(button)
+        time.sleep(hold)
+        self.up(button)
+
     def drag(self, x1: int, y1: int, x2: int, y2: int, button: str = "left", steps: int = 15, duration: float = 0.2) -> None:
         self.move_to(x1, y1)
         time.sleep(0.01)

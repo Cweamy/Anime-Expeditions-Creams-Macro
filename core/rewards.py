@@ -17,6 +17,7 @@ reads empty space as an item.
 """
 import difflib
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import cv2

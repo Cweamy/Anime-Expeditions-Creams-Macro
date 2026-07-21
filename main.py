@@ -1048,6 +1048,29 @@ class Api:
         self.push_log(f"[Debug] Saved screenshot to {path}")
         return {"ok": True, "path": path}
 
+    def debug_test_expedition_wave(self) -> dict:
+        # Settings > Debug > "Test Expedition Wave Check": runs one tick of
+        # the Expedition nav_start_game/exp_continue/exp_extract check
+        # against Roblox as it is right now, no active macro run needed --
+        # navigate to the screen being tested by hand, press this, read the
+        # log. See MacroRunner.debug_check_expedition_wave.
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+        result = self.runner.debug_check_expedition_wave(hwnd)
+        return {"ok": True, "result": result}
+
+    def debug_force_rejoin(self) -> dict:
+        # Settings > Debug > "Force Rejoin": manually triggers the deep-link
+        # rejoin on demand -- a quick way to reset Roblox back to the lobby
+        # between test iterations without alt-tabbing over and closing/
+        # reopening it by hand every time. See MacroRunner.debug_force_rejoin.
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+        ok = self.runner.debug_force_rejoin(hwnd, lambda: self.game_hwnd)
+        return {"ok": ok}
+
     def open_assets_folder(self) -> dict:
         # Settings > General > "Open Assets Folder" -- see core.vision's
         # override lookup (constants.ASSETS_OVERRIDE_DIR): a same-named PNG

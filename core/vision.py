@@ -429,3 +429,19 @@ def click_match(mouse, hwnd: int, match: dict) -> None:
     client rect, same convention core.window.get_roblox_snapshot uses)."""
     left, top, _, _ = wm.get_window_rect_screen(hwnd)
     mouse.click(left + match["cx"], top + match["cy"])
+
+
+def double_click_match(mouse, hwnd: int, match: dict) -> None:
+    """Same as click_match, but double-clicks -- for buttons that only
+    sometimes register a single click reliably (see exp_extract's own
+    caller)."""
+    left, top, _, _ = wm.get_window_rect_screen(hwnd)
+    mouse.double_click(left + match["cx"], top + match["cy"])
+
+
+def shuffle_click_match(mouse, hwnd: int, match: dict) -> None:
+    """Same as click_match, but hovers in with a few small moves first (see
+    Mouse.shuffle_click) -- for a button reported not to reliably register
+    a click game-side even when the click itself visually lands on it."""
+    left, top, _, _ = wm.get_window_rect_screen(hwnd)
+    mouse.shuffle_click(left + match["cx"], top + match["cy"])
