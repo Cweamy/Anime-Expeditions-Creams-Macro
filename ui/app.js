@@ -2521,6 +2521,28 @@ let puState = {
   markX: null, markY: null,
 };
 
+// Remembers whichever map was picked last (see selectPlaceUnitMap), across
+// blocks AND app restarts (localStorage, not just in-memory) -- setting
+// several units' positions in a row is almost always on the SAME map, and
+// having to re-click category -> thumbnail every single time for that was
+// the actual complaint.
+const RECENT_PLACE_UNIT_MAP_KEY = 'aecm-recent-place-unit-map';
+
+function getRecentPlaceUnitMap() {
+  try {
+    const raw = localStorage.getItem(RECENT_PLACE_UNIT_MAP_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function setRecentPlaceUnitMap(category, name) {
+  try {
+    localStorage.setItem(RECENT_PLACE_UNIT_MAP_KEY, JSON.stringify({ category, name }));
+  } catch (e) {}
+}
+
 async function openPlaceUnitModal(blockId) {
   const loc = findBlockLocation(blockId);
   if (!loc) return;
@@ -2544,6 +2566,24 @@ async function openPlaceUnitModal(blockId) {
     document.getElementById('pu-category-tabs').innerHTML = '';
     document.getElementById('pu-map-grid').innerHTML = '<div class="rh-empty">No maps found in Assets/map -- add category folders with map images, or use "Use Roblox Screen" instead.</div>';
     return;
+  }
+
+  // Jump straight to the canvas for the last-picked map instead of always
+  // starting back at the first category's grid -- "<- Maps" in the canvas
+  // view is still right there if a different map's actually needed this time.
+  const recent = getRecentPlaceUnitMap();
+  if (recent && puState.categories.includes(recent.category)) {
+    puState.category = recent.category;
+    renderPlaceUnitCategoryTabs();
+    try {
+      puState.maps = await pywebview.api.list_maps(recent.category);
+    } catch (e) {
+      puState.maps = [];
+    }
+    if (puState.maps.includes(recent.name)) {
+      await selectPlaceUnitMap(recent.name);
+      return;
+    }
   }
   await selectPlaceUnitCategory(puState.categories[0]);
 }
@@ -2607,6 +2647,7 @@ async function selectPlaceUnitMap(name) {
     const result = await pywebview.api.get_map_image(puState.category, name);
     if (!result.ok) { addLog(`[Creation] Couldn't load map "${name}".`); return; }
     loadPlaceUnitImage(result.data_uri);
+    setRecentPlaceUnitMap(puState.category, name);
   } catch (e) {}
 }
 

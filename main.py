@@ -821,8 +821,15 @@ class Api:
         if not self._window:
             return {"ok": False, "reason": "no_window"}
         fname = f"AnimeExpeditions-{filename_prefix}-{_time.strftime('%Y%m%d-%H%M%S')}.json"
+        # Defaults to the Templates folder -- Export/Import already deals in
+        # Macro Operation templates half the time (a task export bundles
+        # every template its tasks reference; Creation's own Export/Import
+        # reuses this same dialog for templates alone), so that's the more
+        # useful starting point than whatever generic default the OS picks.
+        os.makedirs(tpl.TEMPLATES_DIR, exist_ok=True)
         result = self._window.create_file_dialog(
-            webview.SAVE_DIALOG, save_filename=fname, file_types=("JSON files (*.json)",))
+            webview.SAVE_DIALOG, directory=tpl.TEMPLATES_DIR, save_filename=fname,
+            file_types=("JSON files (*.json)",))
         if not result:
             return {"ok": False, "reason": "cancelled"}
         path = result[0] if isinstance(result, (list, tuple)) else result
@@ -838,8 +845,9 @@ class Api:
         import webview
         if not self._window:
             return {"ok": False, "reason": "no_window"}
+        os.makedirs(tpl.TEMPLATES_DIR, exist_ok=True)
         result = self._window.create_file_dialog(
-            webview.OPEN_DIALOG, file_types=("JSON files (*.json)",))
+            webview.OPEN_DIALOG, directory=tpl.TEMPLATES_DIR, file_types=("JSON files (*.json)",))
         if not result:
             return {"ok": False, "reason": "cancelled"}
         path = result[0] if isinstance(result, (list, tuple)) else result

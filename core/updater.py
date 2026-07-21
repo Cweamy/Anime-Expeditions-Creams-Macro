@@ -260,16 +260,30 @@ def stage_exe_update(new_exe_path: str) -> str:
     exe_dir = os.path.dirname(current_exe)
     exe_name = os.path.basename(current_exe)
     old_exe = current_exe + ".old"
+    log_path = os.path.join(exe_dir, "_update.log")
     helper_path = os.path.join(exe_dir, "_update.bat")
+    # This whole script runs fully detached (see launch_helper -- no
+    # console window at all, by design, so the app can close cleanly right
+    # after launching it), which means every "echo" below was previously
+    # going nowhere: a failed move, a taskkill that didn't actually work,
+    # anything at all -- all silent, with the only visible symptom being
+    # "closed the app and then nothing happened" and a folder full of
+    # leftover .update/.old files with zero explanation why. Every step
+    # below is now ALSO appended to _update.log (next to the exe) with
+    # >>"{log_path}" 2>&1, so a failure here is finally something that can
+    # actually be diagnosed instead of a black box.
     script = f"""@echo off
 setlocal enabledelayedexpansion
+set LOG="{log_path}"
+echo ---- %date% %time% ---- > %LOG%
 echo Updating Cream's Macro -- please wait, this window closes itself...
+echo [1/5] Stopping the running app (image: {exe_name})... >> %LOG%
 rem Force-kill as a safety net -- main.Api.apply_update already calls
 rem close_window() (which un-parents the docked Roblox window before
 rem closing, so it doesn't get taken down with this process) before
 rem launching this, so by the time this runs the app should already be
 rem gone. The wait loop below just covers a slow shutdown.
-taskkill /F /IM "{exe_name}" >nul 2>&1
+taskkill /F /IM "{exe_name}" >>%LOG% 2>&1
 rem "ping" instead of "timeout" -- timeout needs a real console input
 rem handle, which this .bat (launched detached, see launch_helper) doesn't
 rem reliably have; same trick _write_source_helper_script already uses.
@@ -286,20 +300,38 @@ rem nothing happening. After ~30s, force-kill once more and proceed
 rem anyway: a failed move below at least surfaces a real error instead of
 rem hanging indefinitely with no explanation.
 if !_wait! lss 15 goto waitloop
-echo Still running after 30s -- forcing it closed and continuing anyway.
-taskkill /F /IM "{exe_name}" >nul 2>&1
+echo Still running after 30s -- forcing it closed and continuing anyway. >>%LOG%
+taskkill /F /IM "{exe_name}" >>%LOG% 2>&1
 ping -n 2 127.0.0.1 >nul
 :proceed
+echo [2/5] Old process confirmed gone (or timed out waiting). >>%LOG%
 rem Clean up leftover onefile self-extraction folders from old runs.
 for /d %%i in ("%TEMP%\\_MEI*") do rd /s /q "%%i" >nul 2>&1
 for /d %%i in ("%TEMP%\\onefile_*") do rd /s /q "%%i" >nul 2>&1
-if exist "{old_exe}" del /f "{old_exe}"
-echo Installing update...
-move /y "{current_exe}" "{old_exe}"
-move /y "{new_exe_path}" "{current_exe}"
+if exist "{old_exe}" del /f "{old_exe}" >>%LOG% 2>&1
+echo [3/5] Moving current exe to "{old_exe}"... >>%LOG%
+move /y "{current_exe}" "{old_exe}" >>%LOG% 2>&1
+if not exist "{old_exe}" (
+    echo [FAILED] Could not move the running exe aside -- it may still be locked. >>%LOG%
+    echo Update aborted. The app was NOT relaunched -- start it manually from "{current_exe}". >>%LOG%
+    goto :eof
+)
+echo [4/5] Moving downloaded update into place... >>%LOG%
+move /y "{new_exe_path}" "{current_exe}" >>%LOG% 2>&1
+if not exist "{current_exe}" (
+    echo [FAILED] Could not move the downloaded update into place. >>%LOG%
+    echo Restoring the previous exe from "{old_exe}" so the app still runs... >>%LOG%
+    move /y "{old_exe}" "{current_exe}" >>%LOG% 2>&1
+    cd /d "{exe_dir}"
+    start "" "{current_exe}"
+    echo Update failed -- reverted to the previous version and relaunched it. >>%LOG%
+    goto :eof
+)
+echo [5/5] Relaunching... >>%LOG%
 cd /d "{exe_dir}"
 start "" "{current_exe}"
-del /f "{old_exe}"
+del /f "{old_exe}" >>%LOG% 2>&1
+echo Update finished successfully. >>%LOG%
 del "%~f0"
 """
     with open(helper_path, "w", encoding="utf-8") as f:
