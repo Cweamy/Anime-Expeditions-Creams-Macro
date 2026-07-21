@@ -212,6 +212,9 @@ RAID_IMAGE_NAMES = ("raid", "raid_2")
 STORY_IMAGE_NAMES = ("story", "story_2")
 NAV_START_IMAGE_NAMES = ("nav_start", "nav_start_2")
 NAV_DISBAND_IMAGE_NAMES = ("nav_disband", "nav_disband_2")
+# 10 visual variants on file (Assets/ui/priority_upgrade/priority_upgrade.png,
+# _1 through _9) -- tried in order, same idea as every other _2/_3/... set.
+PRIORITY_UPGRADE_IMAGE_NAMES = ("priority_upgrade",) + tuple(f"priority_upgrade_{i}" for i in range(1, 10))
 
 # Roblox deep link used to rejoin after a detected disconnect -- reopens
 # (or, if the client fully closed, relaunches) straight into this specific
@@ -2069,7 +2072,7 @@ class MacroRunner:
             return True
 
         try:
-            priority_match = vision.find_image(hwnd, "priority_upgrade")
+            priority_match, priority_name = vision.find_image_any(hwnd, PRIORITY_UPGRADE_IMAGE_NAMES)
         except vision.TemplateNotFound as exc:
             self._log(f'{label}: {exc}')
             return True
@@ -2077,9 +2080,9 @@ class MacroRunner:
             self._log(f'{label}: "priority_upgrade" not found on the info panel -- skipping.')
             return True
 
-        debug_path = self._debug_save(hwnd, "priority_upgrade", priority_match)
+        debug_path = self._debug_save(hwnd, priority_name, priority_match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
-        self._log(f'{label}: found "priority_upgrade" (score {priority_match["score"]:.2f}) -- '
+        self._log(f'{label}: found "{priority_name}" (score {priority_match["score"]:.2f}) -- '
                    f'right-clicking it.{suffix}')
         vision.right_click_match(self._mouse, hwnd, priority_match)
         time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
@@ -2868,7 +2871,16 @@ class MacroRunner:
                 self._keyboard.key_down(keys.VK_SHIFT)
                 self._quick_place_shift_down = True
 
-        spot = self._find_valid_place_spot(hwnd, stop_event, left, top, orig_x, orig_y, name)
+        if block.get("ignoreHighlight"):
+            # Skips the white-tile search entirely -- clicks the saved X/Y
+            # directly, same as before the search existed at all. For a
+            # spot where the highlight doesn't reliably show/detect,
+            # searching for it is worse than just trusting the coordinate.
+            self._mouse.move_to(left + orig_x, top + orig_y)
+            time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
+            spot = (orig_x, orig_y)
+        else:
+            spot = self._find_valid_place_spot(hwnd, stop_event, left, top, orig_x, orig_y, name)
         if self._checkpoint(stop_event):
             self._release_quick_place_shift()
             return

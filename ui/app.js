@@ -2067,6 +2067,19 @@ function toggleBlockOnce(id) {
   renderPhases();
 }
 
+// Ignore Highlight -- skips the white-tile search entirely and clicks
+// straight at the saved X/Y, same as clicking blind used to work before
+// the search existed. For a spot where the highlight doesn't reliably
+// show/detect at all, searching for it is worse than just trusting the
+// saved coordinate outright.
+function toggleIgnoreHighlight(id) {
+  const loc = findBlockLocation(id);
+  if (!loc) return;
+  const block = creationPhases[loc.phase][loc.idx];
+  block.ignoreHighlight = !block.ignoreHighlight;
+  renderPhases();
+}
+
 function togglePhaseCollapsed(phase) {
   phaseCollapsed[phase] = !phaseCollapsed[phase];
   renderPhases();
@@ -2401,7 +2414,8 @@ function renderPlaceUnitControls(b) {
   const hotkey = field('Hotkey', `<button type="button" class="keybind-btn" onclick="startBlockHotkeyCapture('${b.id}', 'hotkey', this)">${b.hotkey ? b.hotkey.toUpperCase() : 'Set key'}</button>`);
   const hasPos = b.params.x || b.params.y;
   const set = field('Position', `<button type="button" class="pu-set-btn ${hasPos ? 'has-pos' : ''} tooltip-side" data-tooltip="Pick position on a map" onclick="openPlaceUnitModal('${b.id}')">${hasPos ? 'Set &#10003;' : 'Set'}</button>`);
-  return idx + name + x + y + hotkey + set;
+  const ignoreHighlight = `<button type="button" class="block-mod-btn ${b.ignoreHighlight ? 'on' : ''} tooltip-side" data-tooltip="Skip the white-tile search and click the saved X/Y directly" onclick="toggleIgnoreHighlight('${b.id}')">Ignore Highlight</button>`;
+  return idx + name + x + y + hotkey + set + ignoreHighlight;
 }
 
 // Walk block: dropdown of the same recorded paths the pinned Walk Path row
@@ -3114,7 +3128,7 @@ async function saveCurrentTemplate() {
   PHASES.forEach(phase => {
     payload[phase] = creationPhases[phase].map(b => ({
       type: b.type, params: b.params, once: b.once, kind: b.kind, value: b.value, hotkey: b.hotkey,
-      mode: b.mode, pathName: b.pathName,
+      mode: b.mode, pathName: b.pathName, ignoreHighlight: b.ignoreHighlight,
     }));
   });
   try {
@@ -3218,6 +3232,7 @@ function blockFromSaved(b) {
   }
   if (b.type === 'place_unit') {
     block.hotkey = b.hotkey || '';
+    block.ignoreHighlight = !!b.ignoreHighlight;
   }
   if (b.type === 'walk_path') {
     block.mode = b.mode === 'custom' ? 'custom' : 'auto';
