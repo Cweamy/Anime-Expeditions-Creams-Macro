@@ -240,14 +240,14 @@ SETTLE_DELAY = 0.6  # lets a panel-open animation (e.g. Settings) finish before 
 WARNING_WAIT_TIMEOUT = 10.0
 WARNING_POLL_INTERVAL = 1.0
 
-# Place Unit block execution: hover-search for a valid tile by its exact
-# pixel color (see _find_valid_place_spot), click once a valid one's found,
-# then verify. Replaced the old click-first-then-check-a-rejection-image-
-# and-nudge approach -- this way a click only ever fires once a genuinely
+# Place Unit block execution: hover-search for a valid tile by its pixel
+# color (see _find_valid_place_spot), click once a valid one's found, then
+# verify. Replaced the old click-first-then-check-a-rejection-image-and-
+# nudge approach -- this way a click only ever fires once a genuinely
 # valid tile is confirmed, instead of firing blind and finding out after.
-PLACE_VALID_PIXEL_RGB = (0xFF, 0xFF, 0xFF)   # 0xffffff, exact match -- this tile is valid to place on
+PLACE_VALID_PIXEL_TOLERANCE = 12  # each channel allowed to be this far under 0xff (white) -- antialiasing/compression can soften a genuinely-white tile just enough to miss an exact match
 PLACE_PIXEL_STEP = 2       # how many pixels the hover point moves per search step
-PLACE_PIXEL_MAX_RADIUS = 40  # how far the search is allowed to wander from the saved spot before giving up
+PLACE_PIXEL_MAX_RADIUS = 70  # how far the search is allowed to wander from the saved spot before giving up
 PLACE_PIXEL_SEARCH_SETTLE = 0.03  # brief settle after each hover move before sampling its pixel
 PLACE_HOTKEY_SETTLE = 0.35  # after pressing the hotkey, before the pixel search starts sampling -- the
 # placement-mode overlay (what actually turns a tile white/red) needs real time to render; sampling too
@@ -2438,66 +2438,13 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return False
 
-        # The default walk only makes sense the FIRST time a task enters a
-        # stage -- once you're standing where the walk leaves you, repeating
-        # the same walk on every repeat would just walk you away from that
-        # spot again for no reason. first_repeat=False (a Repeat Stage
-        # re-entry, see _run's repeat loop) skips it entirely.
-        if not first_repeat:
-            self._log("[Macro] Repeat of the same stage -- skipping the default walk (already walked on entry).")
-        else:
-            map_name = task.get("map")
-            # The task's own Macro Operation template can pin its Walk Path
-            # row to a specific Custom path (see ui/app.js's creationWalk,
-            # saved as blocks["walk"] = {mode, pathName} -- same place
-            # _apply_team_loadout already reads team/equipment from) instead
-            # of following the map's global Auto default -- that setting
-            # was being read into the Creation UI but never actually
-            # consulted here, so a template set to Custom silently walked
-            # whatever the Auto default happened to be (or nothing) instead.
-            custom_path_name = None
-            macro_name = task.get("macro")
-            if macro_name:
-                try:
-                    from . import templates as tpl
-                    tpl_blocks = tpl.load_template(macro_name).get("blocks") or {}
-                    if isinstance(tpl_blocks, dict):
-                        walk_cfg = tpl_blocks.get("walk") or {}
-                        if walk_cfg.get("mode") == "custom" and walk_cfg.get("pathName"):
-                            custom_path_name = walk_cfg["pathName"]
-                except Exception as exc:
-                    self._log(f"[Macro] Couldn't read this template's Walk Path setting: {exc}")
-
-            if custom_path_name:
-                path_name = custom_path_name
-            else:
-                # A Raid map's Acts can need different walks (e.g. Spirit
-                # City Act 3 -- see ACT_ORDER) -- looked up as "<map> Act<n>"
-                # first, falling back to the plain map-name entry other
-                # Acts/Story share, so only the Acts that actually need a
-                # different walk need their own default_walk_paths entry.
-                path_name = None
-                if map_name:
-                    if task.get("mode") == "raid":
-                        path_name = default_walk_paths.get(f"{map_name} Act{task.get('stage')}")
-                    path_name = path_name or default_walk_paths.get(map_name)
-            if not path_name:
-                self._log(f'[Macro] No default walk path set for "{map_name}" -- skipping walk.'
-                           if map_name else "[Macro] No map set -- skipping walk.")
-            else:
-                self._log(f'[Macro] Walking path "{path_name}"...')
-                self._set_status(action=f'Walking "{path_name}"...')
-                data = walk_paths.load_path(path_name)
-                events = data.get("events", [])
-                if not events:
-                    self._log(f'[Macro] Walk path "{path_name}" has no recorded movement -- skipping.')
-                else:
-                    walk_paths.replay_events(events, self._keyboard, stop_event)
-                    self._log("[Macro] Walk finished.")
-        if self._checkpoint(stop_event):
-            return False
-
-        self._run_prestart_blocks(hwnd, stop_event, task, first_repeat)
+        # Walk Path used to be a fixed step here, always running before any
+        # of the template's own blocks and never reorderable -- now it's a
+        # real block within the list itself (see _run_prestart_blocks'
+        # "walk_path" handling / _run_walk_path_block), so it runs wherever
+        # it's actually positioned relative to Setting/Place Unit blocks
+        # instead of always jumping the whole list.
+        self._run_prestart_blocks(hwnd, stop_event, task, first_repeat, default_walk_paths)
         if self._checkpoint(stop_event):
             return False
         return True
@@ -2617,7 +2564,8 @@ class MacroRunner:
         self._keyboard.tap(ord("H"))
         self._log("[Macro] Closed the Team Loadout panel.")
 
-    def _run_prestart_blocks(self, hwnd, stop_event: threading.Event, task: dict, first_repeat: bool = True) -> None:
+    def _run_prestart_blocks(self, hwnd, stop_event: threading.Event, task: dict, first_repeat: bool = True,
+                               default_walk_paths: dict = None) -> None:
         # The task's Macro Operation (Creation > template) is what actually
         # places starter units and flips settings -- this is the piece that
         # was never wired up: the field existed on every Task card, but
@@ -2679,6 +2627,8 @@ class MacroRunner:
                     self._run_setting_block(hwnd, stop_event, block, i)
                 elif btype == "auto_upgrade_unit":
                     self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, i)
+                elif btype == "walk_path":
+                    self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {}, block, first_repeat)
                 else:
                     self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
                 time.sleep(0.2)  # brief gap between blocks so the game UI can settle
@@ -2690,6 +2640,50 @@ class MacroRunner:
             # it. Whatever else happens, Shift never leaves this function
             # still held.
             self._release_quick_place_shift()
+
+    def _run_walk_path_block(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
+                               block: dict, first_repeat: bool) -> None:
+        """Walk Path block -- Auto (the map's own default_walk_paths entry)
+        or a specific recorded Custom path (block["mode"]/block["pathName"],
+        same shape the old separate pinned row used to keep at the template
+        level). Only makes sense the FIRST time a task enters a stage --
+        once you're standing where the walk leaves you, repeating the same
+        walk on every repeat would just walk you away from that spot again
+        for no reason -- so this checks first_repeat itself regardless of
+        the block's own "Once" toggle, same hardcoded skip the old fixed
+        pre-step always had."""
+        if not first_repeat:
+            self._log('[Macro] Repeat of the same stage -- skipping the Walk Path block (already walked on entry).')
+            return
+
+        map_name = task.get("map")
+        if block.get("mode") == "custom" and block.get("pathName"):
+            path_name = block["pathName"]
+        else:
+            # A Raid map's Acts can need different walks (e.g. Spirit City
+            # Act 3 -- see ACT_ORDER) -- looked up as "<map> Act<n>" first,
+            # falling back to the plain map-name entry other Acts/Story
+            # share, so only the Acts that actually need a different walk
+            # need their own default_walk_paths entry.
+            path_name = None
+            if map_name:
+                if task.get("mode") == "raid":
+                    path_name = default_walk_paths.get(f"{map_name} Act{task.get('stage')}")
+                path_name = path_name or default_walk_paths.get(map_name)
+        if not path_name:
+            self._log(f'[Macro] No default walk path set for "{map_name}" -- skipping walk.'
+                       if map_name else "[Macro] No map set -- skipping walk.")
+            return
+
+        self._log(f'[Macro] Walking path "{path_name}"...')
+        self._set_status(action=f'Walking "{path_name}"...')
+        data = walk_paths.load_path(path_name)
+        events = data.get("events", [])
+        if not events:
+            self._log(f'[Macro] Walk path "{path_name}" has no recorded movement -- skipping.')
+            return
+        walk_paths.replay_events(events, self._keyboard, stop_event)
+        self._log("[Macro] Walk finished.")
 
     def _release_quick_place_shift(self) -> None:
         if self._quick_place_shift_down:
@@ -2712,8 +2706,14 @@ class MacroRunner:
 
     def _sample_screen_pixel(self, screen_x: int, screen_y: int) -> tuple:
         """The exact single on-screen pixel at absolute screen coords, as
-        (r, g, b) -- used for a color-exact placement-validity check
-        instead of template matching (see _find_valid_place_spot)."""
+        (r, g, b) -- used for a placement-validity check instead of
+        template matching (see _find_valid_place_spot). Reverted from an
+        averaged small-patch sample -- that made things worse in practice
+        (the valid-tile indicator is apparently thin/edge-shaped, not a
+        solid fill, so averaging a patch around it mostly captured
+        surrounding non-white background instead of the indicator itself).
+        A single pixel plus PLACE_VALID_PIXEL_TOLERANCE on the comparison
+        is what's actually in use."""
         from core.ocr import capture_region
         patch = capture_region(screen_x, screen_y, 1, 1)
         b, g, r = patch[0, 0]
@@ -2722,22 +2722,33 @@ class MacroRunner:
     def _find_valid_place_spot(self, hwnd, stop_event: threading.Event, left: int, top: int,
                                  orig_x: int, orig_y: int, name: str):
         """Hovers the mouse (no click) over (orig_x, orig_y) -- window-
-        client coords -- and samples the exact pixel under it: 0xffffff
-        (white, exact) means this tile is valid to place on; anything else
-        (0xff262a is the specific "blocked" indicator reported, but any
-        other color is treated the same way) means it isn't. If blocked,
-        nudges the hover point PLACE_PIXEL_STEP pixels at a time in an
-        expanding ring around the original spot until a valid pixel is
-        found or PLACE_PIXEL_MAX_RADIUS is exhausted. Returns the (x, y)
-        window-client offset a valid pixel was found at, or None."""
-        for dx, dy in self._place_pixel_search_offsets():
+        client coords -- and samples the pixel under it: at/near 0xffffff
+        (white, within PLACE_VALID_PIXEL_TOLERANCE per channel) means this
+        tile is valid to place on; anything else (0xff262a is the specific
+        "blocked" indicator reported, but any other color is treated the
+        same way) means it isn't. If blocked, walks the hover point
+        PLACE_PIXEL_STEP pixels at a time in an expanding ring, covering the
+        same set of points around the original spot every time, but getting
+        there with a REAL RELATIVE move from wherever the cursor currently
+        is (updating based on the cursor, not re-teleporting from the fixed
+        origin every step) until a valid pixel is found or
+        PLACE_PIXEL_MAX_RADIUS is exhausted. Returns the (x, y) window-
+        client offset a valid pixel was found at, or None."""
+        offsets = self._place_pixel_search_offsets()
+        self._mouse.move_to(left + orig_x, top + orig_y)
+        time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
+        prev_dx, prev_dy = 0, 0
+        for dx, dy in offsets:
             if self._checkpoint(stop_event):
                 return None
+            step_dx, step_dy = dx - prev_dx, dy - prev_dy
+            if (step_dx, step_dy) != (0, 0):
+                self._mouse.nudge(step_dx, step_dy)
+                time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
+            prev_dx, prev_dy = dx, dy
             cx, cy = orig_x + dx, orig_y + dy
-            self._mouse.move_to(left + cx, top + cy)
-            time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
             rgb = self._sample_screen_pixel(left + cx, top + cy)
-            if rgb == PLACE_VALID_PIXEL_RGB:
+            if all(channel >= 255 - PLACE_VALID_PIXEL_TOLERANCE for channel in rgb):
                 if (dx, dy) != (0, 0):
                     self._log(f'[Macro] Place Unit "{name}": aligned to a valid tile at offset ({dx}, {dy}).')
                 return cx, cy
@@ -2778,23 +2789,29 @@ class MacroRunner:
         if self._quick_place_shift_down:
             self._log(f'[Macro] Place Unit "{name}": quick-placing (Shift held, same unit as last).')
         else:
+            # No hotkey (or one that isn't recognized) means nothing ever
+            # gets selected -- the pixel search below would just be
+            # hovering/clicking with no unit in hand at all, which is
+            # exactly the "something's wrong" this was reported as during
+            # quick-place chains. Skip the whole block outright instead of
+            # only logging a warning and clicking anyway.
+            if not hotkey:
+                self._log(f'[Macro] Place Unit "{name}" has no hotkey set -- skipping this block.')
+                return
+            vk = keys.key_name_to_vk(hotkey)
+            if vk is None:
+                self._log(f'[Macro] Place Unit "{name}": hotkey "{hotkey}" isn\'t recognized -- '
+                           f'skipping this block.')
+                return
+
             # Z first, always -- clears whatever the cursor/UI was last doing
             # so the hotkey press right after it reliably starts a fresh
             # placement instead of potentially colliding with leftover state.
             self._keyboard.tap(ord("Z"))
             time.sleep(0.1)
-
-            if hotkey:
-                vk = keys.key_name_to_vk(hotkey)
-                if vk is not None:
-                    self._log(f'[Macro] Place Unit "{name}": pressing hotkey "{hotkey}" -- entering placing mode.')
-                    self._keyboard.tap(vk)
-                    time.sleep(PLACE_HOTKEY_SETTLE)
-                else:
-                    self._log(f'[Macro] Place Unit "{name}": hotkey "{hotkey}" isn\'t recognized -- '
-                               f'skipping key press.')
-            else:
-                self._log(f'[Macro] Place Unit "{name}" has no hotkey set -- skipping key press.')
+            self._log(f'[Macro] Place Unit "{name}": pressing hotkey "{hotkey}" -- entering placing mode.')
+            self._keyboard.tap(vk)
+            time.sleep(PLACE_HOTKEY_SETTLE)
 
             if next_is_same_unit:
                 self._log(f'[Macro] Place Unit "{name}": next placement is the same unit -- '

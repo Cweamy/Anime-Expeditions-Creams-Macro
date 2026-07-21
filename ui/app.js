@@ -1927,9 +1927,6 @@ async function resetChallengeCounts() {
 // ---------------------------------------------------------------------------
 // Creation screen: block-based drag-and-drop routine builder
 // ---------------------------------------------------------------------------
-// Pathing is no longer a draggable block: every routine's Pre Start phase has
-// a permanent, pinned Walk Path row (auto-select by default, or a recorded
-// custom path) -- see renderWalkRow(). The palette is just Units + Timing.
 const BLOCK_TYPES = {
   place_unit:        { label: 'Place Unit',        group: 'Units',  color: 'var(--lilac)', params: [{ key: 'name', type: 'text', placeholder: 'unit', default: '' }, { key: 'x', type: 'number', placeholder: 'x', default: 0 }, { key: 'y', type: 'number', placeholder: 'y', default: 0 }] },
   // Upgrade/Auto Upgrade target a placed unit by its #index (the numbering
@@ -1938,8 +1935,16 @@ const BLOCK_TYPES = {
   upgrade_unit:       { label: 'Upgrade Unit',      group: 'Units',  color: 'var(--brand)', params: [] },
   sell_unit:          { label: 'Sell Unit',         group: 'Units',  color: 'var(--rose)',  params: [] },
   auto_upgrade_unit:  { label: 'Auto Upgrade Unit', group: 'Units',  color: 'var(--amber)', params: [] },
+  // Which walk this routine uses to get to its spot before Pre Start's other
+  // blocks run -- Auto (the map's own default) or a recorded Custom path.
+  // Used to be a permanent pinned row instead of a real reorderable block,
+  // meaning it always ran before EVERY Setting/Place Unit block no matter
+  // where they were dragged -- now it's just another block, so where you
+  // put it relative to the others is what actually happens. See
+  // renderWalkPathControls().
+  walk_path:          { label: 'Walk Path',         group: 'Pathing', color: 'var(--teal)', params: [] },
   // Mid-battle repositioning: replays a recorded WASD path (same recordings
-  // the pinned Walk Path row uses) -- picker rendered by renderWalkControls().
+  // walk_path uses) -- picker rendered by renderWalkControls().
   walk:               { label: 'Walk',              group: 'Pathing', color: 'var(--teal)', params: [] },
   wait_ms:            { label: 'Wait (ms)',         group: 'Timing', color: 'var(--amber)', params: [{ key: 'ms', type: 'number', placeholder: 'ms', default: 500 }] },
   wait_wave:          { label: 'Wait for Wave',     group: 'Timing', color: 'var(--amber)', params: [{ key: 'wave', type: 'number', placeholder: 'wave', default: 1 }] },
@@ -1956,7 +1961,7 @@ const PHASES = ['prestart', 'battle'];
 const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle' };
 const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat' };
 const PHASE_ALLOWED = {
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'walk_path'],
   battle: Object.keys(BLOCK_TYPES),
 };
 
@@ -1977,10 +1982,9 @@ let savedPaths = [];
 let enteringBlockIds = new Set();
 let creationFreshLoad = true;
 
-// The template's Team Loadout + the Pre Start walk config. Loadout used to
-// live on each Task card; it belongs to the routine, so it saves with the
-// template and the task inherits it through its Macro Operation pick.
-let creationWalk = { mode: 'auto', pathName: '' };
+// The template's Team Loadout -- used to live on each Task card; it belongs
+// to the routine, so it saves with the template and the task inherits it
+// through its Macro Operation pick.
 let creationTeam = '';
 let creationEquipment = 'include';
 
@@ -2004,7 +2008,7 @@ function addBlock(type, phase, atIndex) {
   const def = BLOCK_TYPES[type];
   if (!def) return;
   if (!PHASE_ALLOWED[phase].includes(type)) {
-    addLog(`[Creation] Only Place Unit, Setting, and Auto Upgrade Unit blocks can go in Pre Start -- "${def.label}" belongs in Battle.`);
+    addLog(`[Creation] Only Place Unit, Setting, Auto Upgrade Unit, and Walk Path blocks can go in Pre Start -- "${def.label}" belongs in Battle.`);
     return;
   }
   const params = {};
@@ -2014,6 +2018,7 @@ function addBlock(type, phase, atIndex) {
   if (type === 'setting_change') { block.kind = 'toggle'; block.value = 'off'; }
   if (type === 'place_unit') { block.hotkey = ''; }
   if (type === 'walk') { block.params.path = ''; }
+  if (type === 'walk_path') { block.mode = 'auto'; block.pathName = ''; }
   if (type === 'upgrade_unit') { block.params.index = ''; block.params.times = 1; }
   if (type === 'auto_upgrade_unit') { block.params.index = ''; block.params.priority = 1; }
   if (type === 'sell_unit') { block.params.index = ''; }
@@ -2051,15 +2056,6 @@ function cloneBlock(id) {
 function updateBlockParam(id, key, value) {
   const loc = findBlockLocation(id);
   if (loc) creationPhases[loc.phase][loc.idx].params[key] = value;
-}
-
-function setWalkMode(mode) {
-  creationWalk.mode = mode;
-  renderPhases();
-}
-
-function setWalkPath(name) {
-  creationWalk.pathName = name;
 }
 
 // "Once" -- a block flagged this way only runs the first time the routine
@@ -2177,13 +2173,11 @@ async function saveMatchmakingRegionDebug(btn) {
 // Click once to start (Python polls WASD via start_path_recording), click
 // again to stop -- naming happens *after* recording, at save time, so the
 // player isn't stuck typing a name before they've even walked the path.
-// blockId is always 'walkpath' now (the pinned Pre Start row is the only
-// place recording lives), kept as a param so a future per-block recorder
-// wouldn't need a rewrite.
 // Where the freshly saved path name should land once the player names it in
-// the modal: 'walkpath' = the pinned Walk Path row (creationWalk), anything
-// else = that Walk block's own path param. Survives the gap between Stop
-// and Save, which recordingBlockId (nulled on Stop) doesn't.
+// the modal: whichever block's Record button started this (a Walk Path
+// block sets mode/pathName on itself, a plain Walk block sets its own path
+// param -- see savePathName). Survives the gap between Stop and Save, which
+// recordingBlockId (nulled on Stop) doesn't.
 let pendingRecordingTarget = null;
 
 function stopActiveRecording() {
@@ -2249,10 +2243,12 @@ async function savePathName() {
     const result = await pywebview.api.save_pending_path(name);
     if (result.ok) {
       await refreshSavedPaths();
-      const loc = pendingRecordingTarget && pendingRecordingTarget !== 'walkpath'
-        ? findBlockLocation(pendingRecordingTarget) : null;
-      if (loc) creationPhases[loc.phase][loc.idx].params.path = result.name;
-      else creationWalk = { mode: 'custom', pathName: result.name };
+      const loc = pendingRecordingTarget ? findBlockLocation(pendingRecordingTarget) : null;
+      if (loc) {
+        const block = creationPhases[loc.phase][loc.idx];
+        if (block.type === 'walk_path') { block.mode = 'custom'; block.pathName = result.name; }
+        else block.params.path = result.name;
+      }
       addLog(`[Creation] Saved path "${result.name}".`);
     } else {
       addLog(`[Creation] Couldn't save path: ${result.reason || 'error'}`);
@@ -2422,6 +2418,41 @@ function renderWalkControls(b) {
     </select>`;
 }
 
+// Walk Path block: Auto (the map's own default_walk_paths entry) or a
+// specific recorded Custom path -- same Auto/Custom choice the old pinned
+// row offered, just stored on the block itself (b.mode/b.pathName) instead
+// of a separate template-level config, so it can actually be reordered.
+function renderWalkPathControls(b) {
+  const isRecording = recordingBlockId === b.id;
+  const modeSeg = `
+    <div class="seg-toggle">
+      <button type="button" class="seg-btn ${b.mode === 'auto' ? 'active' : ''}" onclick="setWalkPathMode('${b.id}', 'auto')">Auto</button>
+      <button type="button" class="seg-btn ${b.mode === 'custom' ? 'active' : ''}" onclick="setWalkPathMode('${b.id}', 'custom')">Custom</button>
+    </div>`;
+  let customControls = '';
+  if (b.mode === 'custom') {
+    const options = savedPaths.map(n => `<option value="${n}" ${n === b.pathName ? 'selected' : ''}>${n}</option>`).join('');
+    customControls = `
+      <button type="button" class="block-mod-btn ${isRecording ? 'on' : ''}" onclick="toggleRecordPath('${b.id}')">${isRecording ? 'Stop' : 'Record'}</button>
+      <select class="block-input" style="width:auto;" onchange="setWalkPathPath('${b.id}', this.value)"><option value="">Pick saved path...</option>${options}</select>`;
+  }
+  return modeSeg + customControls;
+}
+
+function setWalkPathMode(id, mode) {
+  const loc = findBlockLocation(id);
+  if (!loc) return;
+  creationPhases[loc.phase][loc.idx].mode = mode;
+  renderPhases();
+}
+
+function setWalkPathPath(id, name) {
+  const loc = findBlockLocation(id);
+  if (!loc) return;
+  creationPhases[loc.phase][loc.idx].pathName = name;
+  renderPhases();
+}
+
 // Every Place Unit block as {n, name}, in the same #1, #2, ... routine order
 // placeUnitOrdinal() numbers rows with -- the option list for any control
 // that targets an already-placed unit.
@@ -2480,6 +2511,7 @@ function renderBlockRow(b, phase) {
   const extra = b.type === 'setting_change' ? renderSettingControls(b)
     : b.type === 'place_unit' ? renderPlaceUnitControls(b)
     : b.type === 'walk' ? renderWalkControls(b)
+    : b.type === 'walk_path' ? renderWalkPathControls(b)
     : b.type === 'upgrade_unit' ? renderUpgradeControls(b)
     : b.type === 'auto_upgrade_unit' ? renderAutoUpgradeControls(b)
     : b.type === 'sell_unit' ? renderSellUnitControls(b) : '';
@@ -2838,37 +2870,6 @@ function applyPlaceUnitPosition() {
   });
 })();
 
-// The permanent first row of Pre Start: which walk path this routine uses to
-// get to its spot. Auto (the game's default pathing) or a recorded custom
-// path. Runs once per task by definition -- you only walk out once -- so the
-// "Runs once" chip is fixed, not a toggle, and the row has no delete.
-function renderWalkRow(entering) {
-  const isRecording = recordingBlockId === 'walkpath';
-  const modeSeg = `
-    <div class="seg-toggle">
-      <button type="button" class="seg-btn ${creationWalk.mode === 'auto' ? 'active' : ''}" onclick="setWalkMode('auto')">Auto</button>
-      <button type="button" class="seg-btn ${creationWalk.mode === 'custom' ? 'active' : ''}" onclick="setWalkMode('custom')">Custom</button>
-    </div>`;
-  let customControls = '';
-  if (creationWalk.mode === 'custom') {
-    const options = savedPaths.map(n => `<option value="${n}" ${n === creationWalk.pathName ? 'selected' : ''}>${n}</option>`).join('');
-    customControls = `
-      <button type="button" class="block-mod-btn ${isRecording ? 'on' : ''}" onclick="toggleRecordPath('walkpath')">${isRecording ? 'Stop' : 'Record'}</button>
-      <select class="block-input" style="width:auto;" onchange="setWalkPath(this.value)"><option value="">Pick saved path...</option>${options}</select>`;
-  }
-  return `
-    <div class="block-row pinned${entering ? ' entering' : ''}" style="--blk: var(--teal);">
-      <svg class="w-3.5 h-3.5 flex-shrink-0" style="color: var(--teal);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 2.5l8 8-3.5 1-4 6.5-2-2L5.5 22 2 18.5 8 12l-2-2 6.5-4z"/>
-      </svg>
-      <span class="block-label">Walk Path</span>
-      ${modeSeg}
-      ${customControls}
-      <div class="block-actions">
-        <span class="task-chip">Runs once</span>
-      </div>
-    </div>`;
-}
 
 // Team Loadout controls in the Creation top bar -- saved as part of the
 // template (see saveCurrentTemplate). Equipment include/exclude only means
@@ -2902,22 +2903,15 @@ function renderPhases() {
   el.innerHTML = PHASES.map(phase => {
     const blocks = creationPhases[phase];
     const emptyText = phase === 'prestart'
-      ? 'Drag Place Unit, Setting, or Auto Upgrade Unit blocks here -- only those are possible before the match starts.'
+      ? 'Drag Place Unit, Setting, Auto Upgrade Unit, or Walk Path blocks here -- only those are possible before the match starts.'
       : 'Drag blocks here -- upgrades, sells, waits, anything goes mid-battle.';
     const emptyDiv = `<div class="text-xs text-center" style="color: var(--text-muted); padding: 16px 0;">${emptyText}</div>`;
-    // In Pre Start only Setting blocks sit above Walk Path (a setting that
-    // must fire the instant the match loads, before you even start walking);
-    // Place Unit blocks always render below it, since placing happens after
-    // you've walked to your spot. Walk Path itself stays pinned between the
-    // two -- it isn't a reorderable block.
-    let body;
-    if (phase === 'prestart') {
-      const settingRows = blocks.filter(b => b.type === 'setting_change').map(b => renderBlockRow(b, phase)).join('');
-      const unitRows = blocks.filter(b => b.type !== 'setting_change').map(b => renderBlockRow(b, phase)).join('');
-      body = settingRows + renderWalkRow(freshPhase) + (blocks.length === 0 ? emptyDiv : unitRows);
-    } else {
-      body = blocks.length === 0 ? emptyDiv : blocks.map(b => renderBlockRow(b, phase)).join('');
-    }
+    // Walk Path used to be a permanent pinned row here, always running
+    // before EVERY block in this list no matter where they were dragged --
+    // it's a real block now (see BLOCK_TYPES.walk_path), so Pre Start
+    // renders in true stored order same as Battle already does, and
+    // dragging it (or anything else) actually changes when it runs.
+    const body = blocks.length === 0 ? emptyDiv : blocks.map(b => renderBlockRow(b, phase)).join('');
     return `
       <div class="phase-panel${panelEntering} ${phaseCollapsed[phase] ? 'collapsed' : ''}">
         <div class="phase-head" onclick="togglePhaseCollapsed('${phase}')">
@@ -3113,10 +3107,14 @@ async function saveCurrentTemplate() {
   const nameInput = document.getElementById('template-name');
   const name = nameInput.value.trim();
   if (!name) return;
-  const payload = { walk: { ...creationWalk }, team: creationTeam, equipment: creationEquipment };
+  // No more separate top-level "walk" config -- Walk Path is a real block
+  // now, so its mode/pathName save as part of the block itself, same as
+  // every other block's own fields.
+  const payload = { team: creationTeam, equipment: creationEquipment };
   PHASES.forEach(phase => {
     payload[phase] = creationPhases[phase].map(b => ({
       type: b.type, params: b.params, once: b.once, kind: b.kind, value: b.value, hotkey: b.hotkey,
+      mode: b.mode, pathName: b.pathName,
     }));
   });
   try {
@@ -3130,8 +3128,11 @@ async function saveCurrentTemplate() {
 // already assumes on first load, just re-applied on demand so starting a
 // new template doesn't require manually clearing out whatever was loaded.
 function newTemplate() {
-  creationPhases = { prestart: [], battle: [] };
-  creationWalk = { mode: 'auto', pathName: '' };
+  // A default Auto Walk Path block, same as every routine used to always
+  // get for free when it was a permanent pinned row -- still real/removable
+  // now, just pre-added so a brand new template isn't missing pathing by
+  // default.
+  creationPhases = { prestart: [{ id: newBlockId(), type: 'walk_path', params: {}, once: false, mode: 'auto', pathName: '' }], battle: [] };
   creationTeam = '';
   creationEquipment = 'include';
   document.getElementById('template-name').value = '';
@@ -3218,6 +3219,10 @@ function blockFromSaved(b) {
   if (b.type === 'place_unit') {
     block.hotkey = b.hotkey || '';
   }
+  if (b.type === 'walk_path') {
+    block.mode = b.mode === 'custom' ? 'custom' : 'auto';
+    block.pathName = b.pathName || '';
+  }
   return block;
 }
 
@@ -3228,13 +3233,12 @@ async function loadSelectedTemplate() {
     const data = await pywebview.api.load_template(name);
     const payload = data.blocks || {};
     creationPhases = { prestart: [], battle: [] };
-    creationWalk = { mode: 'auto', pathName: '' };
     creationTeam = '';
     creationEquipment = 'include';
 
     if (Array.isArray(payload)) {
       // Oldest shape: one flat pre-phases list. Everything that still exists
-      // as a block lands in Battle; pathing blocks became the walk config.
+      // as a block lands in Battle; pathing blocks became a Walk Path block.
       migrateLegacyBlocks(payload, []);
     } else if (payload.before || payload.during || payload.after) {
       // Three-phase shape (Before/In/After Match): Before's placements are
@@ -3242,7 +3246,19 @@ async function loadSelectedTemplate() {
       migrateLegacyBlocks([...(payload.during || []), ...(payload.after || [])], payload.before || []);
     } else {
       PHASES.forEach(phase => { creationPhases[phase] = (payload[phase] || []).map(blockFromSaved); });
-      if (payload.walk) creationWalk = { mode: payload.walk.mode === 'custom' ? 'custom' : 'auto', pathName: payload.walk.pathName || '' };
+      // A template saved before Walk Path became a real block kept its
+      // config in this separate top-level field instead -- migrate it into
+      // a synthesized block at the very top of Pre Start (where it always
+      // effectively ran anyway) so the template keeps working unchanged.
+      // Skipped if Pre Start already has a real walk_path block (current
+      // format), so a template saved since this change never gets a
+      // duplicate.
+      if (payload.walk && !creationPhases.prestart.some(b => b.type === 'walk_path')) {
+        creationPhases.prestart.unshift({
+          id: newBlockId(), type: 'walk_path', params: {}, once: false,
+          mode: payload.walk.mode === 'custom' ? 'custom' : 'auto', pathName: payload.walk.pathName || '',
+        });
+      }
       creationTeam = payload.team || '';
       creationEquipment = payload.equipment === 'exclude' ? 'exclude' : 'include';
     }
@@ -3253,10 +3269,10 @@ async function loadSelectedTemplate() {
 }
 
 // Shared by both legacy template shapes: sort old blocks into the two-phase
-// model. Pathing block types no longer exist as blocks -- a custom_path with
-// a recorded path becomes the pinned walk row's config, auto_select just
-// confirms the default -- and any placement from the old "before" list stays
-// in Pre Start while everything else runs in Battle.
+// model. custom_path/auto_select (their oldest form as standalone blocks)
+// migrate into a real Walk Path block at the top of Pre Start instead --
+// any placement from the old "before" list stays in Pre Start while
+// everything else runs in Battle.
 function migrateLegacyBlocks(mainBlocks, beforeBlocks) {
   for (const b of beforeBlocks) {
     if (b.type === 'custom_path' || b.type === 'auto_select') { migrateWalkBlock(b); continue; }
@@ -3271,7 +3287,11 @@ function migrateLegacyBlocks(mainBlocks, beforeBlocks) {
 }
 
 function migrateWalkBlock(b) {
-  if (b.type === 'custom_path' && b.pathName) creationWalk = { mode: 'custom', pathName: b.pathName };
+  const mode = (b.type === 'custom_path' && b.pathName) ? 'custom' : 'auto';
+  const pathName = mode === 'custom' ? b.pathName : '';
+  const existing = creationPhases.prestart.find(x => x.type === 'walk_path');
+  if (existing) { existing.mode = mode; existing.pathName = pathName; }
+  else creationPhases.prestart.unshift({ id: newBlockId(), type: 'walk_path', params: {}, once: false, mode, pathName });
 }
 
 // ---------------------------------------------------------------------------
