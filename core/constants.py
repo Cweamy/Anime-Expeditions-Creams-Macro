@@ -41,3 +41,18 @@ else:
 
 UI_DIR = os.path.join(BUNDLE_DIR, "ui")
 ASSETS_DIR = os.path.join(BUNDLE_DIR, "Assets")
+
+# Same layout as ASSETS_DIR (Assets/ui/<name>.png, Assets/maps/<name>.png),
+# but rooted at APP_DIR instead of BUNDLE_DIR -- for a packaged exe those
+# are different places: ASSETS_DIR lives in a onefile build's ephemeral
+# temp extraction dir (re-populated fresh from the bundled originals every
+# launch, so editing a file there directly doesn't stick), while APP_DIR is
+# the persistent folder beside the actual exe. core.vision checks here
+# FIRST for a same-named override before falling back to the bundled
+# original, so someone whose setup renders a button at a different size/
+# style than the shipped reference image can just drop a replacement PNG
+# in Assets/ui next to the exe -- no rebuild, no touching bundled files,
+# and it survives both restarts and updates. In source/dev runs APP_DIR ==
+# BUNDLE_DIR already, so this is a no-op there (editing the real file IS
+# the override).
+ASSETS_OVERRIDE_DIR = os.path.join(APP_DIR, "Assets")

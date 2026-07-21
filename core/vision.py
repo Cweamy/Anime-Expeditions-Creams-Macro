@@ -65,7 +65,35 @@ class TemplateNotFound(Exception):
 _template_cache = {}
 
 
+def _override_dir(template_dir: str) -> str:
+    """Maps a bundled template dir (under constants.ASSETS_DIR) to its
+    user-override equivalent (under constants.ASSETS_OVERRIDE_DIR) -- e.g.
+    <bundled>/Assets/ui -> <app>/Assets/ui. Returns template_dir itself
+    (no separate override location) if it isn't actually under ASSETS_DIR
+    for some reason, or if the two roots are the same (source/dev runs,
+    see constants.ASSETS_OVERRIDE_DIR)."""
+    if constants.ASSETS_OVERRIDE_DIR == constants.ASSETS_DIR:
+        return template_dir
+    try:
+        rel = os.path.relpath(template_dir, constants.ASSETS_DIR)
+    except ValueError:
+        return template_dir  # different drives on Windows -- can't be relative
+    if rel.startswith(".."):
+        return template_dir
+    return os.path.join(constants.ASSETS_OVERRIDE_DIR, rel)
+
+
 def template_path(name: str, template_dir: str = UI_ASSETS_DIR) -> str:
+    """A user-supplied override (see constants.ASSETS_OVERRIDE_DIR) wins
+    over the bundled reference image with the same name -- replacing a
+    template that isn't matching well on someone's setup is just "drop a
+    same-named .png in the Assets folder next to the exe", no
+    rebuild/reinstall needed."""
+    override_dir = _override_dir(template_dir)
+    if override_dir != template_dir:
+        override_path = os.path.join(override_dir, f"{name}.png")
+        if os.path.isfile(override_path):
+            return override_path
     return os.path.join(template_dir, f"{name}.png")
 
 
@@ -343,6 +371,55 @@ def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float 
             return match
         time.sleep(interval)
     return None
+
+
+def find_image_any(hwnd: int, names: tuple, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
+                    template_dir: str = UI_ASSETS_DIR):
+    """find_image, but for a UI element that renders as one of a few visually
+    distinct variants (e.g. nav_play.png vs nav_play_2.png -- same button,
+    different art on different setups/game updates) -- same idea as the
+    RECONNECT_IMAGE_NAMES / click_anywhere_to_close(_2) variant lists
+    core.runner already tries by hand, just reusable and region/threshold-
+    aware. Tries each name in `names` in order and returns (match, name) for
+    the first one actually found on screen -- NOT the first one that merely
+    has a reference image on disk. A name with no reference image yet is
+    skipped (same as a caller manually looping and catching TemplateNotFound
+    per name), unless every single name in `names` is missing, in which case
+    there's nothing to search for at all and the first TemplateNotFound
+    propagates. Returns (None, None) if every present template was searched
+    for and none matched."""
+    first_missing = None
+    found_any_template = False
+    for name in names:
+        try:
+            match = find_image(hwnd, name, region, threshold, template_dir)
+        except TemplateNotFound as exc:
+            if first_missing is None:
+                first_missing = exc
+            continue
+        found_any_template = True
+        if match is not None:
+            return match, name
+    if not found_any_template and first_missing is not None:
+        raise first_missing
+    return None, None
+
+
+def wait_for_image_any(hwnd: int, names: tuple, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
+                        timeout: float = 8.0, interval: float = 0.3, stop_event: threading.Event = None,
+                        template_dir: str = UI_ASSETS_DIR):
+    """wait_for_image, but tries every name in `names` on each poll instead of
+    just one -- see find_image_any. Returns (match, name) of whichever
+    variant hit first, or (None, None) on timeout/stop."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if stop_event is not None and stop_event.is_set():
+            return None, None
+        match, name = find_image_any(hwnd, names, region, threshold, template_dir)
+        if match is not None:
+            return match, name
+        time.sleep(interval)
+    return None, None
 
 
 def click_match(mouse, hwnd: int, match: dict) -> None:

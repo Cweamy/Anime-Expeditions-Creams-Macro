@@ -7,14 +7,38 @@ maps, stage_data.json).
 Filenames must match the `name` string a runner call passes to
 core.vision.find_image(hwnd, "<name>", ...) EXACTLY -- core.vision.
 template_path just does `f"{name}.png"`, no normalizing of spaces/case.
-Windows' filesystem is case-insensitive, so a casing mismatch (Victory.png
-for "victory") still resolves fine, but a SPACE where the code has an
-underscore does not ("Leave Stage.png" silently never matched "leave_stage"
-and just as silently no-opped, since every lookup here is wrapped as
-optional/best-effort -- see leave_stage.png/repeat_stage.png/
-max_placement_reached.png/cannot_place.png below, all renamed from
-space-separated names that were quietly dead code). When adding a new one,
-match whatever snake_case name the calling code actually uses.
+Windows' filesystem is case-insensitive, so a casing mismatch still
+resolves fine, but a SPACE where the code has an underscore does not. Every
+file in this folder is lowercase snake_case with no spaces for exactly
+that reason -- keep any new one the same way.
+
+REPLACING AN IMAGE YOURSELF
+----------------------------
+If a button isn't being found/clicked reliably on your setup (a common
+cause: Roblox rendering its UI at a slightly different size -- see
+core.vision.SCALE_FACTORS, which already tries a few scales automatically
+before giving up), you can swap in your own screenshot without touching
+the app at all:
+
+1. In the macro, open Settings > General > "Open Assets Folder" -- this
+   opens (creating if needed) a persistent Assets/ui folder next to the
+   exe. This is a SEPARATE location from the one this README lives in
+   (which is bundled inside the app and gets re-extracted fresh every
+   launch for a packaged exe -- editing it directly doesn't stick).
+2. Crop a tight screenshot of just the button/text that isn't matching,
+   the same way the existing reference images are cropped.
+3. Save it there under the EXACT same filename as the one it's replacing
+   (see the catalog below for which name goes with which button).
+4. Restart the macro. core.vision checks this folder FIRST for every
+   template, falling back to the bundled original if nothing's there --
+   so this only ever overrides what you've actually replaced.
+
+(Running from source instead of the packaged exe? Assets/ui IS that
+persistent folder already -- just edit the file directly, no separate
+override location needed.)
+
+CATALOG
+-------
 
 nav_play.png
   The Play button on the Nav bar (bottom-left menu: Store/Units/Items/
@@ -27,10 +51,16 @@ nav_play.png
 
 nav_back.png
   The "Back" button shown on the gamemode-select screen (Story/Raid/
-  Challenge/...) after Play is clicked. Used only to CONFIRM that menu has
-  actually finished opening -- once it's found, Story is clicked at the
-  fixed coordinate (666, 147) rather than via image search (see
+  Expedition/...) after Play is clicked. Used only to CONFIRM that menu
+  has actually finished opening -- once it's found, Story is clicked at
+  the fixed coordinate (666, 147) rather than via image search (see
   core.runner.STORY_CLICK).
+
+nav_disband.png
+  Optional. Checked right before clicking the gamemode card (Story/Raid/
+  Expedition) for a "Disband Party" prompt that can block the click --
+  found and clicked, this clears the way first. Missing template just
+  skips the check.
 
 story.png
   Not used by the runner -- Story's screen position is fixed once the
@@ -39,10 +69,121 @@ story.png
   needs a "find the Story card" search.
 
 raid.png
-  Used by the runner to find and click Raid on the gamemode menu (Story's
-  neighboring card) -- unlike Story, Raid has no hardcoded click point, so
-  this is searched for instead. Tight crop of just the word (see
+  Used to find and click Raid on the gamemode menu (Story's neighboring
+  card) -- unlike Story, Raid has no hardcoded click point, so this is
+  searched for instead. Tight crop of just the word (see
   core.runner._click_gamemode).
+
+expedition.png
+  Same idea as raid.png, for the Expedition gamemode card.
+
+expedition_flower_forest.png / expedition_rose_kingdom.png
+  Expedition's own map cards (core.runner._select_expedition_map,
+  EXPEDITION_MAP_IMAGES) -- clicked to pick that map on the Expedition
+  screen. School Grounds has NO image here: it's whatever's selected by
+  default when the screen opens, so no search/click happens for it at all.
+
+nav_select_stage.png
+  The confirm button that finalizes a Story/Raid map+stage+difficulty
+  pick. Waited on to confirm the stage-select screen has opened (Raid
+  reuses the same screen as Story, just a different row layout), then
+  clicked (verified/retried) to move on to Start/Enter Matchmaking.
+
+exp_select_stage.png
+  Expedition's equivalent of nav_select_stage.png -- its own confirm
+  button after picking a map and difficulty, Solo mode only (matchmaking
+  skips straight to exp_enter_matchmaking.png below).
+
+enter_matchmaking.png / exp_enter_matchmaking.png
+  "Enter Matchmaking", matchmaking play mode only, searched for after the
+  stage/difficulty confirm click. enter_matchmaking.png is restricted to a
+  calibrated region (coords.matchmaking_region_*) for Story/Raid;
+  exp_enter_matchmaking.png is searched full-window instead since
+  Expedition has no calibrated region for it.
+
+nav_start.png
+  Solo mode's "Start" button, clicked once the stage/difficulty confirm
+  screen closes (core.runner._click_start_and_wait_teleport). Re-clicked
+  only while still visible (a dropped click); once it's gone, that's
+  success and the runner waits on nav_unitmanager.png instead of
+  continuing to click a button that already worked.
+
+nav_unitmanager.png
+  Only renders once you're actually inside a match -- polled continuously
+  as the actual confirmation a teleport-in finished (used by both the
+  initial entry and every repeat's re-teleport).
+
+warning.png
+  Optional. If a warning popup is blocking Start Game right after Pre
+  Start finishes, the runner waits up to 10s for it to clear before
+  searching for Start Game at all.
+
+nav_start_game.png / nav_start_game_2.png / nav_start_game_3.png /
+nav_start_game_4.png
+  The in-match "Start Game" (ready-up) button, tried in this order as
+  different visual variants of the same button seen in practice
+  (core.runner._find_start_game_button) -- so the actual click isn't
+  dependent on just one of them matching. nav_start_game.png alone is also
+  used earlier to check party leadership (only the leader sees it) before
+  Pre Start runs.
+
+victory.png / defeat.png
+  Story/Raid's match-result screen, polled throughout battle
+  (core.runner._wait_for_match_result). Expedition doesn't use these at
+  all -- see exp_continue.png/exp_extract.png below instead.
+
+School Grounds.png / Rose Kingdom.png / Fairy King Forest.png /
+King's Tomb.png / Flower Forest.png
+  Regular Challenge map detection (core.runner._detect_current_challenge_
+  map) -- Challenge is Story's own flow, just with the game picking a
+  random one of these 5 maps for you instead of you picking it, so this
+  is a "which one did it land on" check, NOT the map-card search
+  Assets/maps/<map>.png does (different folder, different purpose --
+  that one's for scrolling/clicking a map by NAME in Story's own map
+  carousel, this is for recognizing a map that's already showing).
+
+challenge.png
+  Regular Challenge's gamemode card, same idea as raid.png/expedition.png
+  (core.runner._click_gamemode) -- found by image search on the Play
+  menu, no fixed coordinate like Story's.
+
+challenge_loaded.png
+  Confirms the Challenge screen has actually finished opening
+  (core.runner._enter_challenge_stage) before clicking a stage slot at
+  one of its 3 fixed positions (CHALLENGE_STAGE_CLICK) -- a load-
+  confirmation banner, not a button, so it's only waited on, never
+  clicked itself.
+
+chal_enter.png
+  Challenge's own "Enter Matchmaking" button, Matchmaking play mode only
+  -- searched full-window (no calibrated region exists for it, same
+  reasoning as exp_enter_matchmaking.png).
+
+chal_select.png
+  Challenge's own confirm button, Solo play mode only, clicked
+  (verified/retried) right before the actual "Start" click
+  (core.runner._enter_challenge_stage) -- Challenge's equivalent of
+  nav_select_stage.png/exp_select_stage.png.
+
+exp_continue.png / continue_2.png
+  Expedition's wave-continue flow. exp_continue.png shows up once per
+  wave clear -- clicking it, then waiting for continue_2.png and clicking
+  that, moves on to the next wave.
+
+exp_extract.png / continue.png / extract.png
+  Expedition's end-of-run choice, which shows exp_extract.png TWICE: the
+  1st sighting is declined (click continue.png instead -- same choice as
+  exp_continue's flow, but a different button graphic -- with a cooldown
+  after so a laggy still-visible banner isn't miscounted as the 2nd
+  sighting), the 2nd sighting is actually accepted (click exp_extract.png
+  itself, then wait for extract.png and click that), landing on the reward
+  screen -- Expedition's equivalent of victory.png.
+
+click_anywhere_to_close.png / click_anywhere_to_close_2.png
+  Optional, checked every poll tick during battle ONLY on Spirit City Act
+  3 (Raid) -- a boss/cutscene intro popup, clicked if found. Two visual
+  variants seen in practice, tried in order (same idea as
+  nav_start_game.png and friends).
 
 upgradeable.png / not_upgradeable.png
   Used by Battle-phase Upgrade Unit blocks (core.runner._run_upgrade_unit_tick).
@@ -50,6 +191,35 @@ upgradeable.png / not_upgradeable.png
   actually renders on its info panel: upgradeable.png means click it now;
   not_upgradeable.png (greyed out / insufficient gold / on cooldown,
   whatever this game shows) means wait and retry later instead of clicking.
+
+cannot_place.png / max_placement_reached.png
+  Place Unit block, checked right after each placement click. Both
+  optional -- missing template just skips the check. max_placement_reached
+  means the unit cap is hit, abandoning the whole block; cannot_place
+  (matched against the LOWEST/bottommost hit on screen, since rejection
+  banners can stack) means the spot itself was blocked, triggering a
+  nudge-and-retry loop instead.
+
+unit_exist.png
+  Same Place Unit block, post-placement verification -- checked first, one
+  retry click if it's not there yet, re-checked. Missing template just
+  disables the verification step entirely.
+
+leave_stage.png
+  Used in three places: quitting to menu on Stop/F2, the first step of
+  mid-task recovery, and the normal end-of-run flow when no repeats are
+  left (verified/retried click that backs out to the lobby).
+
+repeat_stage.png
+  End-of-match flow when the task has repeats left (and isn't
+  matchmaking) -- verified/retried click that re-queues the same stage,
+  skipping the lobby/map/stage picks entirely.
+
+return.png
+  Optional. Leave Stage can bring up its own "Return to Lobby"
+  confirmation instead of backing out on its own; polled briefly (not a
+  one-shot check -- the popup can take a moment to animate in) right after
+  every Leave Stage click and clicked if found.
 
 team.png
   Used by Team Loadout application (core.runner._apply_team_loadout).
@@ -64,63 +234,28 @@ include.png / exclude.png
   Used by Team Loadout application to pick Include or Exclude for
   equipment (whichever the task's template has set) after Confirm.
 
-warning.png
-  Optional (core.runner._wait_out_start_game_warning): if a warning popup
-  is blocking Start Game right after Pre Start finishes, the runner waits
-  up to 10s for it to clear before searching for Start Game at all.
-
-nav_start_game_2.png
-  Two uses: (1) optional, core.runner._click_start_game_2_if_found -- a
-  second Start Game / confirm button that can show up alongside the
-  warning above (e.g. a "Start Anyway" prompt) -- found and clicked, this
-  skips the warning wait entirely instead of sitting through the full
-  timeout for something that was already dismissable right away. (2) a
-  fallback variant for the actual "start the round" click -- see
-  nav_start_game_3.png below.
-
-nav_start_game_3.png
-  Optional. core.runner._find_start_game_button tries nav_start_game,
-  then nav_start_game_2, then this one, in order, for the actual "start
-  the round" click (core.runner._play_one_match) -- different visual
-  variants of the same button seen in practice, so that click isn't
-  dependent on just one of them matching.
-
-teleportstuck.png
-  Optional. Checked alongside nav_unitmanager during every teleport-in wait
-  (core.runner._wait_for_teleport_or_stuck, used by both
-  _wait_teleport_in and _click_start_and_wait_teleport) -- if this is
-  found on screen CONTINUOUSLY for more than TELEPORT_STUCK_TIMEOUT (10s),
-  the game is treated as disconnected (not just slow) and a rejoin is
-  attempted (see reconnect.png below).
-
-reconnect.png / reconnect_2.png / retry.png
+reconnect.png / reconnect_2.png / reconnect_3.png / retry.png
   Optional. Roblox's own "Reconnect"/"Retry" prompt, shown when it actually
-  disconnects -- checked every poll during a teleport-in wait alongside
-  teleportstuck.png, but unlike it, finding ANY of these is treated as an
-  immediate, definite disconnect (no 10s continuous-visibility wait needed).
-  Either signal triggers core.runner._handle_disconnect: logs a Discord
-  webhook notice (if configured), then core.runner._attempt_rejoin opens
-  roblox://experiences/start?placeId=<PLACE_ID> to rejoin, waiting for
-  nav_play (the lobby) to confirm it worked. Roblox may re-launch into a
-  brand new window if it had fully closed -- main.py's dock watchdog
-  re-docks that on its own, and the runner picks up the new hwnd via
-  self._current_hwnd once _attempt_rejoin confirms the lobby loaded.
-
-return.png
-  Optional. core.runner._click_return_to_lobby_if_found -- Leave Stage
-  can bring up its own "Return to Lobby" confirmation instead of backing
-  out on its own; checked (one-shot, not a wait) right after every Leave
-  Stage click (post-match, mid-task recovery, and on Stop) and clicked if
-  found.
+  disconnects -- checked every poll during a teleport-in wait, but unlike
+  nav_unitmanager, finding ANY of these is treated as an immediate,
+  definite disconnect (no continuous-visibility wait needed). Triggers a
+  deep-link rejoin (core.runner._attempt_rejoin) -- skipped if any OTHER
+  standalone Roblox window is currently open, since the deep link's own
+  single-instance handling would force-close it.
 
 nav_settings.png / nav_search.png / toggle_true.png / toggle_false.png /
 nav_settings_on.png
   Used by core.runner._open_settings_search/_search_and_set_toggle to
   open Settings, search a setting by name, and read/click its on/off
-  toggle. Shared by the Auto Vote Start reset in
-  _start_game_or_reset_via_settings and any Setting block of "toggle"
-  kind (_run_setting_block) -- same search-and-toggle mechanic either
-  way, just a different setting name/desired state.
+  toggle. Used by any Setting block of "toggle" kind (_run_setting_block).
+
+restart_btn.png / restart_btn2.png
+  UNUSED -- leftovers from an earlier "disable Auto Vote Start + restart
+  the game via Settings" flow that's since been removed (most people run
+  with Auto Vote Start on deliberately, so the macro no longer fights it;
+  see core.runner's party-leadership check). Kept here rather than
+  deleted in case that flow ever comes back, but nothing currently
+  searches for either of these.
 
 Add more <name>.png files here as new macro steps need to recognize other
 buttons/screens -- core.vision.find_image(hwnd, "<name>", ...) will pick

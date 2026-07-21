@@ -57,6 +57,10 @@
 - **Discord webhook reporting** — optional win/loss embeds posted to a Discord channel as the macro runs.
 - **Win/loss history & stats** — session and all-time win/loss counts, win rate, and a recent-run history, all in the Dashboard.
 - **Global hotkeys** — start/stop/pause without touching the mouse, with the bound key shown right on the Dashboard's controls.
+- **Regular Challenge automation** — its own tab: enable/disable each of the 3 stage slots independently, assign a Macro Operation per Story map (Challenge rotates a random map into each slot), and track today's play count against a daily cap. Resets on the same fixed :00/:30 clock every stage shares. Runs before the Task Queue every time you press Start.
+- **Multi-scale image matching** — automatically tries a template at a few scale factors when the exact size misses, absorbing UI that renders slightly bigger/smaller on someone else's setup instead of failing outright.
+- **Replaceable reference images** — if a button still isn't matching reliably on your setup, drop a same-named screenshot into Settings > General > "Open Assets Folder" to override it — no rebuild or reinstall needed (see [`Assets/ui/README.txt`](Assets/ui/README.txt) for the full catalog of what each image is for).
+- **Themes** — an independent Background (Dark, true Black, Slate, or Light) and Accent color pick, mix and match freely, under Settings > General.
 - **Self-updating** — checks GitHub for new releases and offers a one-click update from inside the app (see [Auto-Updater](#auto-updater)).
 
 ## Requirements
@@ -104,8 +108,9 @@ python main.py
 
 1. **Task** — queue up what to farm (map, stage, difficulty, repeat count).
 2. **Creation** — build a Pre Start routine (unit placement, settings, walk path) and save it as a template.
-3. **Dashboard** — assign a template to a task, hit Start, and monitor progress/stats live.
-4. **Settings** — hotkeys, Discord webhook, default walk paths, and calibration/debug tools.
+3. **Challenge** — optionally enable Regular Challenge automation and assign a Macro Operation per map (runs before the Task Queue on Start).
+4. **Dashboard** — assign a template to a task, hit Start, and monitor progress/stats live.
+5. **Settings** — hotkeys, Discord webhook, default walk paths, themes, and calibration/debug tools.
 
 CLI diagnostics (no GUI) are available via:
 
@@ -124,10 +129,14 @@ main.py          # pywebview entry point / JS<->Python API bridge
 core/            # macro engine: vision (image matching), runner (match automation),
                  # OCR, webhook, window docking, input, path recording, updater...
 core/constants.py # frozen-build-aware path resolution (BUNDLE_DIR/APP_DIR) --
-                 # every other core/*.py module's paths derive from this
+                 # every other core/*.py module's paths derive from this,
+                 # including ASSETS_OVERRIDE_DIR (see below)
 ui/              # frontend (HTML/CSS/JS) rendered inside the docked window
 tools/           # one-off scripts for scraping wiki data (stage rewards, item icons)
-Assets/ui/       # reference screenshots the macro's image search looks for
+Assets/ui/       # reference screenshots the macro's image search looks for --
+                 # see Assets/ui/README.txt for the full catalog. A same-named
+                 # file dropped in the Assets folder next to the exe (Settings >
+                 # General > "Open Assets Folder") overrides one of these
 Assets/map/      # full map images for the Set Position picker
 Assets/maps/     # map name-label crops for map-select image search
 Paths/defaults/  # known-good default walk paths, shipped with the repo

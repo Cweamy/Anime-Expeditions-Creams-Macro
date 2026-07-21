@@ -23,7 +23,7 @@
       </div>
       <span style="color: var(--border);">|</span>
       <span class="text-sm font-semibold" style="color: var(--text-dim);">Cream's Macro</span>
-      <span id="ver-badge" class="text-[10px] px-1.5 py-0.5 rounded border" style="color: var(--brand); border-color: var(--border); background: var(--bg-surface); cursor: pointer;" title="Click to check for updates" onclick="manualCheckForUpdate()">v0.0.1</span>
+      <span id="ver-badge" class="text-[10px] px-1.5 py-0.5 rounded border ver-badge-btn" style="color: var(--brand); border-color: var(--border); background: var(--bg-surface); cursor: pointer;" title="Click to check for updates" onclick="manualCheckForUpdate()">v0.0.1</span>
     </div>
 
     <div class="flex items-center gap-1 no-drag">
@@ -42,6 +42,11 @@
       <button id="nav-creation" onclick="switchScreen('creation')" class="nav-btn no-drag" data-tooltip="Creation">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16M4 12h16"/>
+        </svg>
+      </button>
+      <button id="nav-challenge" onclick="switchScreen('challenge')" class="nav-btn no-drag" data-tooltip="Challenge">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 2l2.6 6.2 6.7.6-5.1 4.4 1.6 6.5L12 16.3l-5.8 3.4 1.6-6.5-5.1-4.4 6.7-.6z"/>
         </svg>
       </button>
       <button id="nav-settings" onclick="switchScreen('settings')" class="nav-btn no-drag" data-tooltip="Settings">
@@ -77,16 +82,58 @@
          Without this, the compact window showed nothing at all: the two-column
          layout below is 1552px wide and only renders correctly once the window
          has actually expanded to full size, so it stays hidden until then. -->
-    <div id="waiting-screen" class="flex-1 flex flex-col items-center justify-center gap-3">
-      <div class="spinner"></div>
-      <div class="text-sm font-semibold" style="color: var(--text-dim);">Waiting for Roblox...</div>
-      <div class="text-xs font-medium" style="color: var(--text-muted);">Launch Roblox, it'll dock in automatically</div>
-      <button onclick="skipWaiting()" class="mt-2 text-xs font-semibold px-3 py-1.5 rounded-lg border transition"
-              style="color: var(--text-dim); border-color: var(--border);"
+    <div id="waiting-screen" class="loading-screen flex-1 flex flex-col items-center justify-center">
+      <!-- Ambient backdrop: soft brand-tinted wash, a faint scanline grid fading
+           toward the edges, and a handful of slow-drifting particles -- all
+           purely decorative (pointer-events: none), sized to stay inside the
+           compact 400x324 window without pushing the content below it into
+           overflow (this screen only shows before the window expands). -->
+      <div class="loading-grid"></div>
+      <div class="loading-glow"></div>
+      <div class="loading-particles">
+        <span></span><span></span><span></span><span></span><span></span><span></span>
+      </div>
+
+      <!-- Radar-style emblem: a static outer ring, a spinning brand-lit arc,
+           a pulsing core, and two outward-expanding "ping" rings -- reads as
+           actively searching, which fits "waiting to detect Roblox" better
+           than a plain spinner. -->
+      <div class="loading-emblem">
+        <span class="loading-emblem-ping"></span>
+        <span class="loading-emblem-ping loading-emblem-ping-delay"></span>
+        <span class="loading-emblem-ring"></span>
+        <span class="loading-emblem-arc"></span>
+        <span class="loading-emblem-core"></span>
+      </div>
+
+      <div class="flex flex-col items-center" style="margin-top: 14px; line-height: 1;">
+        <span class="logo-anime text-[11px] uppercase tracking-[0.3em] font-bold">Anime</span>
+        <span class="logo-expeditions brand-font text-3xl font-bold" style="line-height: 1.15; margin-top: 2px;">Expeditions</span>
+      </div>
+
+      <div class="loading-tag" style="margin-top: 8px;">
+        <span class="loading-tag-dot"></span>Cream's Macro
+      </div>
+
+      <div class="flex items-center gap-1.5 text-sm font-semibold" style="color: var(--text); margin-top: 18px;">
+        <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="var(--brand)" stroke-width="2">
+          <circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/><circle cx="12" cy="12" r="0.6" fill="var(--brand)"/>
+        </svg>
+        Waiting for Roblox<span class="loading-dots"><span>.</span><span>.</span><span>.</span></span>
+      </div>
+      <div class="text-xs font-medium" style="color: var(--text-muted); margin-top: 4px;">Launch Roblox, it'll dock in automatically</div>
+
+      <button onclick="skipWaiting()" class="loading-skip-btn flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full border transition"
+              style="color: var(--text-dim); border-color: var(--border); background: var(--bg-surface); margin-top: 16px;"
               onmouseover="this.style.borderColor='var(--brand)'; this.style.color='var(--text)';"
               onmouseout="this.style.borderColor='var(--border)'; this.style.color='var(--text-dim)';">
         Skip
+        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 5l7 7-7 7M15 5l7 7-7 7"/>
+        </svg>
       </button>
+
+      <div id="ver-badge-loading" class="text-[10px] font-semibold" style="color: var(--text-muted); margin-top: 14px; letter-spacing: 0.04em;"></div>
     </div>
 
     <div id="main-layout" class="flex-1 flex min-h-0" style="display: none;">
@@ -124,12 +171,17 @@
       </div>
 
       <div class="flex flex-col p-3 gap-3 min-h-0 overflow-y-auto" style="width: 400px; flex-shrink: 0;">
-        <!-- Status readout: hero Action row + ledger rows with dotted leaders. -->
+        <!-- Status readout: hero Action row + ledger rows with dotted leaders.
+             Wrapped in .rp-hoverpanel so the extra detail rows (.rp-rows-extra)
+             can be absolutely positioned and overlay the panels below on hover
+             instead of pushing them down -- see .rp-rows-extra in style.css. -->
+        <div class="rp-hoverpanel">
         <section class="rp-panel">
           <header class="rp-panel-head">
             <span class="rp-head-tag" style="--rp-tag: var(--lilac);">Live</span>
             <span class="rp-head-title">Status Readout</span>
             <span class="rp-head-rule"></span>
+            <span class="rp-expand-hint" title="Hover for more detail">&#9662; details</span>
           </header>
           <div class="rp-hero">
             <span class="rp-pulse"></span>
@@ -171,6 +223,44 @@
             </div>
           </div>
         </section>
+        <!-- Hidden by default (max-height/opacity transition, see style.css);
+             reveals on hovering .rp-hoverpanel. Absolutely positioned so it
+             overlays the Scoreboard panel below instead of displacing it. -->
+        <div class="rp-rows-extra">
+          <div class="rp-rows">
+            <div class="rp-row">
+              <span class="rp-mark" style="--rp-mk: var(--brand);"></span>
+              <span class="rp-row-label">Mode</span>
+              <span class="rp-leader"></span>
+              <span class="rp-row-value" id="stat-mode">-</span>
+            </div>
+            <div class="rp-row">
+              <span class="rp-mark" style="--rp-mk: var(--teal);"></span>
+              <span class="rp-row-label">Stage</span>
+              <span class="rp-leader"></span>
+              <span class="rp-row-value" id="stat-stage">-</span>
+            </div>
+            <div class="rp-row">
+              <span class="rp-mark" style="--rp-mk: var(--amber);"></span>
+              <span class="rp-row-label">Difficulty</span>
+              <span class="rp-leader"></span>
+              <span class="rp-row-value" id="stat-difficulty">-</span>
+            </div>
+            <div class="rp-row">
+              <span class="rp-mark" style="--rp-mk: var(--slate);"></span>
+              <span class="rp-row-label">Play Mode</span>
+              <span class="rp-leader"></span>
+              <span class="rp-row-value" id="stat-play-mode">-</span>
+            </div>
+            <div class="rp-row">
+              <span class="rp-mark" style="--rp-mk: var(--lilac);"></span>
+              <span class="rp-row-label">Macro</span>
+              <span class="rp-leader"></span>
+              <span class="rp-row-value" id="stat-macro">-</span>
+            </div>
+          </div>
+        </div>
+        </div>
 
         <!-- Scoreboard: session up top, split ratio bars, lifetime footer strip. -->
         <section class="rp-panel">
@@ -239,7 +329,8 @@
                 <rect x="6" y="4.5" width="4" height="15" rx="1.2"/>
                 <rect x="14" y="4.5" width="4" height="15" rx="1.2"/>
               </svg>
-              Pause
+              <span id="btn-macro-pause-label">Pause</span>
+              <span id="btn-macro-pause-key" class="rp-btn-hotkey"></span>
             </button>
             <button id="btn-macro-stop" class="rp-btn rp-btn-stop" onclick="stopMacro()" disabled>
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -341,6 +432,69 @@
     </div>
   </div>
 
+  <!-- ============ CHALLENGE screen: Regular Challenge automation ============
+       Left: Regular Challenge itself (on/off, its 3 stage slots, the shared
+       daily cap, manual reset). Right: per-map config -- Regular Challenge
+       rotates one of the 5 Story maps through each slot over time, so the
+       Macro Operation + daily count are tracked per MAP, not per slot (see
+       main.py's get_challenge_settings). Rendered by renderChallengeScreen()
+       in app.js. -->
+  <div id="screen-challenge" class="flex-1 flex min-h-0 p-3 gap-3" style="display: none;">
+    <div class="flex flex-col min-h-0" style="flex: 1;">
+      <section class="rp-panel rp-panel-fill">
+        <header class="rp-panel-head">
+          <span class="rp-head-tag" style="--rp-tag: var(--amber);">Auto</span>
+          <span class="rp-head-title">Regular Challenge</span>
+          <span class="rp-head-rule"></span>
+        </header>
+        <div class="p-3 flex flex-col gap-3 overflow-y-auto" style="min-height: 0;">
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Enable Challenge</div>
+              <div class="setting-desc">Runs every ready stage once, before the Task Queue, each time you press Start.</div>
+            </div>
+            <button id="toggle-challenge-enabled" class="toggle-switch" onclick="toggleChallengeEnabled(this)"></button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Play Mode</div>
+              <div class="setting-desc">Solo or Matchmaking for every Challenge stage.</div>
+            </div>
+            <div class="seg-toggle" style="width: auto;">
+              <button type="button" id="challenge-mode-solo" class="seg-btn" onclick="setChallengePlayMode('solo')">Solo</button>
+              <button type="button" id="challenge-mode-matchmaking" class="seg-btn" onclick="setChallengePlayMode('matchmaking')">Matchmaking</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="wh-hint" style="margin-bottom: 6px;">Resets every :00 / :30 -- pick which of the 3 stage slots to attempt below.</div>
+            <div id="challenge-stage-list" class="flex flex-col gap-1.5"></div>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0; border-bottom: none;">
+            <div>
+              <div class="setting-label">Reset Counts Now</div>
+              <div class="setting-desc">Last reset: <span id="challenge-last-reset">-</span>. Counts also auto-reset once a day on their own.</div>
+            </div>
+            <button class="task-toolbar-btn danger" onclick="resetChallengeCounts()">Reset</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="flex flex-col min-h-0" style="flex: 1.3;">
+      <section class="rp-panel rp-panel-fill">
+        <header class="rp-panel-head">
+          <span class="rp-head-tag" style="--rp-tag: var(--lilac);">Maps</span>
+          <span class="rp-head-title">Story Maps</span>
+          <span class="rp-head-rule"></span>
+        </header>
+        <div id="challenge-map-list" class="flex-1 overflow-y-auto p-2" style="min-height: 0;"></div>
+      </section>
+    </div>
+  </div>
+
   <!-- ============ SETTINGS screen ============ -->
   <div id="screen-settings" class="flex-1 flex min-h-0" style="display: none;">
     <div class="flex flex-col flex-shrink-0 p-2 gap-1 border-r" style="width: 160px; border-color: var(--border);">
@@ -400,13 +554,20 @@
               </div>
               <button id="toggle-start-minimized" class="toggle-switch" onclick="toggleSetting('start_minimized', this)"></button>
             </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Background</div>
+                <div class="setting-desc">Dark, true Black, Slate (neutral dark), or Light.</div>
+              </div>
+              <div id="theme-base-picker" class="theme-picker-grid"></div>
+            </div>
             <div class="setting-row" style="border-bottom: none;">
               <div>
-                <div class="setting-label">Theme</div>
-                <div class="setting-desc">Accent color for the whole app.</div>
+                <div class="setting-label">Accent</div>
+                <div class="setting-desc">Highlight color -- mixes with any Background above.</div>
               </div>
               <!-- Swatches wrap into two rows of four so the picker fits a half-width column. -->
-              <div id="theme-picker" class="theme-picker-grid"></div>
+              <div id="theme-accent-picker" class="theme-picker-grid"></div>
             </div>
           </div>
         </section>
@@ -418,7 +579,7 @@
             <span class="rp-head-tag" style="--rp-tag: var(--brand);">Input</span>
             <span class="rp-head-title">Keybinds</span>
             <span class="rp-head-rule"></span>
-            <button onclick="resetHotkeys()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--rose); border-color: var(--border);" title="Reset every keybind below back to its default key">Reset to Defaults</button>
+            <button onclick="resetHotkeys()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);" title="Reset every keybind below back to its default key">Reset to Defaults</button>
           </header>
 
           <!-- 2 columns so each keybind button sits right next to its own label instead of
@@ -462,6 +623,16 @@
               <div class="keybind-group">
                 <button id="keybind-clear-macro_stop" class="keybind-clear-btn" onclick="clearHotkey('macro_stop')" title="Reset to default key (press Esc while capturing to unbind)">&times;</button>
                 <button id="keybind-macro_stop" class="keybind-btn" onclick="startRebind('macro_stop', this)">F2</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Pause / Resume Macro</div>
+                <div class="setting-desc">Same as the Dashboard's Pause button.</div>
+              </div>
+              <div class="keybind-group">
+                <button id="keybind-clear-macro_pause" class="keybind-clear-btn" onclick="clearHotkey('macro_pause')" title="Reset to default key (press Esc while capturing to unbind)">&times;</button>
+                <button id="keybind-macro_pause" class="keybind-btn" onclick="startRebind('macro_pause', this)">F5</button>
               </div>
             </div>
             <div class="setting-row">
@@ -547,7 +718,7 @@
               <div class="setting-label">Debug Screenshot</div>
               <div class="setting-desc">Captures Roblox, saves it to the debug folder.</div>
             </div>
-            <button id="btn-debug-screenshot" onclick="saveDebugScreenshot(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Capture</button>
+            <button id="btn-debug-screenshot" onclick="saveDebugScreenshot(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Capture</button>
           </div>
 
           <!-- Off by default: every match the runner finds while actually
@@ -575,7 +746,7 @@
             <span class="rp-head-tag" style="--rp-tag: var(--slate);">Capture</span>
             <span class="rp-head-title">Story Map Search</span>
             <span class="rp-head-rule"></span>
-            <button onclick="resetStoryScrollSettings()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--rose); border-color: var(--border);" title="Reset scroll power/attempts back to their defaults">Reset to Defaults</button>
+            <button onclick="resetStoryScrollSettings()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);" title="Reset scroll power/attempts back to their defaults">Reset to Defaults</button>
           </header>
 
           <div class="setting-row" style="padding: 14px;">
@@ -583,7 +754,7 @@
               <div class="setting-label">Story Map Region</div>
               <div class="setting-desc">Captures the map-name search band (x0 y463 w1152 h30), saves it to the debug folder.</div>
             </div>
-            <button id="btn-debug-story-region" onclick="saveStoryMapRegionDebug(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Capture</button>
+            <button id="btn-debug-story-region" onclick="saveStoryMapRegionDebug(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Capture</button>
           </div>
 
           <div class="setting-row" style="padding: 14px;">
@@ -629,7 +800,7 @@
               <div class="setting-label">Attach Selected Roblox</div>
               <div class="setting-desc">Manually attach the selected Roblox window into the macro window.</div>
             </div>
-            <button id="btn-attach-roblox" onclick="attachSelectedRoblox(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Attach</button>
+            <button id="btn-attach-roblox" onclick="attachSelectedRoblox(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Attach</button>
           </div>
 
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
@@ -637,7 +808,7 @@
               <div class="setting-label">Un-Attach Roblox</div>
               <div class="setting-desc">Detach the currently docked Roblox window from the macro window.</div>
             </div>
-            <button id="btn-unattach-roblox" onclick="unattachRoblox(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--rose); border-color: var(--border);">Un-Attach</button>
+            <button id="btn-unattach-roblox" onclick="unattachRoblox(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);">Un-Attach</button>
           </div>
         </section>
       </div>
@@ -655,7 +826,25 @@
               <div class="setting-label">Install Tesseract OCR</div>
               <div class="setting-desc">Needed for reading match stats/rewards. One-click install via winget -- no manual download.</div>
             </div>
-            <button id="btn-install-tesseract" onclick="installTesseract(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Install</button>
+            <button id="btn-install-tesseract" onclick="installTesseract(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Install</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="settings-category" data-cat="general" style="margin-top: 20px;">
+        <section class="rp-panel">
+          <header class="rp-panel-head">
+            <span class="rp-head-tag" style="--rp-tag: var(--slate);">Control</span>
+            <span class="rp-head-title">Custom Images</span>
+            <span class="rp-head-rule"></span>
+          </header>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Open Assets Folder</div>
+              <div class="setting-desc">If a button isn't being found reliably on your setup, drop a same-named screenshot here to replace it -- no reinstall needed.</div>
+            </div>
+            <button id="btn-open-assets" onclick="openAssetsFolder(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Open</button>
           </div>
         </section>
       </div>
@@ -673,7 +862,7 @@
               <div class="setting-label">Camera Setup</div>
               <div class="setting-desc">Right-click drag down to tilt the camera fully, then holds O for 2s to zoom out.</div>
             </div>
-            <button id="btn-camera-setup" onclick="runCameraSetup(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Run</button>
+            <button id="btn-camera-setup" onclick="runCameraSetup(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Run</button>
           </div>
 
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
@@ -684,7 +873,7 @@
             <div class="flex items-center gap-2" style="flex-shrink: 0;">
               <input type="number" id="camera-setup-2-ms" value="2000" min="0" step="100"
                      class="block-input" style="width: 70px;" placeholder="ms">
-              <button id="btn-camera-setup-2" onclick="runCameraSetup2(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Run</button>
+              <button id="btn-camera-setup-2" onclick="runCameraSetup2(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Run</button>
             </div>
           </div>
         </section>
@@ -705,8 +894,8 @@
             </div>
             <div class="flex items-center gap-2 flex-shrink-0">
               <select id="debug-path-select" class="task-select" style="width: 160px;"></select>
-              <button id="btn-test-path" onclick="runTestPath(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Run</button>
-              <button id="btn-stop-test-path" onclick="stopTestPath(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--rose); border-color: var(--border); display: none;">Stop</button>
+              <button id="btn-test-path" onclick="runTestPath(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Run</button>
+              <button id="btn-stop-test-path" onclick="stopTestPath(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border); display: none;">Stop</button>
             </div>
           </div>
 
@@ -722,7 +911,7 @@
             <div class="flex items-center gap-2">
               <input id="default-walk-map" class="block-input" style="flex: 1;" type="text" placeholder="Map name (e.g. Fairy King Forest)">
               <select id="default-walk-path" class="task-select" style="width: 160px;"></select>
-              <button onclick="setDefaultWalkPath()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Set</button>
+              <button onclick="setDefaultWalkPath()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Set</button>
             </div>
             <div id="default-walk-list" class="flex flex-col gap-1"></div>
           </div>
@@ -738,7 +927,7 @@
             <span class="rp-head-tag" style="--rp-tag: var(--slate);">Control</span>
             <span class="rp-head-title">Macro Coordinates</span>
             <span class="rp-head-rule"></span>
-            <button onclick="resetMacroCoords()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--rose); border-color: var(--border);" title="Reset every field below back to its default number">Reset to Defaults</button>
+            <button onclick="resetMacroCoords()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);" title="Reset every field below back to its default number">Reset to Defaults</button>
           </header>
 
           <div class="setting-row" style="padding: 14px;">
@@ -766,7 +955,7 @@
               <input id="coord-matchmaking_region_y" class="block-input" style="width: 52px;" type="number" onchange="setMacroCoord('matchmaking_region_y', this.value)">
               <input id="coord-matchmaking_region_w" class="block-input" style="width: 52px;" type="number" onchange="setMacroCoord('matchmaking_region_w', this.value)">
               <input id="coord-matchmaking_region_h" class="block-input" style="width: 52px;" type="number" onchange="setMacroCoord('matchmaking_region_h', this.value)">
-              <button onclick="saveMatchmakingRegionDebug(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Capture</button>
+              <button onclick="saveMatchmakingRegionDebug(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Capture</button>
             </div>
           </div>
         </section>
@@ -778,7 +967,7 @@
             <span class="rp-head-tag" style="--rp-tag: var(--slate);">Vision</span>
             <span class="rp-head-title">Reward Reader</span>
             <span class="rp-head-rule"></span>
-            <button onclick="resetRewardRegion()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--rose); border-color: var(--border);" title="Reset the region below back to its default numbers">Reset to Defaults</button>
+            <button onclick="resetRewardRegion()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);" title="Reset the region below back to its default numbers">Reset to Defaults</button>
           </header>
 
           <p class="text-[11px] px-3 pt-3 pb-1" style="color: var(--text-muted);">
@@ -813,7 +1002,7 @@
               <div class="setting-label">Preview Region</div>
               <div class="setting-desc">Saves what gets captured -- check this first if reads look wrong.</div>
             </div>
-            <button id="btn-preview-rewards" onclick="previewRewardRegion(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--text-dim); border-color: var(--border);">Preview</button>
+            <button id="btn-preview-rewards" onclick="previewRewardRegion(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--text-dim); border-color: var(--border);">Preview</button>
           </div>
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
             <div>
@@ -836,7 +1025,7 @@
                 </select>
               </div>
             </div>
-            <button id="btn-read-rewards" onclick="readRewards(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Read</button>
+            <button id="btn-read-rewards" onclick="readRewards(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Read</button>
           </div>
         </section>
       </div>
@@ -847,7 +1036,7 @@
             <span class="rp-head-tag" style="--rp-tag: var(--slate);">Vision</span>
             <span class="rp-head-title">Game Stats</span>
             <span class="rp-head-rule"></span>
-            <button onclick="resetStatsRegion()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--rose); border-color: var(--border);" title="Reset the region below back to its default numbers">Reset to Defaults</button>
+            <button onclick="resetStatsRegion()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);" title="Reset the region below back to its default numbers">Reset to Defaults</button>
           </header>
 
           <p class="text-[11px] px-3 pt-3 pb-1" style="color: var(--text-muted);">
@@ -880,14 +1069,14 @@
               <div class="setting-label">Preview Region</div>
               <div class="setting-desc">Saves what gets captured -- check this first if reads look wrong.</div>
             </div>
-            <button id="btn-preview-stats" onclick="previewStatsRegion(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--text-dim); border-color: var(--border);">Preview</button>
+            <button id="btn-preview-stats" onclick="previewStatsRegion(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--text-dim); border-color: var(--border);">Preview</button>
           </div>
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
             <div>
               <div class="setting-label">Read Game Stats</div>
               <div class="setting-desc">Captures the region above and logs the four values.</div>
             </div>
-            <button id="btn-read-stats" onclick="readGameStats(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0" style="color: var(--slate); border-color: var(--border);">Read</button>
+            <button id="btn-read-stats" onclick="readGameStats(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Read</button>
           </div>
         </section>
       </div>

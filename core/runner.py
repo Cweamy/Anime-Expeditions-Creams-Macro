@@ -84,7 +84,8 @@ START_GAME_CLICK_RETRY_ATTEMPTS = 3
 START_GAME_CLICK_VERIFY_SETTLE = 1.0  # after clicking, how long to wait before checking it's actually gone
 START_GAME_BUTTON_WAIT_TIMEOUT = 5.0  # how long to poll for Start Game right after Pre Start hands off
 EXPEDITION_WAVE_TIMEOUT = 8.0  # how long to wait for Continue_2/extract after clicking exp_continue/exp_extract
-EXPEDITION_EXTRACT_DECLINE_COOLDOWN = 2.0  # settle after declining the first exp_extract so a laggy banner isn't miscounted
+EXPEDITION_EXTRACT_DECLINE_COOLDOWN = 5.0  # settle after declining an exp_extract so a laggy banner isn't miscounted
+EXPEDITION_CONTINUE_COOLDOWN = 5.0  # settle after exp_continue/continue_2 -- same reason, a lingering banner right
 
 # Stage-select screen (after picking a map): a fixed vertical list of rows,
 # same x for every row, y stepping by one row height per stage -- Level 1
@@ -119,9 +120,25 @@ EXPEDITION_MAP_IMAGES = {
     "Flower Forest": "expedition_flower_forest",
     "Rose Kingdom": "expedition_rose_kingdom",
 }
+# Regular Challenge is Story's own flow, just with the game picking a
+# random one of these 5 maps for you instead of you picking it -- so
+# there's no map-select step to skip past, only a "which map did it land
+# on" check once you're in. Reference images live in Assets/ui/<map>.png
+# (a different folder/purpose than Assets/maps/<map>.png, which is the
+# scrolling map-CARD search used to pick a map by hand -- these instead
+# confirm which map is already showing). Mirrors main.py's
+# CHALLENGE_STORY_MAPS and ui/app.js's TASK_DATA.story.maps.
+CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest"]
+# Mirrors main.py's CHALLENGE_STAGE_SLOTS.
+CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
+# Fixed click points for the 3 Regular Challenge stage rows -- no image
+# search needed, same idea as Story's STAGE_CLICK_BASE.
+CHALLENGE_STAGE_CLICK = {"1": (460, 277), "2": (460, 400), "3": (460, 533)}
+CHALLENGE_SCREEN_TIMEOUT = 10.0  # how long to wait for challenge_loaded after clicking the Challenge card
+CHALLENGE_MAP_DETECT_TIMEOUT = 20.0  # how long to poll for a recognizable map after teleporting in
+
 EXPEDITION_DIFFICULTY_CLICK = (1094, 456)
 EXPEDITION_DIFFICULTY_CLICK_DELAY = 0.1  # lets each increment register before the next click
-EXPEDITION_CAMERA_HOLD_MS = 150  # Pre Start's camera-zoom O-hold, Expedition only (see core.camera's default 2000ms)
 
 # Clicking the stage row (or the map, for Expedition) fires an animation on
 # the difficulty picker that immediately clicking it can outrun -- the click
@@ -166,12 +183,23 @@ SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT = 20.0  # generous per chunk -- a slow telepor
 # How long teleportstuck.png (optional -- see Assets/ui/README.txt) must be
 # CONTINUOUSLY visible during a teleport-in wait before the game is treated
 # as broken and needing a rejoin, rather than just a slow loading screen.
-# reconnect.png/reconnect_2.png/retry.png (Roblox's own disconnect prompt)
-# are a DEFINITE signal on their own -- no continuous-visibility wait needed,
-# unlike teleportstuck's spinner which can be a false alarm for a moment.
+# reconnect.png/reconnect_2.png/reconnect_3.png/retry.png (Roblox's own
+# disconnect prompt) are a DEFINITE signal on their own -- no continuous-
+# visibility wait needed, unlike teleportstuck's spinner which can be a
+# false alarm for a moment.
 TELEPORT_STUCK_TIMEOUT = 10.0
 TELEPORT_POLL_INTERVAL = 0.3
-RECONNECT_IMAGE_NAMES = ("reconnect", "reconnect_2", "retry")
+RECONNECT_IMAGE_NAMES = ("reconnect", "reconnect_2", "reconnect_3", "retry")
+
+# Same idea as RECONNECT_IMAGE_NAMES -- these four buttons/cards each got a
+# second visual variant (nav_play_2.png etc.) added alongside the original,
+# so both are tried in turn (see vision.find_image_any/wait_for_image_any)
+# instead of only ever matching the first one and treating the button as
+# "not there" whenever a setup renders the other variant.
+NAV_PLAY_IMAGE_NAMES = ("nav_play", "nav_play_2")
+EXPEDITION_IMAGE_NAMES = ("expedition", "expedition_2")
+CHALLENGE_IMAGE_NAMES = ("challenge", "challenge_2")
+RAID_IMAGE_NAMES = ("raid", "raid_2")
 
 # Roblox deep link used to rejoin after a detected disconnect -- reopens
 # (or, if the client fully closed, relaunches) straight into this specific
@@ -289,7 +317,8 @@ class MacroRunner:
     pattern as core.paths._recorder, since only one run can realistically be
     active at a time (one physical game window, one macro)."""
 
-    def __init__(self, mouse, keyboard, log, set_status=None, record_result=None):
+    def __init__(self, mouse, keyboard, log, set_status=None, record_result=None,
+                 get_challenge_settings=None, mark_challenge_stage_played=None):
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
@@ -297,6 +326,12 @@ class MacroRunner:
         # (result: "win"|"loss", map_name, duration_str, stats_dict, items_list) ->
         # persists to run history / win-loss counters (see main.Api._record_match_result).
         self._record_result = record_result or (lambda *a, **kw: None)
+        # Challenge tab settings live in settings.json, owned by main.Api
+        # (same reason record_result is a callback, not a direct import --
+        # avoids core/ reaching back into main.py). None (the default, e.g.
+        # in tests/CLI mode) just makes _run_challenges a no-op.
+        self._get_challenge_settings = get_challenge_settings
+        self._mark_challenge_stage_played = mark_challenge_stage_played or (lambda *a, **kw: None)
         self._thread = None
         self._stop_event = None
         self._pause_event = threading.Event()
@@ -325,10 +360,11 @@ class MacroRunner:
         # the start of each match in _play_one_match.
         self._battle_block_index = 0
         self._battle_block_state = {}
-        # How many times exp_extract has shown up THIS match (see
-        # _check_expedition_wave_result) -- reset alongside the battle
-        # block state in _play_one_match.
+        # How many times exp_extract has shown up THIS match, and which
+        # sighting actually accepts it (see _check_expedition_wave_result)
+        # -- both reset alongside the battle block state in _play_one_match.
         self._expedition_extract_count = 0
+        self._expedition_extract_accept_at = 2
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -446,16 +482,41 @@ class MacroRunner:
         # popup (a boss/cutscene intro) mid-battle -- one-shot/best-effort
         # like nav_disband, checked every poll tick while watching for the
         # match result (see watch_close_popup in _wait_for_match_result).
-        try:
-            match = vision.find_image(hwnd, "Click anywhere to close")
-        except vision.TemplateNotFound:
+        # Two visual variants seen in practice (same idea as nav_start_game/
+        # _2/_3/_4), tried in order.
+        for name in ("click_anywhere_to_close", "click_anywhere_to_close_2"):
+            try:
+                match = vision.find_image(hwnd, name)
+            except vision.TemplateNotFound:
+                continue
+            if match is None:
+                continue
+            debug_path = self._debug_save(hwnd, name, match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f"[Macro] Found \"Click anywhere to close\" (score {match['score']:.2f}) -- clicking it.{suffix}")
+            vision.click_match(self._mouse, hwnd, match)
             return
-        if match is None:
-            return
-        debug_path = self._debug_save(hwnd, "Click anywhere to close", match)
-        suffix = f" Debug: {debug_path}" if debug_path else ""
-        self._log(f"[Macro] Found \"Click anywhere to close\" (score {match['score']:.2f}) -- clicking it.{suffix}")
-        vision.click_match(self._mouse, hwnd, match)
+
+    def _detect_current_challenge_map(self, hwnd) -> str:
+        """Regular Challenge is Story's own flow with the game picking a
+        random one of CHALLENGE_STORY_MAPS for you -- this is the "which one
+        did it land on" check, tried against each map's reference image
+        (Assets/ui/<map>.png, a different purpose from Assets/maps/<map>.png's
+        map-CARD search) in turn. Returns the matched map name, or None if
+        none of them were found (not yet on a recognizable Challenge screen,
+        or the wrong screen entirely)."""
+        for map_name in CHALLENGE_STORY_MAPS:
+            try:
+                match = vision.find_image(hwnd, map_name)
+            except vision.TemplateNotFound:
+                continue
+            if match is None:
+                continue
+            debug_path = self._debug_save(hwnd, map_name, match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f'[Macro] Challenge map detected: "{map_name}" (score {match["score"]:.2f}).{suffix}')
+            return map_name
+        return None
 
     def _debug_save(self, hwnd, name: str, match: dict) -> str:
         """Gated behind Settings > Debug > "Debug Match Screenshots" (off by
@@ -506,6 +567,16 @@ class MacroRunner:
                        "elevated one. If clicks aren't registering, close both and relaunch this macro "
                        "as Administrator too (right-click > Run as administrator).")
 
+        # Challenge runs ONCE per Start (not once per task-queue pass, see
+        # the while loop below) -- if it's enabled, every ready stage slot
+        # gets attempted before the Task Queue ever starts.
+        if self._checkpoint(stop_event):
+            return
+        self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges, default_walk_paths,
+                               reward_region, stats_region, webhook)
+        if self._checkpoint(stop_event):
+            return
+
         loop_pass = 1
         while True:
             # Re-read the queue every pass instead of once up front -- a run
@@ -555,6 +626,197 @@ class MacroRunner:
                 return
             loop_pass += 1
 
+    def _run_challenges(self, hwnd, stop_event: threading.Event, coords: dict, scroll_power: int,
+                          scroll_nudges: int, default_walk_paths: dict, reward_region: dict, stats_region: dict,
+                          webhook: dict) -> None:
+        """Runs every ready (enabled, under today's cap, off its own
+        cooldown) Regular Challenge stage slot once each, in #1/#2/#3
+        order, then returns -- called once per Start (see _run), before
+        the Task Queue ever starts. Challenge is Story's own flow with the
+        game picking a random one of CHALLENGE_STORY_MAPS for you instead
+        of you picking it, so the actual battle (Pre Start, Start Game,
+        Victory/Defeat, reward reading) reuses _play_one_match/
+        _handle_match_result unchanged via a synthetic Story-shaped task --
+        see _run_one_challenge_stage."""
+        if self._get_challenge_settings is None:
+            return
+        try:
+            challenge = self._get_challenge_settings()
+        except Exception as exc:
+            self._log(f"[Macro] Couldn't read Challenge settings: {exc}")
+            return
+        if not challenge.get("enabled"):
+            return
+
+        self._log("[Macro] Challenge is enabled -- running any ready stage(s) before the Task Queue...")
+        cap = challenge.get("cap", 0)
+        for slot in CHALLENGE_STAGE_SLOTS:
+            if self._checkpoint(stop_event):
+                return
+            # Re-fetched every slot -- a stage just played updates its own
+            # count/cooldown, and this whole pass can span several minutes.
+            try:
+                challenge = self._get_challenge_settings()
+            except Exception as exc:
+                self._log(f"[Macro] Couldn't read Challenge settings: {exc}")
+                return
+            info = challenge.get("stages", {}).get(slot) or {}
+            if not info.get("enabled"):
+                continue
+            if cap and info.get("count", 0) >= cap:
+                self._log(f'[Macro] Challenge #{slot} is at today\'s cap ({cap}) -- skipping.')
+                continue
+            if not info.get("ready"):
+                # Already played this slot since the current :00/:30 window
+                # opened -- "ready" is computed by get_challenge_settings
+                # against that single fixed clock, same for all 3 slots.
+                self._log(f'[Macro] Challenge #{slot} already played this window -- skipping.')
+                continue
+
+            play_mode = challenge.get("play_mode") or "solo"
+            ok = self._run_one_challenge_stage(hwnd, stop_event, slot, play_mode, challenge, coords, scroll_power,
+                                                 scroll_nudges, default_walk_paths, reward_region, stats_region,
+                                                 webhook)
+            if self._checkpoint(stop_event):
+                return
+            if ok:
+                self._mark_challenge_stage_played(slot)
+            else:
+                self._log(f'[Macro] Challenge #{slot} didn\'t complete cleanly -- recovering to the lobby.')
+                if not self._recover_to_lobby(hwnd, stop_event):
+                    return
+
+        self._log("[Macro] Challenge pass finished -- moving on to the Task Queue.")
+
+    def _run_one_challenge_stage(self, hwnd, stop_event: threading.Event, slot: str, play_mode: str,
+                                   challenge: dict, coords: dict, scroll_power: int, scroll_nudges: int,
+                                   default_walk_paths: dict, reward_region: dict, stats_region: dict,
+                                   webhook: dict) -> bool:
+        self._log(f"[Macro] Challenge #{slot}: entering ({play_mode})...")
+        self._set_status(current_task=f"Challenge #{slot}", map="-", action="Entering Challenge...",
+                          mode="challenge", stage="-", difficulty="-", play_mode=play_mode, macro="-")
+        if not self._enter_challenge_stage(hwnd, stop_event, slot, play_mode, coords, webhook):
+            return False
+        if self._checkpoint(stop_event):
+            return False
+
+        self._log(f"[Macro] Challenge #{slot}: identifying the map...")
+        self._set_status(action="Identifying Challenge map...")
+        deadline = time.time() + CHALLENGE_MAP_DETECT_TIMEOUT
+        detected_map = None
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return False
+            detected_map = self._detect_current_challenge_map(hwnd)
+            if detected_map:
+                break
+            time.sleep(MATCH_RESULT_POLL_INTERVAL)
+        if not detected_map:
+            self._log(f"[Macro] Challenge #{slot}: never recognized a map -- stopping.")
+            return False
+
+        macro_name = (challenge.get("maps", {}).get(detected_map) or {}).get("macro") or ""
+        if macro_name:
+            self._log(f'[Macro] Challenge #{slot} landed on "{detected_map}" -- running "{macro_name}".')
+        else:
+            self._log(f'[Macro] Challenge #{slot} landed on "{detected_map}" -- no Macro Operation assigned for it.')
+
+        # mode="story" (not "challenge") deliberately -- this reuses the
+        # EXACT SAME Pre Start/Start Game/Victory-Defeat pipeline a real
+        # Story task uses (see _play_one_match/_handle_match_result), since
+        # that's genuinely what Challenge's own battle is. is_challenge is
+        # the marker other code checks when it actually needs to tell the
+        # two apart (see _log_expected_rewards -- Challenge isn't in
+        # stage_data.json under this map's Story entry, so that reference-
+        # reward lookup would otherwise silently show the wrong data).
+        task = {
+            "mode": "story", "is_challenge": True, "map": detected_map, "difficulty": "Normal",
+            "macro": macro_name, "play_mode": play_mode, "repeat": 1, "team": "", "equipment": "include",
+        }
+        self._set_status(map=detected_map, action="Battle...", difficulty=task["difficulty"], macro=macro_name or "-")
+        battle_started = time.time()
+        result = self._play_one_match(hwnd, stop_event, task, default_walk_paths, first_repeat=True,
+                                        webhook=webhook)
+        if result is None:
+            return False
+        duration = self._format_duration(time.time() - battle_started)
+
+        # Challenge always leaves + returns to lobby afterward (repeat=
+        # False) -- there's no "Repeat Stage" concept here, the next
+        # attempt (if another slot is still ready) goes through the full
+        # Challenge -> stage-slot navigation again, not a quick requeue.
+        if not self._handle_match_result(hwnd, stop_event, task, result, duration, reward_region, stats_region,
+                                           webhook, repeat=False):
+            return False
+        return not self._checkpoint(stop_event)
+
+    def _enter_challenge_stage(self, hwnd, stop_event: threading.Event, slot: str, play_mode: str, coords: dict,
+                                 webhook: dict) -> bool:
+        """Lobby -> Play -> Challenge -> stage slot #1/#2/#3 -> Solo/
+        Matchmaking entry (through teleport-in) -- Regular Challenge's
+        equivalent of _run_task_setup, except there's no map/difficulty to
+        pick (the game assigns both at random), just a fixed-position
+        stage row and a screen-load confirmation."""
+        if not self._ensure_lobby(hwnd, stop_event):
+            return False
+        if self._checkpoint(stop_event):
+            return False
+        if not self._click_play(hwnd, stop_event):
+            return False
+        if self._checkpoint(stop_event):
+            return False
+        if not self._click_gamemode(hwnd, stop_event, "challenge"):
+            return False
+        if self._checkpoint(stop_event):
+            return False
+
+        self._log("[Macro] Waiting for the Challenge screen to load...")
+        self._set_status(action="Waiting for Challenge screen...")
+        try:
+            loaded_match = vision.wait_for_image(
+                hwnd, "challenge_loaded", timeout=CHALLENGE_SCREEN_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't confirm the Challenge screen loaded: {exc}")
+            return False
+        if loaded_match is None:
+            if not stop_event.is_set():
+                self._log("[Macro] Challenge screen never loaded -- stopping.")
+            return False
+
+        if slot not in CHALLENGE_STAGE_CLICK:
+            self._log(f'[Macro] Unknown Challenge stage slot "{slot}".')
+            return False
+        x, y = CHALLENGE_STAGE_CLICK[slot]
+        self._log(f'[Macro] Challenge screen loaded -- clicking stage slot #{slot} at ({x}, {y}).')
+        self._set_status(action=f"Clicking Challenge #{slot}...")
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._mouse.click(left + x, top + y)
+        if self._checkpoint(stop_event):
+            return False
+
+        challenge_task_stub = {"mode": "challenge", "is_challenge": True}
+        if play_mode == "matchmaking":
+            if not self._click_enter_matchmaking(hwnd, stop_event, coords, "challenge"):
+                return False
+            if self._checkpoint(stop_event):
+                return False
+            self._log(f"[Macro] Waiting for the lobby to fill (up to {MATCHMAKING_TELEPORT_TIMEOUT / 60:.0f} "
+                       f"min) -- matchmaking has to find real players before it teleports in.")
+            if not self._wait_teleport_in(hwnd, stop_event, webhook, challenge_task_stub,
+                                            timeout=MATCHMAKING_TELEPORT_TIMEOUT):
+                return False
+        else:
+            self._set_status(action="Clicking Select Stage...")
+            if not self._click_and_verify_gone(hwnd, stop_event, "chal_select", CHALLENGE_SCREEN_TIMEOUT):
+                self._log('[Macro] "chal_select" never showed up -- stopping.')
+                return False
+            if self._checkpoint(stop_event):
+                return False
+            self._log("[Macro] Solo mode -- clicking Start.")
+            if not self._click_start_and_wait_teleport(hwnd, stop_event, webhook, challenge_task_stub):
+                return False
+        return not self._checkpoint(stop_event)
+
     def _run_task(self, hwnd, stop_event: threading.Event, task: dict, task_index: int, task_count: int,
                    coords: dict, scroll_power: int, scroll_nudges: int, default_walk_paths: dict,
                    reward_region: dict, stats_region: dict, webhook: dict) -> bool:
@@ -585,8 +847,18 @@ class MacroRunner:
                 self._log(f'[Macro] Retrying task {task_index}/{task_count} from the lobby '
                            f'(attempt {recovery_attempt}/{TASK_RECOVERY_ATTEMPTS})...')
             self._log(f'[Macro] Task {task_index}/{task_count}: "{map_name}" x{repeat_total}.')
+            # Everything beyond current_task/current_repeat/map/action is
+            # new -- for the Dashboard's Status Readout hover-expand (shows
+            # the fuller picture of what's actually running, not just the
+            # always-visible summary row). mode/stage/difficulty don't
+            # apply the same way to every mode (Expedition has no "stage",
+            # Raid/Infinite/Mastery lock difficulty, Challenge has neither
+            # in the Task Queue sense) -- placeholder "-" rather than
+            # leaving a PREVIOUS task's value stale on screen.
             self._set_status(current_task=f"{task_index} / {task_count}", current_repeat=f"1 / {repeat_total}",
-                              map=map_name, action="Starting...")
+                              map=map_name, action="Starting...", mode=mode, stage=str(task.get("stage") or "-"),
+                              difficulty=task.get("difficulty") or "-", play_mode=task.get("play_mode") or "solo",
+                              macro=task.get("macro") or "-")
 
             # Everything from the lobby through the first teleport-in runs
             # ONCE per task -- every repeat after that re-enters the same
@@ -847,12 +1119,17 @@ class MacroRunner:
         self._battle_block_index = 0
         self._battle_block_state = {}
         self._expedition_extract_count = 0
+        # Task's "boss nodes before extract" -- how many exp_extract
+        # sightings to DECLINE before actually accepting one. 1 (the old
+        # hardcoded behavior) means accept on the 2nd sighting; 0 means
+        # accept on the very first.
+        self._expedition_extract_accept_at = max(0, int(task.get("extract_after") or 1)) + 1
         # Spirit City Act 3's boss/cutscene "Click anywhere to close" popup
         # (see _click_close_popup_if_found) only ever shows up there.
         watch_close_popup = (task.get("mode") == "raid" and task.get("map") == "Spirit City"
                               and str(task.get("stage")) == "3")
         return self._wait_for_match_result(hwnd, stop_event, battle_blocks, first_repeat, task.get("macro"),
-                                             task.get("mode"), watch_close_popup)
+                                             task.get("mode"), watch_close_popup, webhook, task)
 
     def _load_battle_blocks(self, task: dict) -> list:
         macro_name = task.get("macro")
@@ -905,7 +1182,7 @@ class MacroRunner:
 
     def _wait_for_match_result(self, hwnd, stop_event: threading.Event, battle_blocks: list = None,
                                  first_repeat: bool = True, macro_name: str = None, mode: str = None,
-                                 watch_close_popup: bool = False) -> str:
+                                 watch_close_popup: bool = False, webhook: dict = None, task: dict = None) -> str:
         self._log("[Macro] Battle in progress -- watching for Victory/Defeat...")
         self._set_status(action="Battle in progress...")
         battle_blocks = battle_blocks or []
@@ -916,6 +1193,22 @@ class MacroRunner:
             if battle_blocks:
                 self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat, macro_name)
                 if self._checkpoint(stop_event):
+                    return None
+
+            # Roblox's own Reconnect/Retry prompt can show up mid-battle too,
+            # not just during the teleport-in wait -- this used to only be
+            # checked there, so a disconnect that happened AFTER teleporting
+            # in successfully was invisible to the macro entirely: it just
+            # kept polling for Victory/Defeat/exp_continue/exp_extract
+            # against a dead screen until MATCH_RESULT_TIMEOUT gave up,
+            # instead of recognizing the disconnect and rejoining promptly.
+            for name in RECONNECT_IMAGE_NAMES:
+                try:
+                    reconnect_match = vision.find_image(hwnd, name)
+                except vision.TemplateNotFound:
+                    continue
+                if reconnect_match is not None:
+                    self._handle_disconnect(hwnd, stop_event, webhook, task, "disconnected")
                     return None
 
             if watch_close_popup:
@@ -960,20 +1253,36 @@ class MacroRunner:
         the same terminal state Victory is for Story/Raid). Returns "win"
         once extracted, "loss" if a click's follow-up never showed up, or
         None while still mid-run (the caller just keeps polling)."""
-        try:
-            continue_match = vision.find_image(hwnd, "exp_continue")
-        except vision.TemplateNotFound:
-            continue_match = None
-        if continue_match is not None:
-            debug_path = self._debug_save(hwnd, "exp_continue", continue_match)
+        # The SAME "Start Game?" confirmation _play_one_match already
+        # clicks once before entering Battle can show up AGAIN mid-run --
+        # confirmed from a real stuck report: exp_continue/continue_2
+        # advanced to a new wave, then the run just sat there silently for
+        # over a minute on an identical "Start Game?" popup that nothing
+        # was checking for anymore, since this poll loop only ever watched
+        # for exp_continue/exp_extract once past the initial click. One-
+        # shot per tick (not the full retried version _play_one_match uses)
+        # is enough here -- a missed click just gets caught on the very
+        # next poll a moment later.
+        start_name, start_match = self._find_start_game_button(hwnd)
+        if start_match is not None:
+            debug_path = self._debug_save(hwnd, start_name, start_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f'[Macro] Found "exp_continue" (score {continue_match["score"]:.2f}) -- clicking it.{suffix}')
-            vision.click_match(self._mouse, hwnd, continue_match)
-            if not self._click_found_image(hwnd, "Continue_2", EXPEDITION_WAVE_TIMEOUT, stop_event):
-                self._log('[Macro] "Continue_2" never showed up after exp_continue -- stopping.')
-                return "loss"
+            self._log(f'[Macro] Found "{start_name}" again mid-run -- clicking it.{suffix}')
+            vision.click_match(self._mouse, hwnd, start_match)
             return None
 
+        # exp_extract checked BEFORE exp_continue on purpose -- a checkpoint
+        # screen can show both the continue option AND the extract option
+        # together (that's the whole point of a checkpoint: keep going or
+        # bank rewards now). Checking exp_continue first meant it always
+        # won on those screens (matched, clicked, returned immediately),
+        # so exp_extract -- and the sighting count that actually decides
+        # extract_after -- never even got a chance to run: the run just
+        # kept clicking Continue forever and never once counted a
+        # checkpoint, no matter how many were actually reached. Regular
+        # (non-checkpoint) waves have no exp_extract on screen at all, so
+        # this still falls through to the exp_continue check below exactly
+        # like before for those.
         try:
             extract_match = vision.find_image(hwnd, "exp_extract")
         except vision.TemplateNotFound:
@@ -982,25 +1291,27 @@ class MacroRunner:
             self._expedition_extract_count += 1
             debug_path = self._debug_save(hwnd, "exp_extract", extract_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f'[Macro] Found "exp_extract" (occurrence {self._expedition_extract_count}, '
-                       f'score {extract_match["score"]:.2f}).{suffix}')
+            self._log(f'[Macro] Found "exp_extract" (occurrence {self._expedition_extract_count}/'
+                       f'{self._expedition_extract_accept_at}, score {extract_match["score"]:.2f}).{suffix}')
 
-            if self._expedition_extract_count < 2:
-                # First sighting -- decline it (there's one more wave to
-                # go), same "Continue" choice as exp_continue's flow but a
-                # different button on this popup. A cooldown after the
-                # click, not just the click itself, since a laggy game can
-                # leave exp_extract on screen a moment longer -- without
-                # it, the very next poll tick would see that same still-
-                # visible banner and wrongly count it as the SECOND sighting.
-                if not self._click_found_image(hwnd, "Continue", EXPEDITION_WAVE_TIMEOUT, stop_event):
-                    self._log('[Macro] "Continue" never showed up after the first exp_extract -- stopping.')
+            if self._expedition_extract_count < self._expedition_extract_accept_at:
+                # Not the configured sighting yet -- decline it (there's
+                # another node to clear first), same "Continue" choice as
+                # exp_continue's flow but a different button on this popup.
+                # A cooldown after the click, not just the click itself,
+                # since a laggy game can leave exp_extract on screen a
+                # moment longer -- without it, the very next poll tick
+                # would see that same still-visible banner and wrongly
+                # count it as the NEXT sighting.
+                if not self._click_found_image(hwnd, "continue", EXPEDITION_WAVE_TIMEOUT, stop_event):
+                    self._log('[Macro] "continue" never showed up after exp_extract -- stopping.')
                     return "loss"
                 time.sleep(EXPEDITION_EXTRACT_DECLINE_COOLDOWN)
                 return None
 
-            # Second sighting -- actually extract.
-            self._log("[Macro] Second exp_extract -- extracting for real.")
+            # The configured sighting -- actually extract.
+            self._log(f"[Macro] exp_extract sighting {self._expedition_extract_count}/"
+                       f"{self._expedition_extract_accept_at} -- extracting for real.")
             vision.click_match(self._mouse, hwnd, extract_match)
             if not self._click_found_image(hwnd, "extract", EXPEDITION_WAVE_TIMEOUT, stop_event):
                 self._log('[Macro] "extract" never showed up after exp_extract -- stopping.')
@@ -1433,7 +1744,12 @@ class MacroRunner:
         # alias onto the SAME map's Story Act 1 data below (get_stage falls
         # back to "Normal" for any difficulty that isn't literally "Hard"),
         # silently showing real Story rewards mislabeled as Expedition's.
-        if task.get("mode") == "expedition":
+        # Challenge (task["is_challenge"], see _run_one_challenge_stage) is
+        # mode="story" on purpose to reuse the rest of this pipeline, but
+        # for the SAME reason as Expedition its stage_data.json lookup
+        # would alias onto that map's real Story Act 1 data -- Challenge
+        # isn't in stage_data.json under any entry at all.
+        if task.get("mode") == "expedition" or task.get("is_challenge"):
             return None, None
         try:
             from . import stage_data
@@ -1613,15 +1929,8 @@ class MacroRunner:
         # isn't gated by first_repeat the way the walk below is.
         self._log("[Macro] Pre Start: setting up the camera...")
         self._set_status(action="Setting up camera...")
-        # Expedition's camera doesn't need anywhere near the standard 2s
-        # zoom-out hold -- a much shorter one is enough there and the extra
-        # ~1.85s per match adds up over a repeat run.
-        hold_ms = EXPEDITION_CAMERA_HOLD_MS if task.get("mode") == "expedition" else None
         try:
-            if hold_ms is not None:
-                camera.run_camera_setup(self._mouse, self._keyboard, hwnd, hold_ms=hold_ms)
-            else:
-                camera.run_camera_setup(self._mouse, self._keyboard, hwnd)
+            camera.run_camera_setup(self._mouse, self._keyboard, hwnd)
             self._log("[Macro] Camera setup done.")
         except Exception as exc:
             self._log(f"[Macro] Camera setup failed: {exc}")
@@ -1652,16 +1961,40 @@ class MacroRunner:
             self._log("[Macro] Repeat of the same stage -- skipping the default walk (already walked on entry).")
         else:
             map_name = task.get("map")
-            # A Raid map's Acts can need different walks (e.g. Spirit City
-            # Act 3 -- see ACT_ORDER) -- looked up as "<map> Act<n>" first,
-            # falling back to the plain map-name entry other Acts/Story
-            # share, so only the Acts that actually need a different walk
-            # need their own default_walk_paths entry.
-            path_name = None
-            if map_name:
-                if task.get("mode") == "raid":
-                    path_name = default_walk_paths.get(f"{map_name} Act{task.get('stage')}")
-                path_name = path_name or default_walk_paths.get(map_name)
+            # The task's own Macro Operation template can pin its Walk Path
+            # row to a specific Custom path (see ui/app.js's creationWalk,
+            # saved as blocks["walk"] = {mode, pathName} -- same place
+            # _apply_team_loadout already reads team/equipment from) instead
+            # of following the map's global Auto default -- that setting
+            # was being read into the Creation UI but never actually
+            # consulted here, so a template set to Custom silently walked
+            # whatever the Auto default happened to be (or nothing) instead.
+            custom_path_name = None
+            macro_name = task.get("macro")
+            if macro_name:
+                try:
+                    from . import templates as tpl
+                    tpl_blocks = tpl.load_template(macro_name).get("blocks") or {}
+                    if isinstance(tpl_blocks, dict):
+                        walk_cfg = tpl_blocks.get("walk") or {}
+                        if walk_cfg.get("mode") == "custom" and walk_cfg.get("pathName"):
+                            custom_path_name = walk_cfg["pathName"]
+                except Exception as exc:
+                    self._log(f"[Macro] Couldn't read this template's Walk Path setting: {exc}")
+
+            if custom_path_name:
+                path_name = custom_path_name
+            else:
+                # A Raid map's Acts can need different walks (e.g. Spirit
+                # City Act 3 -- see ACT_ORDER) -- looked up as "<map> Act<n>"
+                # first, falling back to the plain map-name entry other
+                # Acts/Story share, so only the Acts that actually need a
+                # different walk need their own default_walk_paths entry.
+                path_name = None
+                if map_name:
+                    if task.get("mode") == "raid":
+                        path_name = default_walk_paths.get(f"{map_name} Act{task.get('stage')}")
+                    path_name = path_name or default_walk_paths.get(map_name)
             if not path_name:
                 self._log(f'[Macro] No default walk path set for "{map_name}" -- skipping walk.'
                            if map_name else "[Macro] No map set -- skipping walk.")
@@ -2250,7 +2583,7 @@ class MacroRunner:
             if not current_hwnd or not wm.is_window(current_hwnd):
                 continue
             try:
-                match = vision.find_image(current_hwnd, "nav_play", region=NAV_PLAY_REGION)
+                match, _ = vision.find_image_any(current_hwnd, NAV_PLAY_IMAGE_NAMES, region=NAV_PLAY_REGION)
             except vision.TemplateNotFound:
                 match = None
             if match is not None:
@@ -2670,13 +3003,12 @@ class MacroRunner:
             time.sleep(EXPEDITION_DIFFICULTY_CLICK_DELAY)
 
     def _click_enter_matchmaking(self, hwnd, stop_event: threading.Event, coords: dict, mode: str = None) -> bool:
-        # Expedition's matchmaking button is its own image (exp_enter_
-        # matchmaking) at an uncalibrated position -- no matchmaking_region_*
-        # exists for it, so it's searched full-window instead of the
-        # Story/Raid region restriction.
-        is_expedition = mode == "expedition"
-        image_name = "exp_enter_matchmaking" if is_expedition else "enter_matchmaking"
-        region = None if is_expedition else (
+        # Expedition's and Challenge's matchmaking buttons are each their
+        # own image (exp_enter_matchmaking / chal_enter) at an uncalibrated
+        # position -- no matchmaking_region_* exists for either, so they're
+        # searched full-window instead of the Story/Raid region restriction.
+        image_name = {"expedition": "exp_enter_matchmaking", "challenge": "chal_enter"}.get(mode, "enter_matchmaking")
+        region = None if mode in ("expedition", "challenge") else (
             coords["matchmaking_region_x"], coords["matchmaking_region_y"],
             coords["matchmaking_region_w"], coords["matchmaking_region_h"],
         )
@@ -2723,6 +3055,15 @@ class MacroRunner:
                 self._log("[Macro] Stage select screen never opened -- stopping.")
             return False
 
+        # nav_select_stage confirms the CONFIRM BUTTON is on screen, not
+        # that the stage/Act row list above it has finished rendering that
+        # map's own rows yet -- clicking a computed row position immediately
+        # used to be able to catch the list still mid-transition (e.g. a
+        # moment of the PREVIOUS map's rows still visible/animating out),
+        # landing on the wrong stage entirely (reported: Mastery selected,
+        # but a regular numbered stage started instead).
+        time.sleep(SETTLE_DELAY)
+
         idx = order.index(stage)
         x = base[0]
         y = base[1] + idx * row_height
@@ -2740,8 +3081,8 @@ class MacroRunner:
         self._log("[Macro] Checking you're on the lobby...")
         self._set_status(action="Checking lobby...")
         try:
-            match = vision.wait_for_image(
-                hwnd, "nav_play", region=NAV_PLAY_REGION,
+            match, _ = vision.wait_for_image_any(
+                hwnd, NAV_PLAY_IMAGE_NAMES, region=NAV_PLAY_REGION,
                 timeout=LOBBY_CHECK_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] Can't check the lobby: {exc}")
@@ -2763,14 +3104,14 @@ class MacroRunner:
     def _click_play(self, hwnd, stop_event: threading.Event) -> bool:
         self._set_status(action="Clicking Play...")
         try:
-            match = vision.find_image(hwnd, "nav_play", region=NAV_PLAY_REGION)
+            match, name = vision.find_image_any(hwnd, NAV_PLAY_IMAGE_NAMES, region=NAV_PLAY_REGION)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] {exc}")
             return False
         if match is None:
             self._log("[Macro] Play button vanished before it could be clicked -- stopping.")
             return False
-        debug_path = self._debug_save(hwnd, "nav_play", match)
+        debug_path = self._debug_save(hwnd, name, match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
         self._log(f"[Macro] Found Play (score {match['score']:.2f}) -- clicking it.{suffix}")
         # Reasserted right here, not just once at the top of the run --
@@ -2963,8 +3304,8 @@ class MacroRunner:
             self._log("[Macro] Menu open -- searching for Expedition...")
             self._set_status(action="Clicking Expedition...")
             try:
-                match = vision.wait_for_image(
-                    hwnd, "expedition", timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+                match, name = vision.wait_for_image_any(
+                    hwnd, EXPEDITION_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
             except vision.TemplateNotFound as exc:
                 self._log(f"[Macro] Can't find Expedition: {exc}")
                 return False
@@ -2972,9 +3313,28 @@ class MacroRunner:
                 if not stop_event.is_set():
                     self._log("[Macro] Expedition card never showed up -- stopping.")
                 return False
-            debug_path = self._debug_save(hwnd, "expedition", match)
+            debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f"[Macro] Found Expedition (score {match['score']:.2f}) -- clicking it.{suffix}")
+            vision.click_match(self._mouse, hwnd, match)
+            return True
+
+        if mode == "challenge":
+            self._log("[Macro] Menu open -- searching for Challenge...")
+            self._set_status(action="Clicking Challenge...")
+            try:
+                match, name = vision.wait_for_image_any(
+                    hwnd, CHALLENGE_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+            except vision.TemplateNotFound as exc:
+                self._log(f"[Macro] Can't find Challenge: {exc}")
+                return False
+            if match is None:
+                if not stop_event.is_set():
+                    self._log("[Macro] Challenge card never showed up -- stopping.")
+                return False
+            debug_path = self._debug_save(hwnd, name, match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f"[Macro] Found Challenge (score {match['score']:.2f}) -- clicking it.{suffix}")
             vision.click_match(self._mouse, hwnd, match)
             return True
 
@@ -2982,8 +3342,8 @@ class MacroRunner:
             self._log("[Macro] Menu open -- searching for Raid...")
             self._set_status(action="Clicking Raid...")
             try:
-                match = vision.wait_for_image(
-                    hwnd, "raid", timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+                match, name = vision.wait_for_image_any(
+                    hwnd, RAID_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
             except vision.TemplateNotFound as exc:
                 self._log(f"[Macro] Can't find Raid: {exc}")
                 return False
@@ -2991,7 +3351,7 @@ class MacroRunner:
                 if not stop_event.is_set():
                     self._log("[Macro] Raid card never showed up -- stopping.")
                 return False
-            debug_path = self._debug_save(hwnd, "raid", match)
+            debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f"[Macro] Found Raid (score {match['score']:.2f}) -- clicking it.{suffix}")
             vision.click_match(self._mouse, hwnd, match)
@@ -3001,4 +3361,13 @@ class MacroRunner:
         self._set_status(action="Clicking Story...")
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._mouse.click(left + STORY_CLICK[0], top + STORY_CLICK[1])
+        # Unlike Raid/Expedition/Challenge (which wait_for_image their own
+        # gamemode card before clicking, naturally giving the screen a
+        # moment), Story's click is blind -- nav_back confirms the MENU is
+        # open, not that the map carousel it leads to has finished
+        # rendering. The very first carousel scan used to fire immediately
+        # after this click, which could catch it mid-transition and
+        # misread/misclick the wrong card (reported: landing on the wrong
+        # map, e.g. a different Story map instead of the one asked for).
+        time.sleep(SETTLE_DELAY)
         return True

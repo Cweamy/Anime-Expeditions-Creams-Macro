@@ -7,7 +7,9 @@ import os
 import sys
 import time
 import json
+import subprocess
 import threading
+from datetime import date
 
 from core import window as wm
 from core import config
@@ -59,7 +61,8 @@ LOGO_ICO = os.path.join(constants.BUNDLE_DIR, "logo.ico")
 LOG_HISTORY_LIMIT = 500  # caps what a freshly popped-out window gets replayed with
 
 HOTKEY_DEFAULTS = {
-    "toggle_game": "f4", "skip_waiting": "", "macro_start": "f1", "macro_stop": "f2", "debug_screenshot": "f3",
+    "toggle_game": "f4", "skip_waiting": "", "macro_start": "f1", "macro_stop": "f2", "macro_pause": "f5",
+    "debug_screenshot": "f3",
 }
 
 # Stage-detail panel (shown after clicking a stage row on the Select Stage
@@ -85,6 +88,20 @@ STATS_REGION_DEFAULTS = {"x": 210, "y": 337, "width": 509, "height": 57}
 
 RUN_HISTORY_LIMIT = 50  # oldest entries drop off past this -- a running log, not a permanent archive
 
+# Challenge tab (Settings-adjacent, but its own screen -- see get_challenge_
+# settings): Regular Challenge has 3 fixed stage slots that each rotate
+# through one of the 5 Story maps over time, so config/count-tracking is
+# keyed by MAP (which macro to run for it, how many times it's been played
+# today) while the 3 slots are just simple on/off toggles for "attempt
+# whatever's in this slot". CHALLENGE_STORY_MAPS matches TASK_DATA.story's
+# maps in ui/app.js. The exact in-game reset schedule isn't confirmed yet
+# (see get_challenge_settings' daily-rollover comment) -- CHALLENGE_
+# DAILY_CAP and the reset mechanism are a first-pass approximation, not
+# verified against the real game yet.
+CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest"]
+CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
+CHALLENGE_DAILY_CAP = 10  # fixed, not user-editable -- see get_challenge_settings
+
 
 def _format_ago(epoch) -> str:
     """Turns a stored epoch timestamp into "just now"/"5m ago"/"3h ago"/
@@ -100,6 +117,78 @@ def _format_ago(epoch) -> str:
     if delta < 86400:
         return f"{int(delta // 3600)}h ago"
     return f"{int(delta // 86400)}d ago"
+
+
+def _current_challenge_window_start(now: float = None) -> float:
+    """Epoch seconds for the most recent :00 or :30 mark (local time) --
+    Regular Challenge resets on this single fixed clock, the same for all
+    3 stage slots (not a per-slot timer). A slot is "ready" if it hasn't
+    been played since this timestamp -- see get_challenge_settings, which
+    is the only place that reads this."""
+    now = time.time() if now is None else now
+    local = time.localtime(now)
+    minute = 0 if local.tm_min < 30 else 30
+    return time.mktime((local.tm_year, local.tm_mon, local.tm_mday, local.tm_hour, minute, 0,
+                          local.tm_wday, local.tm_yday, local.tm_isdst))
+
+
+def _time_until_challenge_ready(challenge: dict) -> str:
+    """"Ready" if any enabled, not-yet-capped stage slot hasn't been
+    played in the CURRENT :00/:30 window yet; otherwise MM:SS until the
+    next :00/:30 mark (same clock for every slot). "All capped" if every
+    enabled slot has hit today's daily cap, "No stages enabled" if none
+    are toggled on at all. Computed fresh on every get_status() poll, same
+    "don't store text, compute it live" approach as _format_ago."""
+    cap = challenge.get("cap", 0)
+    any_enabled = False
+    any_uncapped = False
+    for info in challenge.get("stages", {}).values():
+        if not info.get("enabled"):
+            continue
+        any_enabled = True
+        if cap and info.get("count", 0) >= cap:
+            continue
+        any_uncapped = True
+        if info.get("ready"):
+            return "Ready"
+    if not any_enabled:
+        return "No stages enabled"
+    if not any_uncapped:
+        return "All capped"
+    now = time.time()
+    local = time.localtime(now)
+    secs_into_hour = local.tm_min * 60 + local.tm_sec
+    remaining = (1800 - secs_into_hour) if secs_into_hour < 1800 else (3600 - secs_into_hour)
+    mins, secs = divmod(int(remaining), 60)
+    return f"{mins:02d}:{secs:02d}"
+
+
+def _get_build_info() -> str:
+    """A "sub-version" for the startup log line, below the granularity of
+    VERSION (which only bumps on tagged releases) -- the exact git commit
+    (+dirty flag for uncommitted local changes) when running from source,
+    since that's most of this app's own testing between releases and a
+    pasted debug.log with no way to tell WHICH of several untagged fixes
+    it came from is a lot less useful. A packaged exe has no .git folder
+    (see core.constants -- BUNDLE_DIR is a onefile build's temp extraction
+    dir), so this just falls back to "release build" there instead of
+    failing loudly over something that was never going to work."""
+    try:
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, capture_output=True, text=True, timeout=3,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if commit.returncode != 0:
+            return "release build"
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True, timeout=3,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        suffix = "+dirty" if dirty.returncode == 0 and dirty.stdout.strip() else ""
+        return f"src {commit.stdout.strip()}{suffix}"
+    except Exception:
+        return "release build"
 
 
 class Api:
@@ -135,7 +224,10 @@ class Api:
         # that ever writes to it (via the set_status callback below), one
         # dict instead of a pile of separate instance attributes since it's
         # just read back out as a dict anyway.
-        self._run_status = {"current_task": "-", "current_repeat": "-", "map": "-", "action": "Idle"}
+        self._run_status = {
+            "current_task": "-", "current_repeat": "-", "map": "-", "action": "Idle",
+            "mode": "-", "stage": "-", "difficulty": "-", "play_mode": "-", "macro": "-",
+        }
         # Session win/loss counts -- in-memory only, reset every launch, same
         # convention as session_start/elapsed time above. All-time counts and
         # run_history persist in settings.json instead (see _record_match_result).
@@ -150,7 +242,8 @@ class Api:
         # to drive the update modal's progress bar (see get_update_progress).
         self._update_progress = {}
         self.runner = MacroRunner(
-            self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result)
+            self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result,
+            self.get_challenge_settings, self.mark_challenge_stage_played)
 
     def _set_run_status(self, **kwargs) -> None:
         self._run_status.update(kwargs)
@@ -262,6 +355,7 @@ class Api:
         all_time_losses = data.get("all_time_losses", 0)
         history = data.get("run_history", [])
         wins, losses = self._session_wins, self._session_losses
+        challenge = self.get_challenge_settings()
         return {
             "docked": self.docker.docked,
             **self._run_status,
@@ -269,7 +363,7 @@ class Api:
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / (wins + losses) * 100) if (wins + losses) else None,
-            "time_until_challenge": "Disabled",
+            "time_until_challenge": _time_until_challenge_ready(challenge) if challenge.get("enabled") else "Disabled",
             "all_time_wins": all_time_wins,
             "all_time_losses": all_time_losses,
             "all_time_win_rate": (
@@ -318,7 +412,9 @@ class Api:
         data = cfg.load()
         return {
             "start_minimized": data.get("start_minimized", False),
-            "theme": data.get("theme", "default"),
+            "theme": data.get("theme", "default"),  # legacy combined value -- kept for one-time migration, see app.js
+            "theme_base": data.get("theme_base", ""),
+            "theme_accent": data.get("theme_accent", ""),
             "story_scroll_power": data.get("story_scroll_power", 3),
             "story_scroll_nudges": data.get("story_scroll_nudges", 8),
             "debug_screenshots": data.get("debug_screenshots", False),
@@ -387,6 +483,169 @@ class Api:
         data["default_walk_paths"] = defaults
         cfg.save(data)
         return {"ok": True, "default_walk_paths": defaults}
+
+    # ---- Challenge tab ----
+    def _default_challenge_settings(self) -> dict:
+        return {
+            "enabled": False,
+            "play_mode": "solo",
+            "cap": CHALLENGE_DAILY_CAP,
+            # The daily play limit tracks each STAGE SLOT (Regular Challenge
+            # #1/#2/#3), not the map -- whichever map is currently rotated
+            # into a slot, that slot's own count is what's capped. Slots
+            # don't have their own configurable cooldown -- Regular
+            # Challenge resets on a single fixed clock (every :00/:30, same
+            # for all 3), not a per-slot timer. last_played_at (epoch
+            # seconds, 0 = never played) is only used to tell whether a slot
+            # has ALREADY been played in the CURRENT window (see
+            # _current_challenge_window_start/get_challenge_settings's
+            # "ready" field), not to measure an independent duration.
+            # Macro Operation assignment stays per-map (see "maps" below)
+            # since that's what needs to follow the map around as it
+            # rotates through slots.
+            "stages": {slot: {"enabled": True, "count": 0, "last_played_at": 0} for slot in CHALLENGE_STAGE_SLOTS},
+            "maps": {m: {"macro": ""} for m in CHALLENGE_STORY_MAPS},
+            "last_reset_date": date.today().isoformat(),
+        }
+
+    def get_challenge_settings(self) -> dict:
+        # Regular Challenge's daily play count resets once a calendar day --
+        # checked/applied here (not on a timer) so it's caught the moment
+        # anything asks for the settings, whether that's the Challenge
+        # screen loading or the runner checking availability before a run.
+        # Uses the LOCAL calendar day as the reset boundary, which is a
+        # first-pass approximation -- swap for the real in-game reset time
+        # once it's confirmed (see CHALLENGE_STORY_MAPS' comment). This does
+        # NOT touch last_played_at -- that's checked against the current
+        # :00/:30 window instead, independent of the daily count reset.
+        data = cfg.load()
+        saved = data.get("challenge") or {}
+        defaults = self._default_challenge_settings()
+        merged = {**defaults, **saved}
+        merged["cap"] = CHALLENGE_DAILY_CAP  # fixed -- ignore any stale saved value from before this was hardcoded
+        if merged.get("play_mode") not in ("solo", "matchmaking"):
+            merged["play_mode"] = "solo"
+        window_start = _current_challenge_window_start()
+        merged_stages = {}
+        for slot in CHALLENGE_STAGE_SLOTS:
+            saved_stage = (saved.get("stages") or {}).get(slot)
+            # Migrates the old shapes (stages[slot] was a bare bool, or a
+            # dict with a now-removed cooldown_minutes field) transparently
+            # -- an old settings.json still loads instead of silently
+            # losing its enabled/disabled choice.
+            if isinstance(saved_stage, dict):
+                last_played_at = float(saved_stage.get("last_played_at") or 0)
+                merged_stages[slot] = {
+                    "enabled": bool(saved_stage.get("enabled", True)),
+                    "count": int(saved_stage.get("count") or 0),
+                    "last_played_at": last_played_at,
+                }
+            else:
+                merged_stages[slot] = {
+                    "enabled": bool(saved_stage) if saved_stage is not None else True,
+                    "count": 0, "last_played_at": 0,
+                }
+            # Computed, not stored -- "haven't played this slot since the
+            # current :00/:30 window opened" is what "ready" actually means.
+            merged_stages[slot]["ready"] = merged_stages[slot]["last_played_at"] < window_start
+        merged["stages"] = merged_stages
+        merged_maps = {}
+        for m in CHALLENGE_STORY_MAPS:
+            saved_map = (saved.get("maps") or {}).get(m) or {}
+            merged_maps[m] = {"macro": saved_map.get("macro") or ""}
+        merged["maps"] = merged_maps
+
+        today = date.today().isoformat()
+        if merged.get("last_reset_date") != today:
+            for s in merged["stages"].values():
+                s["count"] = 0
+            merged["last_reset_date"] = today
+            data["challenge"] = merged
+            cfg.save(data)
+            self.push_log("[Challenge] Daily play counts reset.")
+        return merged
+
+    def mark_challenge_stage_played(self, stage: str) -> dict:
+        # Called by the runner right after actually running a Challenge
+        # stage -- starts that slot's cooldown and bumps its daily count in
+        # one write (both change together every real play, so no reason to
+        # split into two round trips).
+        if stage not in CHALLENGE_STAGE_SLOTS:
+            return {"ok": False, "reason": "bad_stage"}
+        data = cfg.load()
+        challenge = self.get_challenge_settings()
+        challenge["stages"][stage]["last_played_at"] = time.time()
+        challenge["stages"][stage]["count"] += 1
+        data["challenge"] = challenge
+        cfg.save(data)
+        return {"ok": True}
+
+    def set_challenge_enabled(self, enabled: bool) -> dict:
+        data = cfg.load()
+        challenge = self.get_challenge_settings()
+        challenge["enabled"] = bool(enabled)
+        data["challenge"] = challenge
+        cfg.save(data)
+        return {"ok": True}
+
+    def set_challenge_play_mode(self, play_mode: str) -> dict:
+        if play_mode not in ("solo", "matchmaking"):
+            return {"ok": False, "reason": "bad_play_mode"}
+        data = cfg.load()
+        challenge = self.get_challenge_settings()
+        challenge["play_mode"] = play_mode
+        data["challenge"] = challenge
+        cfg.save(data)
+        return {"ok": True}
+
+    def set_challenge_stage_enabled(self, stage: str, enabled: bool) -> dict:
+        if stage not in CHALLENGE_STAGE_SLOTS:
+            return {"ok": False, "reason": "bad_stage"}
+        data = cfg.load()
+        challenge = self.get_challenge_settings()
+        challenge["stages"][stage]["enabled"] = bool(enabled)
+        data["challenge"] = challenge
+        cfg.save(data)
+        return {"ok": True}
+
+    def set_challenge_stage_count(self, stage: str, count) -> dict:
+        # Editable by hand (Challenge screen's Count field) for whenever
+        # someone plays a stage manually, outside the macro, and wants the
+        # daily count to stay accurate without waiting for the next reset.
+        if stage not in CHALLENGE_STAGE_SLOTS:
+            return {"ok": False, "reason": "bad_stage"}
+        try:
+            count = max(0, int(count))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_count"}
+        data = cfg.load()
+        challenge = self.get_challenge_settings()
+        challenge["stages"][stage]["count"] = count
+        data["challenge"] = challenge
+        cfg.save(data)
+        return {"ok": True}
+
+    def set_challenge_map_macro(self, map_name: str, macro: str) -> dict:
+        if map_name not in CHALLENGE_STORY_MAPS:
+            return {"ok": False, "reason": "bad_map"}
+        data = cfg.load()
+        challenge = self.get_challenge_settings()
+        challenge["maps"][map_name]["macro"] = macro or ""
+        data["challenge"] = challenge
+        cfg.save(data)
+        return {"ok": True}
+
+    def reset_challenge_counts(self) -> dict:
+        data = cfg.load()
+        challenge = self.get_challenge_settings()
+        for s in challenge["stages"].values():
+            s["count"] = 0
+            s["last_played_at"] = 0  # also clears cooldown -- every slot becomes available immediately
+        challenge["last_reset_date"] = date.today().isoformat()
+        data["challenge"] = challenge
+        cfg.save(data)
+        self.push_log("[Challenge] Play counts and cooldowns reset manually.")
+        return {"ok": True}
 
     def start_macro(self) -> dict:
         data = cfg.load()
@@ -788,6 +1047,23 @@ class Api:
 
         self.push_log(f"[Debug] Saved screenshot to {path}")
         return {"ok": True, "path": path}
+
+    def open_assets_folder(self) -> dict:
+        # Settings > General > "Open Assets Folder" -- see core.vision's
+        # override lookup (constants.ASSETS_OVERRIDE_DIR): a same-named PNG
+        # dropped in here beats the bundled reference image for that
+        # button/text, no rebuild or reinstall needed. Creates ui/ and
+        # maps/ (empty) if this is the first time anyone's opened it, so
+        # there's somewhere obvious to drop a replacement file into instead
+        # of a folder that doesn't exist yet.
+        try:
+            for sub in ("ui", "maps"):
+                os.makedirs(os.path.join(constants.ASSETS_OVERRIDE_DIR, sub), exist_ok=True)
+            os.startfile(constants.ASSETS_OVERRIDE_DIR)
+        except OSError as exc:
+            self.push_log(f"[Settings] Couldn't open the Assets folder: {exc}")
+            return {"ok": False, "reason": str(exc)}
+        return {"ok": True}
 
     def install_tesseract(self) -> dict:
         # Settings > General > "Install Tesseract OCR": one-click install via
@@ -1313,6 +1589,14 @@ def _launch_ui():
     webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
 
     api = Api()
+    # First line of every session's debug.log on purpose -- exactly which
+    # tagged version AND which exact source revision (for anyone running
+    # from source between releases, which is most of this app's own
+    # testing) produced a given log is otherwise unrecoverable once
+    # several untagged fixes have landed since the last real release, and
+    # a pasted debug.log with no version context at all wastes a round
+    # trip just asking "which build is this from?" every time.
+    api.push_log(f"[Macro] Cream's Macro v{updater.get_current_version()} ({_get_build_info()}) starting...")
     # Diagnostic: confirms whether set_dpi_aware() (called at import time,
     # above the wm.set_dpi_aware() call at module scope) actually took --
     # a non-100% value here with docking/clicks still landing wrong would
@@ -1516,6 +1800,7 @@ def _launch_ui():
             "toggle_game": lambda: api.push_ui("toggleGameScreenHotkey"),
             "skip_waiting": lambda: api.push_ui("skipWaiting"),
             "macro_start": lambda: api.push_ui("startMacro"),
+            "macro_pause": lambda: api.push_ui("togglePauseMacro"),
             "debug_screenshot": lambda: api.push_ui("saveDebugScreenshot"),
             # NOT routed through push_ui/JS: stopping has to win over
             # everything else regardless of what the UI thread is doing

@@ -15,17 +15,49 @@
   --rose:   #d9667a;  /* close button hover / Losses */
 }
 
-/* ---- Themes (Settings > General > Theme) ----
-   Each theme swaps the accent palette; the dark base stays put so text
-   contrast never regresses. data-theme is stamped on <html> by setTheme()
-   and persisted in settings.json. */
-:root[data-theme="ocean"]    { --brand: #58a6ff; --lilac: #7fb8e8; }
-:root[data-theme="emerald"]  { --brand: #3fbf8f; --lilac: #6fd0b0; }
-:root[data-theme="sakura"]   { --brand: #e87a9e; --lilac: #e8a0bc; }
-:root[data-theme="violet"]   { --brand: #a878f0; --lilac: #c49df5; }
-:root[data-theme="sunset"]   { --brand: #e8935a; --lilac: #e8b285; }
-:root[data-theme="crimson"]  { --brand: #e05a6d; --lilac: #e8899a; }
-:root[data-theme="mono"]     { --brand: #aab2c8; --lilac: #8b93b8; }
+/* ---- Theme (Settings > General > Theme) ----
+   Two INDEPENDENT choices, not one flat list of preset combos: Background
+   (data-theme-base, stamped on <html>) swaps the base palette -- bg/text/
+   border, and for Light also the semantic colors (teal/amber/slate/lilac/
+   rose) that need their own contrast-safe versions on white rather than
+   just inheriting the dark set. Accent (data-theme-accent) only ever
+   touches --brand -- deliberately NOT --lilac or the semantic colors
+   anymore, so picking an accent can't quietly wreck Light's contrast
+   tuning. Both persisted separately in settings.json (theme_base/
+   theme_accent) by setThemeBase()/setThemeAccent() in app.js. Every
+   component in this file is themed through the --bg-*/--text*/--border/
+   --brand variables (verified via a full-file audit for hardcoded color
+   literals when Black/Light were added), so overriding the variable set
+   here is enough to reskin the whole app -- no other rule needs to change. */
+:root[data-theme-accent="ocean"]    { --brand: #58a6ff; }
+:root[data-theme-accent="emerald"]  { --brand: #3fbf8f; }
+:root[data-theme-accent="sakura"]   { --brand: #e87a9e; }
+:root[data-theme-accent="violet"]   { --brand: #a878f0; }
+:root[data-theme-accent="sunset"]   { --brand: #e8935a; }
+:root[data-theme-accent="crimson"]  { --brand: #e05a6d; }
+:root[data-theme-accent="mono"]     { --brand: #aab2c8; }
+
+/* Black: true-black (AMOLED-friendly) variant of the same dark UI --
+   neutral grays throughout (equal RGB channels), not just a darkened tint
+   of the default palette (that read as faintly blue in practice). Slate:
+   a softer neutral dark alternative to the default's slightly blue-leaning
+   base, for anyone who wants "just dark," not moody-blue dark. Light: a
+   real light theme, with its own contrast-tuned semantic colors (see the
+   comment above). */
+:root[data-theme-base="black"] {
+  --bg-deep: #000000; --bg-card: #0a0a0a; --bg-surface: #121212; --border: #262626;
+  --text: #ededed; --text-dim: #96969c; --text-muted: #58585e;
+}
+:root[data-theme-base="slate"] {
+  --bg-deep: #141416; --bg-card: #1a1b1e; --bg-surface: #212226; --border: #313338;
+  --text: #e7e7ea; --text-dim: #94959c; --text-muted: #5c5d64;
+}
+:root[data-theme-base="light"] {
+  --bg-deep: #eef0f5; --bg-card: #ffffff; --bg-surface: #f4f5f9; --border: #d8dbe4;
+  --text: #1c1f2b; --text-dim: #565a6e; --text-muted: #8c90a0;
+  --teal: #16a087; --amber: #b8842e; --slate: #6b7290; --lilac: #8f5fcc; --rose: #c0435a;
+}
+:root[data-theme-base="light"]:not([data-theme-accent]) { --brand: #5b7cf0; }
 html, body { height: 100%; margin: 0; background: var(--bg-deep); overflow: hidden; }
 body { user-select: none; -webkit-user-select: none; font-family: 'Inter', system-ui, sans-serif; font-weight: 500; color: var(--text); }
 h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
@@ -40,12 +72,26 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
    backends that support -webkit-app-region natively (e.g. macOS/cocoa). */
 .pywebview-drag-region { -webkit-app-region: drag; }
 .no-drag { -webkit-app-region: no-drag; }
+.titlebar-btn { transition: background 0.15s, transform 0.1s; }
 .titlebar-btn:hover { background: var(--bg-surface); }
-.log-toolbar-btn { transition: color 0.15s; }
+.titlebar-btn:active { transform: scale(0.92); }
+/* Version badge (titlebar) -- clickable to check for updates, previously had
+   no hover/press feedback at all. currentColor picks up its inline
+   `color: var(--brand)` so the glow matches. */
+.ver-badge-btn { transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.1s; }
+.ver-badge-btn:hover {
+  background: color-mix(in srgb, currentColor 16%, var(--bg-surface));
+  border-color: color-mix(in srgb, currentColor 55%, var(--border));
+  box-shadow: 0 0 8px -2px color-mix(in srgb, currentColor 45%, transparent);
+}
+.ver-badge-btn:active { transform: scale(0.94); }
+.log-toolbar-btn { transition: color 0.15s, transform 0.1s; }
 .log-toolbar-btn:hover { color: var(--text); }
+.log-toolbar-btn:active { transform: scale(0.92); }
 
-.nav-btn { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 0.4rem; color: var(--text-muted); transition: background 0.15s, color 0.15s; }
+.nav-btn { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 0.4rem; color: var(--text-muted); transition: background 0.15s, color 0.15s, transform 0.12s; }
 .nav-btn:hover { background: var(--bg-surface); color: var(--text-dim); }
+.nav-btn:active { transform: scale(0.9); }
 .nav-btn.active { background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--brand); }
 
 /* ---- Dashboard right rail: "telemetry readout" panels ----
@@ -133,7 +179,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 10px 12px; border-radius: 10px;
   font-size: 12px; font-weight: 700; font-family: 'Sora', 'Inter', sans-serif;
-  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s, transform 0.1s;
   cursor: pointer;
 }
 .rp-btn-start {
@@ -162,6 +208,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   background: color-mix(in srgb, var(--rose) 24%, transparent);
   border-color: color-mix(in srgb, var(--rose) 70%, var(--border));
 }
+.rp-btn:active:not(:disabled) { transform: scale(0.97); }
 .rp-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
 /* Hotkey badge shown inside Start/Stop -- so the bound key is visible at a
@@ -175,6 +222,42 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   opacity: 0.85;
 }
 .rp-btn-hotkey:empty { display: none; }
+
+/* Status Readout hover-expand: five extra detail rows (Mode/Stage/Difficulty/
+   Play Mode/Macro) that stay collapsed by default and reveal on hover. The
+   right rail is a fixed-width column with other panels stacked below, so the
+   extra rows are NOT laid out in-flow (that would shove Scoreboard/Controls/
+   Run History down every time the mouse crossed the panel) -- instead
+   .rp-rows-extra is absolutely positioned right under the panel and expands
+   over whatever's beneath it, like a popover. max-height + opacity (not
+   display/visibility) so the reveal animates smoothly instead of popping. */
+.rp-hoverpanel { position: relative; }
+.rp-expand-hint {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-muted); opacity: 0.7; flex-shrink: 0; white-space: nowrap;
+  transition: opacity 0.15s, color 0.15s;
+}
+.rp-hoverpanel:hover .rp-expand-hint { opacity: 1; color: var(--text-dim); }
+.rp-rows-extra {
+  position: absolute; left: 0; right: 0; top: 100%;
+  margin-top: -1px;
+  background: linear-gradient(165deg, var(--bg-card) 0%, color-mix(in srgb, var(--bg-card) 80%, var(--bg-deep)) 100%);
+  border: 1px solid var(--border);
+  border-top: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 0 0 12px 12px;
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 20;
+  box-shadow: 0 14px 28px -10px color-mix(in srgb, var(--bg-deep) 65%, black);
+  transition: max-height 0.22s ease, opacity 0.18s ease;
+}
+.rp-hoverpanel:hover .rp-rows-extra {
+  max-height: 220px;
+  opacity: 1;
+  pointer-events: auto;
+}
 
 /* rp-panel variant that stretches to fill its column (used by Process Log,
    which -- unlike the fixed-height stat panels -- needs to grow and scroll
@@ -238,6 +321,20 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .rh-empty { padding: 16px; font-size: 11px; color: var(--text-muted); text-align: center; }
 
 /* ---- Reward Reader calibration (Settings > Debug) ---- */
+/* Shared hover/press feedback for the plain bordered action buttons scattered
+   across Settings/Debug (Capture, Attach, Un-Attach, Install, Open, Run,
+   Read, Preview, Reset to Defaults, Set, Stop) -- each sets its own
+   `color:` inline (slate/rose/text-dim/etc.), so currentColor picks that up
+   automatically instead of needing a rule per color. */
+.settings-action-btn { transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.1s; }
+.settings-action-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-color: color-mix(in srgb, currentColor 55%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 16%, transparent);
+}
+.settings-action-btn:active:not(:disabled) { transform: scale(0.96); }
+.settings-action-btn:disabled { opacity: 0.4; cursor: default; }
+
 .rw-field { display: flex; flex-direction: column; gap: 3px; }
 .rw-field span { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
 .rw-field input { width: 100%; }
@@ -250,14 +347,121 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   filter: drop-shadow(0 0 3px rgba(255,255,255,0.6)) drop-shadow(0 0 7px rgba(65,140,255,0.75));
 }
 
-.spinner {
-  width: 28px; height: 28px;
-  border: 3px solid var(--border);
-  border-top-color: var(--brand);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- Loading screen (waiting for Roblox to dock) ----
+   Composition: ambient grid + drifting particles behind a "radar" emblem
+   (ping rings + spinning arc + pulsing core) that reads as "actively
+   searching" rather than a generic spinner, brand wordmark, a small status
+   pill, the waiting text, Skip, and the version footer. Everything here
+   is themed off the shared custom properties (--bg-*/--text*/--border/
+   --brand/--teal) so it holds up on every Background x Accent combo,
+   including Light. Vertical rhythm is deliberately tight -- this screen
+   renders in the compact 400x324 pre-dock window (titlebar hidden), so
+   the stacked heights + margins below are budgeted to stay well inside
+   that without clipping. */
+.loading-screen { position: relative; overflow: hidden; }
+
+.loading-glow {
+  position: absolute; top: 50%; left: 50%; width: 300px; height: 300px; border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--brand) 20%, transparent) 0%, transparent 70%);
+  animation: loading-glow-pulse 3s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes loading-glow-pulse {
+  0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) scale(0.9); }
+  50%      { opacity: 1;   transform: translate(-50%, -50%) scale(1.05); }
+}
+
+/* Faint scanline grid, masked so it fades out toward the edges instead of
+   hard-cropping at the window border. */
+.loading-grid {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0.55;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 70%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 70%, transparent) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(ellipse 62% 60% at 50% 42%, black 0%, transparent 78%);
+  -webkit-mask-image: radial-gradient(ellipse 62% 60% at 50% 42%, black 0%, transparent 78%);
+}
+
+/* Slow-drifting ambient motes -- kept few and low-opacity so it reads as
+   texture, not a particle-system gimmick. */
+.loading-particles { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.loading-particles span {
+  position: absolute; bottom: -12px; width: 3px; height: 3px; border-radius: 50%;
+  background: var(--brand); opacity: 0;
+  animation: loading-particle-float 7s ease-in infinite;
+}
+.loading-particles span:nth-child(1) { left: 12%; animation-delay: 0.0s; animation-duration: 6.5s; }
+.loading-particles span:nth-child(2) { left: 27%; background: var(--teal); animation-delay: 1.4s; animation-duration: 7.5s; }
+.loading-particles span:nth-child(3) { left: 45%; animation-delay: 2.6s; animation-duration: 6s; }
+.loading-particles span:nth-child(4) { left: 61%; background: var(--lilac); animation-delay: 0.8s; animation-duration: 8s; }
+.loading-particles span:nth-child(5) { left: 76%; animation-delay: 3.4s; animation-duration: 6.8s; }
+.loading-particles span:nth-child(6) { left: 89%; background: var(--teal); animation-delay: 2.0s; animation-duration: 7.2s; }
+@keyframes loading-particle-float {
+  0%   { transform: translateY(0) scale(0.8); opacity: 0; }
+  12%  { opacity: 0.55; }
+  85%  { opacity: 0.3; }
+  100% { transform: translateY(-230px) scale(1.1); opacity: 0; }
+}
+
+/* Radar emblem */
+.loading-emblem { position: relative; width: 72px; height: 72px; flex-shrink: 0; }
+.loading-emblem-ping {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--brand) 55%, transparent);
+  animation: loading-emblem-ping 2.6s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+}
+.loading-emblem-ping-delay { animation-delay: 1.3s; }
+@keyframes loading-emblem-ping {
+  0%   { transform: scale(0.55); opacity: 0.85; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+.loading-emblem-ring {
+  position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--border);
+}
+.loading-emblem-arc {
+  position: absolute; inset: 0; border-radius: 50%; border: 3px solid transparent;
+  border-top-color: var(--brand);
+  border-right-color: color-mix(in srgb, var(--brand) 35%, transparent);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--brand) 55%, transparent));
+  animation: spin 1s cubic-bezier(0.5, 0.15, 0.35, 1) infinite;
+}
+.loading-emblem-core {
+  position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%; background: var(--brand);
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--brand) 70%, transparent);
+  animation: loading-core-pulse 2s ease-in-out infinite;
+}
+@keyframes loading-core-pulse {
+  0%, 100% { transform: scale(1);    opacity: 1; }
+  50%      { transform: scale(1.25); opacity: 0.75; }
+}
+
+/* Small status pill under the wordmark */
+.loading-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--bg-surface); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted);
+}
+.loading-tag-dot {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--teal); flex-shrink: 0;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--teal) 70%, transparent);
+  animation: loading-core-pulse 2s ease-in-out infinite;
+}
+
+.loading-dots span {
+  opacity: 0; animation: loading-dot-blink 1.4s infinite;
+}
+.loading-dots span:nth-child(1) { animation-delay: 0s; }
+.loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes loading-dot-blink { 0%, 80%, 100% { opacity: 0; } 40% { opacity: 1; } }
+
+.loading-skip-btn:hover { background: var(--bg-card); }
 
 /* Update progress bar (see #update-progress-wrap in index.html) -- plain
    width-driven fill when percent is known, this sliding-stripe animation
@@ -278,9 +482,10 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   font-size: 12px; font-weight: 600; color: var(--text-dim);
   text-align: left; width: 100%;
   background: var(--bg-card); border: 1px solid var(--border);
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
 }
 .settings-cat-btn:hover { background: var(--bg-surface); border-color: color-mix(in srgb, var(--brand) 40%, var(--border)); }
+.settings-cat-btn:active { transform: scale(0.98); }
 /* Same tinted-translucent language as .toggle-switch/.block-mod-btn.on --
    a solid white-on-bright-blue fill (the old look)
    reads as glare, not a state, and loses contrast against light text.
@@ -326,6 +531,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--tg) 25%, transparent), 0 0 10px -2px color-mix(in srgb, var(--tg) 65%, transparent);
   transform: translateY(-1px);
 }
+.toggle-switch:active { transform: scale(0.9); }
 .toggle-switch.on { --tg: var(--teal); }
 .toggle-switch.on::after { content: '\2713'; font-size: 13px; }
 @keyframes toggle-bounce {
@@ -341,7 +547,10 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   background: var(--bg-surface); border: 1px solid var(--border);
   color: var(--text-dim); font-size: 12px; font-weight: 700; font-family: monospace;
   cursor: pointer; text-align: center;
+  transition: border-color 0.15s, color 0.15s, transform 0.1s;
 }
+.keybind-btn:hover { border-color: color-mix(in srgb, var(--brand) 45%, var(--border)); color: var(--text); }
+.keybind-btn:active { transform: scale(0.96); }
 .keybind-btn.listening { border-color: var(--brand); color: var(--brand); }
 
 .keybind-group { display: flex; align-items: center; gap: 6px; }
@@ -350,9 +559,10 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   background: var(--bg-surface); border: 1px solid var(--border);
   color: var(--text-muted); font-size: 13px; line-height: 1; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, transform 0.1s;
 }
 .keybind-clear-btn:hover { color: var(--rose); border-color: color-mix(in srgb, var(--rose) 50%, var(--border)); }
+.keybind-clear-btn:active { transform: scale(0.9); }
 
 /* ---- Webhook panel ----
    Chip + hero dot colors are driven from JS (updateWebhookValidity) by setting
@@ -423,13 +633,19 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   padding: 8px 10px 8px 12px; border-radius: 8px; border: 1px solid var(--border);
   border-left: 3px solid var(--blk, var(--border));
   background: var(--bg-card); margin-bottom: 6px; cursor: grab;
-  animation: rise-in 0.22s ease both;
   transition: border-color 0.15s, box-shadow 0.15s, opacity 0.18s, transform 0.18s;
 }
+/* Only rows JS tags as .entering (genuinely new, or part of a real fresh
+   load) play the rise-in entrance -- renderPhases() rebuilds every row via
+   innerHTML on almost every Creation interaction, so an unconditional
+   animation here would replay on every block, every time. See app.js's
+   enteringBlockIds / creationFreshLoad. */
+.block-row.entering { animation: rise-in 0.22s ease both; }
 .block-row:hover {
   border-color: color-mix(in srgb, var(--blk, var(--brand)) 40%, var(--border));
   border-left-color: var(--blk, var(--brand));
   box-shadow: 0 0 10px -5px color-mix(in srgb, var(--blk, var(--brand)) 50%, transparent);
+  transform: translateY(-1px);
 }
 .block-row.drag-over { border-color: var(--brand); }
 .block-row.removing { opacity: 0; transform: translateX(14px) scale(0.97); }
@@ -446,9 +662,13 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .block-input {
   background: var(--bg-surface); border: 1px solid var(--border); border-radius: 5px;
   color: var(--text); font-size: 12px; padding: 3px 6px; width: 64px;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.block-input:hover, .block-input:focus { outline: none; border-color: color-mix(in srgb, var(--brand) 50%, var(--border)); }
+.block-input:hover { outline: none; border-color: color-mix(in srgb, var(--brand) 50%, var(--border)); }
+.block-input:focus {
+  outline: none; border-color: color-mix(in srgb, var(--brand) 60%, var(--border));
+  box-shadow: 0 0 6px -2px color-mix(in srgb, var(--brand) 55%, transparent);
+}
 
 /* Setting block's value control when kind="slider" (0-2, step 0.1) -- native
    range input restyled to the app's accent, paired with a real number input
@@ -466,29 +686,49 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .block-clone {
   color: var(--text-muted); cursor: pointer; flex-shrink: 0;
   font-size: 12px; line-height: 1; padding: 3px 5px; border-radius: 5px;
-  transition: color 0.15s, background 0.15s;
+  transition: color 0.15s, background 0.15s, transform 0.1s;
 }
 .block-clone:hover { color: var(--teal); background: color-mix(in srgb, var(--teal) 12%, transparent); }
+.block-clone:active, .block-delete:active { transform: scale(0.88); }
 .block-delete {
   color: var(--text-muted); cursor: pointer; flex-shrink: 0;
   font-size: 13px; line-height: 1; padding: 3px 5px; border-radius: 5px;
-  transition: color 0.15s, background 0.15s;
+  transition: color 0.15s, background 0.15s, transform 0.1s;
 }
 .block-delete:hover { color: var(--rose); background: color-mix(in srgb, var(--rose) 12%, transparent); }
-.canvas-dropzone { min-height: 64px; border-radius: 8px; }
-.canvas-dropzone.drag-over { outline: 2px dashed var(--brand); outline-offset: -2px; }
+.canvas-dropzone { min-height: 64px; border-radius: 8px; transition: background 0.15s; }
+.canvas-dropzone.drag-over {
+  outline: 2px dashed var(--brand); outline-offset: -2px;
+  background: color-mix(in srgb, var(--brand) 5%, transparent);
+}
+
+/* Opens a gap where a dragged block would land -- a real element in normal
+   flow, so its height transitioning from 0 makes the surrounding block-rows
+   slide apart/together smoothly for free (no manual FLIP animation needed).
+   See onBlockRowDragOver/onCanvasDragOver in app.js. */
+.block-drop-placeholder {
+  height: 0; margin: 0; border-radius: 8px; box-sizing: border-box;
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  border: 1.5px dashed color-mix(in srgb, var(--brand) 55%, transparent);
+  opacity: 0;
+  transition: height 0.16s ease, opacity 0.16s ease, margin-bottom 0.16s ease;
+}
+.block-drop-placeholder.open { height: 40px; margin-bottom: 6px; opacity: 1; }
 
 /* One collapsible section per routine phase (Before Match Start / In Match /
    After Match Start) -- each is its own independent drop target, see
    PHASES in app.js. */
 .phase-panel {
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); flex-shrink: 0;
-  animation: rise-in 0.28s ease both;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
-.phase-panel:nth-child(1) { animation-delay: 0.03s; }
-.phase-panel:nth-child(2) { animation-delay: 0.08s; }
-.phase-panel:nth-child(3) { animation-delay: 0.13s; }
+/* Same one-shot idea as .block-row.entering -- only plays on a real fresh
+   load of the phase list (initial paint, New Template, Load Template), not
+   on every renderPhases() call an unrelated edit triggers. */
+.phase-panel.entering { animation: rise-in 0.28s ease both; }
+.phase-panel.entering:nth-child(1) { animation-delay: 0.03s; }
+.phase-panel.entering:nth-child(2) { animation-delay: 0.08s; }
+.phase-panel.entering:nth-child(3) { animation-delay: 0.13s; }
 .phase-panel:hover { border-color: color-mix(in srgb, var(--brand) 25%, var(--border)); }
 .phase-head {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
@@ -510,9 +750,10 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   font-size: 9px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
   padding: 3px 7px; border-radius: 5px; flex-shrink: 0; cursor: pointer;
   border: 1px solid var(--border); color: var(--text-muted); background: transparent;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.1s;
 }
 .block-mod-btn:hover { color: var(--text-dim); border-color: color-mix(in srgb, var(--brand) 40%, var(--border)); }
+.block-mod-btn:active { transform: scale(0.94); }
 .block-mod-btn.on {
   color: var(--brand); border-color: color-mix(in srgb, var(--brand) 60%, var(--border));
   background: color-mix(in srgb, var(--brand) 14%, transparent);
@@ -527,9 +768,10 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .seg-btn {
   flex: 1; padding: 6px 10px; border-radius: 6px; border: none; background: transparent;
   font-size: 11px; font-weight: 700; color: var(--text-dim); cursor: pointer;
-  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s, transform 0.1s;
 }
 .seg-btn:hover { color: var(--text); }
+.seg-btn:active:not(:disabled) { transform: scale(0.96); }
 .seg-btn.active {
   background: color-mix(in srgb, var(--brand) 18%, var(--bg-surface));
   color: var(--brand);
@@ -561,10 +803,18 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   padding: 7px 9px; margin-bottom: 7px;
   display: flex; align-items: center; gap: 8px;
   cursor: pointer;
-  animation: rise-in 0.24s ease both;
   transition: border-color 0.15s, box-shadow 0.15s, opacity 0.18s, transform 0.18s;
 }
-.task-card:hover:not(.dragging) { border-color: color-mix(in srgb, var(--tqc, var(--brand)) 40%, var(--border)); }
+/* Only newly-added/cloned/imported cards (tagged by app.js's
+   enteringTaskIds) play the rise-in entrance -- renderTaskList() rebuilds
+   every card via innerHTML on add/remove/reorder/import, so an
+   unconditional animation here would replay on every card, every time. */
+.task-card.entering { animation: rise-in 0.24s ease both; }
+.task-card:hover:not(.dragging) {
+  border-color: color-mix(in srgb, var(--tqc, var(--brand)) 40%, var(--border));
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -6px color-mix(in srgb, var(--tqc, var(--brand)) 40%, transparent);
+}
 .task-card.selected {
   border-color: color-mix(in srgb, var(--tqc, var(--brand)) 65%, var(--border));
   box-shadow: 0 0 12px -4px color-mix(in srgb, var(--tqc, var(--brand)) 55%, transparent),
@@ -583,6 +833,30 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .tq-text { flex: 1; min-width: 0; }
 .tq-title { font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tq-meta { font-size: 10px; font-weight: 600; color: var(--text-muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Challenge screen: per-map rows (reuses .task-card as the row shell) ---- */
+.challenge-map-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.challenge-count-group {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+  font-size: 11px; font-weight: 700; color: var(--text-muted);
+}
+.challenge-count-sep { white-space: nowrap; }
+.challenge-progress {
+  height: 4px; border-radius: 3px; background: var(--bg-surface); overflow: hidden; margin-top: 7px;
+}
+.challenge-progress-fill { height: 100%; border-radius: 3px; transition: width 0.25s ease, background 0.2s; }
+.challenge-cap-chip {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 5px; margin-left: 6px;
+  color: var(--rose); background: color-mix(in srgb, var(--rose) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rose) 35%, transparent);
+}
+.challenge-ready-chip {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 5px; margin-left: 6px;
+  color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
+}
 
 /* Builder panel: labeled fields in a 2-up grid (labels come from .task-field). */
 .task-builder-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
@@ -613,16 +887,17 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.12s;
 }
 .task-icon-btn:hover { transform: translateY(-1px); }
+.task-icon-btn:active { transform: scale(0.92); }
 .task-icon-btn.clone:hover { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 50%, var(--border)); background: color-mix(in srgb, var(--teal) 12%, transparent); }
 .task-icon-btn.delete:hover { color: var(--rose); border-color: color-mix(in srgb, var(--rose) 50%, var(--border)); background: color-mix(in srgb, var(--rose) 12%, transparent); }
 
 .task-grip {
   color: var(--text-muted); font-size: 14px; line-height: 1; flex-shrink: 0;
   cursor: grab; padding: 3px 5px; border-radius: 5px; user-select: none;
-  transition: color 0.15s, background 0.15s;
+  transition: color 0.15s, background 0.15s, transform 0.1s;
 }
 .task-grip:hover { color: var(--brand); background: color-mix(in srgb, var(--brand) 12%, transparent); }
-.task-grip:active { cursor: grabbing; }
+.task-grip:active { cursor: grabbing; transform: scale(0.9); }
 
 .task-toolbar-btn {
   display: flex; align-items: center; gap: 5px;
@@ -631,6 +906,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.12s;
 }
 .task-toolbar-btn:hover { transform: translateY(-1px); }
+.task-toolbar-btn:active:not(:disabled) { transform: scale(0.96); }
 .task-toolbar-btn.add:hover { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 50%, var(--border)); background: color-mix(in srgb, var(--teal) 10%, transparent); }
 .task-toolbar-btn.move:hover { color: var(--brand); border-color: color-mix(in srgb, var(--brand) 50%, var(--border)); }
 .task-toolbar-btn.danger:hover { color: var(--rose); border-color: color-mix(in srgb, var(--rose) 50%, var(--border)); }
@@ -685,9 +961,27 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   background: var(--sw); box-shadow: 0 0 6px color-mix(in srgb, var(--sw) 70%, transparent);
 }
 .theme-swatch:hover { transform: translateY(-2px) scale(1.06); }
+.theme-swatch:active { transform: translateY(0) scale(0.96); }
 .theme-swatch.active {
   border-color: var(--sw);
   box-shadow: 0 0 10px -2px color-mix(in srgb, var(--sw) 70%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--sw) 45%, transparent);
+}
+
+/* Background tiles: an actual preview swatch of that base's card/border
+   color (pinned via --tb-bg/--tb-border, same "always visible regardless
+   of the active theme" trick .theme-swatch uses for --sw) rather than a
+   plain accent dot, since what's being picked here is a whole palette. */
+.theme-base-tile {
+  width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0; cursor: pointer;
+  background: var(--tb-bg);
+  border: 1.5px solid var(--tb-border);
+  transition: transform 0.12s, box-shadow 0.15s, border-color 0.15s;
+}
+.theme-base-tile:hover { transform: translateY(-2px) scale(1.06); }
+.theme-base-tile:active { transform: translateY(0) scale(0.96); }
+.theme-base-tile.active {
+  border-color: var(--brand);
+  box-shadow: 0 0 10px -2px color-mix(in srgb, var(--brand) 70%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--brand) 45%, transparent);
 }
 
 /* ---- Selects: app-styled, not the OS default ----
@@ -860,12 +1154,13 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   border-radius: 6px;
   padding: 5px 14px;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
 }
 .rec-stop-btn:hover {
   background: color-mix(in srgb, var(--rose) 26%, transparent);
   border-color: var(--rose);
 }
+.rec-stop-btn:active { transform: scale(0.95); }
 
 /* ---- Modal (Place Unit > Set) ---- */
 @keyframes modal-in {
@@ -897,9 +1192,10 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   width: 24px; height: 24px; border-radius: 6px; flex-shrink: 0; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   color: var(--text-muted); font-size: 16px; line-height: 1;
-  transition: color 0.15s, background 0.15s;
+  transition: color 0.15s, background 0.15s, transform 0.1s;
 }
 .modal-close:hover { color: var(--rose); background: color-mix(in srgb, var(--rose) 14%, transparent); }
+.modal-close:active { transform: scale(0.88); }
 .modal-body { padding: 14px 16px 16px; overflow-y: auto; }
 
 .pu-map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
@@ -923,4 +1219,17 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   width: 100%; height: 440px; display: block; border-radius: 10px;
   border: 1px solid var(--border); background: var(--bg-deep);
   cursor: crosshair;
+}
+
+/* Respect the OS-level "reduce motion" preference: keeps state changes
+   (colors, borders, focus rings) but collapses every animation/transition
+   to effectively instant, so nothing slides, pulses, or bounces for anyone
+   who's asked their system not to. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

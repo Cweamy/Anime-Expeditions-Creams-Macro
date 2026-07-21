@@ -296,7 +296,7 @@ function skipWaiting() {
 // other screens get the full window instead of Roblox showing through.
 let currentScreen = 'dashboard';
 let lastNonDashboardScreen = 'creation';
-const SCREENS = ['dashboard', 'task', 'creation', 'settings'];
+const SCREENS = ['dashboard', 'task', 'creation', 'challenge', 'settings'];
 
 function switchScreen(name) {
   const changed = currentScreen !== name;
@@ -341,6 +341,7 @@ function switchScreen(name) {
 
   if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); }
   if (name === 'task') refreshTaskQueue();
+  if (name === 'challenge') refreshChallengeScreen();
   if (name === 'settings') { refreshSavedPaths(); loadMacroCoords(); loadRewardTestMaps(); }
 
   // The Process Log only exists on the Dashboard; addLog()'s scroll-to-bottom
@@ -378,6 +379,11 @@ async function refreshStatus() {
     document.getElementById('stat-action').textContent = status.action ?? '-';
     document.getElementById('stat-last-run').textContent = status.last_run ?? '-';
     document.getElementById('stat-challenge').textContent = status.time_until_challenge ?? '-';
+    document.getElementById('stat-mode').textContent = status.mode ?? '-';
+    document.getElementById('stat-stage').textContent = status.stage ?? '-';
+    document.getElementById('stat-difficulty').textContent = status.difficulty ?? '-';
+    document.getElementById('stat-play-mode').textContent = status.play_mode ?? '-';
+    document.getElementById('stat-macro').textContent = status.macro ?? '-';
 
     const wins = status.wins ?? 0;
     const losses = status.losses ?? 0;
@@ -418,8 +424,8 @@ function setMacroButtons(running, paused) {
   if (pauseBtn) {
     pauseBtn.disabled = !running;
     pauseBtn.classList.toggle('on', !!paused);
-    const label = pauseBtn.childNodes[pauseBtn.childNodes.length - 1];
-    if (label) label.textContent = paused ? ' Resume' : ' Pause';
+    const label = document.getElementById('btn-macro-pause-label');
+    if (label) label.textContent = paused ? 'Resume' : 'Pause';
   }
 }
 
@@ -531,7 +537,7 @@ let rebindingAction = null;
 // action's ORIGINAL key without a round-trip; unbinding is done by pressing
 // Esc during capture instead.
 const HOTKEY_DEFAULTS = {
-  toggle_game: 'f4', skip_waiting: '', macro_start: 'f1', macro_stop: 'f2', debug_screenshot: 'f3',
+  toggle_game: 'f4', skip_waiting: '', macro_start: 'f1', macro_stop: 'f2', macro_pause: 'f5', debug_screenshot: 'f3',
 };
 
 // Reflects one hotkey's state into its button text and shows/hides its
@@ -549,7 +555,8 @@ function updateKeybindDisplay(action, key) {
   // a rebind/reset from Settings shows up immediately without needing to
   // revisit the Dashboard to pick it up.
   const dashboardKeyEl = document.getElementById(
-    action === 'macro_start' ? 'btn-macro-start-key' : action === 'macro_stop' ? 'btn-macro-stop-key' : null);
+    action === 'macro_start' ? 'btn-macro-start-key' : action === 'macro_stop' ? 'btn-macro-stop-key'
+    : action === 'macro_pause' ? 'btn-macro-pause-key' : null);
   if (dashboardKeyEl) dashboardKeyEl.textContent = key ? key.toUpperCase() : '';
 }
 
@@ -610,43 +617,82 @@ async function resetHotkeys() {
     updateKeybindDisplay('skip_waiting', hk.skip_waiting || '');
     updateKeybindDisplay('macro_start', hk.macro_start || '');
     updateKeybindDisplay('macro_stop', hk.macro_stop || '');
+    updateKeybindDisplay('macro_pause', hk.macro_pause || '');
     updateKeybindDisplay('debug_screenshot', hk.debug_screenshot || '');
   } catch (e) {}
 }
 
 // ---- Theme ----
-// Swatch colors mirror the --brand each data-theme sets in style.css; the
-// swatch row itself never re-tints (each chip pins its own --sw) so you can
-// always see every option regardless of the active theme.
-const THEMES = {
+// Two INDEPENDENT pickers instead of one flat row of preset combos: Base
+// (background palette) and Accent (--brand color) -- see style.css's own
+// comment on data-theme-base/data-theme-accent for how they combine. '' /
+// 'default' means "no override" for either, i.e. the plain :root palette.
+const THEME_BASES = {
+  default: { label: 'Dark', bg: '#171a26', border: '#2a2e42' },
+  black:   { label: 'Black', bg: '#0a0a0a', border: '#262626' },
+  slate:   { label: 'Slate', bg: '#1a1b1e', border: '#313338' },
+  light:   { label: 'Light', bg: '#ffffff', border: '#d8dbe4' },
+};
+const THEME_ACCENTS = {
   default: '#7c9dff', ocean: '#58a6ff', emerald: '#3fbf8f', sakura: '#e87a9e',
   violet: '#a878f0', sunset: '#e8935a', crimson: '#e05a6d', mono: '#aab2c8',
 };
-let activeTheme = 'default';
+let activeThemeBase = 'default';
+let activeThemeAccent = 'default';
 
-function applyTheme(name, announce) {
-  activeTheme = THEMES[name] ? name : 'default';
-  if (activeTheme === 'default') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = activeTheme;
+function applyThemeBase(name, announce) {
+  activeThemeBase = THEME_BASES[name] ? name : 'default';
+  if (activeThemeBase === 'default') delete document.documentElement.dataset.themeBase;
+  else document.documentElement.dataset.themeBase = activeThemeBase;
   renderThemePicker();
-  if (announce) {
-    const label = activeTheme[0].toUpperCase() + activeTheme.slice(1);
-    addLog(`[Theme] Loaded: ${label}`);
-  }
+  if (announce) addLog(`[Theme] Background: ${THEME_BASES[activeThemeBase].label}`);
 }
 
-function setTheme(name) {
-  applyTheme(name, true);
-  try { pywebview.api.set_setting('theme', activeTheme); } catch (e) {}
+function applyThemeAccent(name, announce) {
+  activeThemeAccent = THEME_ACCENTS[name] !== undefined ? name : 'default';
+  if (activeThemeAccent === 'default') delete document.documentElement.dataset.themeAccent;
+  else document.documentElement.dataset.themeAccent = activeThemeAccent;
+  renderThemePicker();
+  if (announce) addLog(`[Theme] Accent: ${activeThemeAccent[0].toUpperCase() + activeThemeAccent.slice(1)}`);
+}
+
+function setThemeBase(name) {
+  applyThemeBase(name, true);
+  try { pywebview.api.set_setting('theme_base', activeThemeBase); } catch (e) {}
+}
+
+function setThemeAccent(name) {
+  applyThemeAccent(name, true);
+  try { pywebview.api.set_setting('theme_accent', activeThemeAccent); } catch (e) {}
+}
+
+// One-time migration off the old single combined `theme` setting (e.g.
+// "black" or "ocean" meant one or the other) into the new independent
+// base/accent pair -- only runs when neither new setting has been saved
+// yet, so it never clobbers a real choice made under the new system.
+function migrateLegacyTheme(legacy) {
+  if (!legacy || legacy === 'default') return { base: 'default', accent: 'default' };
+  if (THEME_BASES[legacy]) return { base: legacy, accent: 'default' };
+  if (THEME_ACCENTS[legacy] !== undefined) return { base: 'default', accent: legacy };
+  return { base: 'default', accent: 'default' };
 }
 
 function renderThemePicker() {
-  const el = document.getElementById('theme-picker');
-  if (!el) return;
-  el.innerHTML = Object.entries(THEMES).map(([name, color]) => `
-    <button class="theme-swatch ${name === activeTheme ? 'active' : ''}" style="--sw: ${color};"
-            onclick="setTheme('${name}')" data-tooltip="${name[0].toUpperCase() + name.slice(1)}"></button>
-  `).join('');
+  const baseEl = document.getElementById('theme-base-picker');
+  if (baseEl) {
+    baseEl.innerHTML = Object.entries(THEME_BASES).map(([name, t]) => `
+      <button class="theme-base-tile ${name === activeThemeBase ? 'active' : ''}"
+              style="--tb-bg: ${t.bg}; --tb-border: ${t.border};"
+              onclick="setThemeBase('${name}')" data-tooltip="${t.label}"></button>
+    `).join('');
+  }
+  const accentEl = document.getElementById('theme-accent-picker');
+  if (accentEl) {
+    accentEl.innerHTML = Object.entries(THEME_ACCENTS).map(([name, color]) => `
+      <button class="theme-swatch ${name === activeThemeAccent ? 'active' : ''}" style="--sw: ${color};"
+              onclick="setThemeAccent('${name}')" data-tooltip="${name[0].toUpperCase() + name.slice(1)}"></button>
+    `).join('');
+  }
 }
 
 async function loadSettingsUI() {
@@ -655,7 +701,20 @@ async function loadSettingsUI() {
     document.getElementById('toggle-start-minimized').classList.toggle('on', !!s.start_minimized);
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
     if (debugScreenshotsEl) debugScreenshotsEl.classList.toggle('on', !!s.debug_screenshots);
-    applyTheme(s.theme || 'default', true);
+    if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {
+      // First load since the base/accent split -- migrate the old value
+      // once, then persist the split so this branch never runs again.
+      const migrated = migrateLegacyTheme(s.theme);
+      applyThemeBase(migrated.base, false);
+      applyThemeAccent(migrated.accent, false);
+      try {
+        pywebview.api.set_setting('theme_base', migrated.base);
+        pywebview.api.set_setting('theme_accent', migrated.accent);
+      } catch (e) {}
+    } else {
+      applyThemeBase(s.theme_base || 'default', false);
+      applyThemeAccent(s.theme_accent || 'default', false);
+    }
     const scrollPowerEl = document.getElementById('story-scroll-power');
     if (scrollPowerEl) scrollPowerEl.value = s.story_scroll_power ?? 3;
     const scrollNudgesEl = document.getElementById('story-scroll-nudges');
@@ -669,6 +728,7 @@ async function loadSettingsUI() {
     updateKeybindDisplay('skip_waiting', hk.skip_waiting || '');
     updateKeybindDisplay('macro_start', hk.macro_start || '');
     updateKeybindDisplay('macro_stop', hk.macro_stop || '');
+    updateKeybindDisplay('macro_pause', hk.macro_pause || '');
     updateKeybindDisplay('debug_screenshot', hk.debug_screenshot || '');
     updateDashboardHotkeys(hk);
   } catch (e) {}
@@ -998,6 +1058,22 @@ function finishTesseractInstall(success) {
 window.tesseractInstallDone = () => finishTesseractInstall(true);
 window.tesseractInstallFailed = () => finishTesseractInstall(false);
 
+// Settings > General > "Open Assets Folder" -- see core.vision's override
+// lookup: a same-named PNG dropped here beats the bundled reference image
+// for that button/text.
+async function openAssetsFolder(btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Opening...';
+  try {
+    const result = await pywebview.api.open_assets_folder();
+    if (!result.ok) btn.textContent = 'Failed';
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1200);
+}
+
 // Settings > Debug > "Test Walking Path" -- replays a saved WASD recording
 // (see core.paths.replay_events) against the live game so a Custom Path can
 // be sanity-checked on its own. Run/Stop swap visibility instead of one
@@ -1179,7 +1255,7 @@ async function saveWebhookSettings(silentSave) {
 const TASK_DATA = {
   story: {
     label: 'Story',
-    maps: ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb"],
+    maps: ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb", 'Flower Forest'],
     stages: ['1', '2', '3', '4', '5', 'Infinite', 'Mastery'],
     difficulties: ['Normal', 'Hard'],
   },
@@ -1189,20 +1265,26 @@ const TASK_DATA = {
     stages: ['1', '2', '3'],
     fixedDifficulty: 'Hard',
   },
-  challenge: {
-    label: 'Challenge',
-    types: ['Regular', 'Daily', 'Weekly'],
-    numbers: ['1', '2', '3'],
-  },
   expedition: {
     label: 'Expedition',
     maps: ['School Grounds', 'Flower Forest', 'Rose Kingdom'],
     difficulties: ['1', '2', '3'],
+    // How many "exp_extract" prompts to decline before actually taking
+    // one -- 0 extracts at the first one shown, 1 (default, matches the
+    // old hardcoded behavior) waits for a second, and so on for a deeper
+    // run. See core.runner._expedition_extract_accept_at.
+    extractAfter: ['0', '1', '2', '3', '4', '5'],
   },
 };
 
 let taskCards = [];
 let selectedTaskId = null;
+// Same one-shot "only truly new rows animate" idea as enteringBlockIds on
+// the Creation screen -- renderTaskList() rebuilds every .task-card via
+// innerHTML, so without this every card would replay its entrance
+// animation on any queue change (add/remove/reorder/import), not just the
+// one that's actually new.
+let enteringTaskIds = new Set();
 let taskTemplates = [];  // Creation template names, for the Macro Operation picker
 let taskSaveTimer = null;
 
@@ -1214,7 +1296,7 @@ function defaultTask() {
   return {
     id: newTaskId(), mode: 'story',
     map: TASK_DATA.story.maps[0], stage: '1', difficulty: 'Normal',
-    challenge_type: 'Regular', challenge_number: '1',
+    extract_after: '1',
     repeat: 1, team: '', equipment: 'include', play_mode: 'solo', macro: '',
   };
 }
@@ -1276,7 +1358,9 @@ async function importTasks() {
   } catch (e) {}
   let added = 0;
   for (const t of data.tasks) {
-    taskCards.push({ ...defaultTask(), ...t, id: newTaskId() });
+    const newTask = { ...defaultTask(), ...t, id: newTaskId() };
+    taskCards.push(newTask);
+    enteringTaskIds.add(newTask.id);
     added++;
   }
   await refreshTaskTemplates();
@@ -1289,6 +1373,7 @@ async function importTasks() {
 function addTaskCard() {
   const t = defaultTask();
   taskCards.push(t);
+  enteringTaskIds.add(t.id);
   selectedTaskId = t.id;
   renderTaskList();
   renderTaskBuilder();
@@ -1302,6 +1387,7 @@ function cloneTaskCard(id) {
   if (idx === -1) return;
   const copy = { ...taskCards[idx], id: newTaskId() };
   taskCards.splice(idx + 1, 0, copy);
+  enteringTaskIds.add(copy.id);
   selectedTaskId = copy.id;
   renderTaskList();
   renderTaskBuilder();
@@ -1346,14 +1432,15 @@ function setTaskProp(id, key, value) {
   // labels re-render on every change either way, but the Builder is only
   // rebuilt when the *shape* changed so typing in the Repeat field doesn't
   // lose focus mid-keystroke to an innerHTML swap.
-  const structural = ['mode', 'stage', 'challenge_type'];
+  const structural = ['mode', 'stage'];
   if (key === 'mode') {
     const d = TASK_DATA[t.mode];
     if (d.maps) t.map = d.maps[0];
     if (d.stages) t.stage = d.stages[0];
     if (d.difficulties) t.difficulty = d.difficulties[0];
+    if (d.extractAfter) t.extract_after = '1';
   }
-  renderTaskList();
+  updateQueueRowInPlace(t);
   if (structural.includes(key)) renderTaskBuilder();
   saveTaskQueue();
 }
@@ -1363,7 +1450,7 @@ function taskOpts(list, current, fmt) {
 }
 
 // One accent per mode so the queue scans by color before you even read it.
-const TASK_MODE_COLORS = { story: 'var(--brand)', raid: 'var(--rose)', challenge: 'var(--amber)', expedition: 'var(--teal)' };
+const TASK_MODE_COLORS = { story: 'var(--brand)', raid: 'var(--rose)', expedition: 'var(--teal)' };
 
 // The two text lines a queue row shows for a task -- where it goes, then how
 // it runs. All editing happens in the Builder, rows are read-only summaries.
@@ -1372,8 +1459,6 @@ function taskSummary(t) {
   let title = d.label;
   if (t.mode === 'story' || t.mode === 'raid') {
     title += ` · ${t.map} · ${/^\d+$/.test(t.stage) ? 'Stage ' + t.stage : t.stage}`;
-  } else if (t.mode === 'challenge') {
-    title += ` · ${t.challenge_type}${t.challenge_type === 'Regular' ? ' #' + t.challenge_number : ''}`;
   } else if (t.mode === 'expedition') {
     title += ` · ${t.map}`;
   }
@@ -1391,8 +1476,9 @@ function taskSummary(t) {
 
 function renderQueueRow(t, idx) {
   const { title, meta } = taskSummary(t);
+  const entering = enteringTaskIds.has(t.id) ? ' entering' : '';
   return `
-    <div class="task-card ${t.id === selectedTaskId ? 'selected' : ''}" id="task_${t.id}"
+    <div class="task-card${entering} ${t.id === selectedTaskId ? 'selected' : ''}" id="task_${t.id}"
          style="--tqc: ${TASK_MODE_COLORS[t.mode] || 'var(--brand)'};" onclick="selectTaskCard('${t.id}')">
       <span class="task-grip" onclick="event.stopPropagation()">&#10247;</span>
       <span class="tq-index">${idx + 1}</span>
@@ -1414,6 +1500,23 @@ function renderTaskList() {
   el.innerHTML = taskCards.length === 0
     ? '<div class="rh-empty">No tasks yet -- click "+ Add Task" to queue one.</div>'
     : taskCards.map(renderQueueRow).join('');
+  enteringTaskIds.clear();
+}
+
+// Patches a single queue row's summary text/accent in place instead of
+// rebuilding the whole list -- setTaskProp() fires on every field edit
+// (including every keystroke in Repeat), and a full renderTaskList() there
+// would replay every OTHER card's entrance animation too, plus drop focus
+// out of whatever input is being typed in.
+function updateQueueRowInPlace(t) {
+  const el = document.getElementById('task_' + t.id);
+  if (!el) { renderTaskList(); return; }
+  const { title, meta } = taskSummary(t);
+  el.style.setProperty('--tqc', TASK_MODE_COLORS[t.mode] || 'var(--brand)');
+  const titleEl = el.querySelector('.tq-title');
+  const metaEl = el.querySelector('.tq-meta');
+  if (titleEl) titleEl.textContent = title;
+  if (metaEl) metaEl.textContent = meta;
 }
 
 // The right-hand editor: every control gets a caption so nothing has to be
@@ -1442,9 +1545,6 @@ function renderTaskBuilder() {
   if (t.mode === 'story' || t.mode === 'raid') {
     fields.push(field('Map', sel('map', d.maps)));
     fields.push(field('Stage', sel('stage', d.stages, s => /^\d+$/.test(s) ? 'Stage ' + s : s)));
-  } else if (t.mode === 'challenge') {
-    fields.push(field('Challenge Type', sel('challenge_type', d.types, ty => ty + ' Challenge')));
-    if (t.challenge_type === 'Regular') fields.push(field('Number', sel('challenge_number', d.numbers, n => '#' + n)));
   } else if (t.mode === 'expedition') {
     fields.push(field('Expedition', sel('map', d.maps)));
   }
@@ -1454,6 +1554,11 @@ function renderTaskBuilder() {
     fields.push(field('Difficulty', sel('difficulty', d.difficulties)));
   } else if (d.fixedDifficulty || specialStage) {
     fields.push(field('Difficulty', `<span class="task-chip" style="align-self: flex-start;">Hard &middot; locked</span>`));
+  }
+
+  if (t.mode === 'expedition') {
+    fields.push(field('Extract After', `<input type="number" class="block-input" min="0" value="${t.extract_after}"
+      oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`));
   }
 
   const playSeg = `
@@ -1472,8 +1577,11 @@ function renderTaskBuilder() {
     </select>`;
   fields.push(field('Macro Operation', macroSel));
 
+  const extractHint = t.mode === 'expedition'
+    ? `<div class="wh-hint">"Extract After" is how many extract prompts to skip before actually taking one -- 0 extracts at the first node, higher goes deeper (and takes longer) per run.</div>` : '';
   el.innerHTML = `
     <div class="task-builder-grid">${fields.join('')}</div>
+    ${extractHint}
     <div class="wh-hint" style="margin-top: 8px;">The macro's Team Loadout comes from its template (Creation tab).</div>
     <div class="flex items-center gap-2" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
       <button class="task-toolbar-btn add" onclick="cloneTaskCard('${t.id}')">&#10697; Clone Task</button>
@@ -1489,7 +1597,13 @@ async function refreshTaskQueue() {
     // Task screen: team was null instead of '', stage was a number, and
     // Infinite/Mastery lived in the difficulty dropdown before they moved
     // into the Stage picker.
-    taskCards = (await pywebview.api.get_tasks()).map(saved => {
+    const rawTasks = await pywebview.api.get_tasks();
+    // "Challenge" used to be a Task Queue mode -- it never actually ran
+    // (no runner support ever existed for it) and is now the dedicated
+    // Challenge tab instead, so any leftover task saved under that mode
+    // is dropped rather than migrated into a guessed-wrong Story task.
+    const droppedChallenge = rawTasks.filter(t => t.mode === 'challenge').length;
+    taskCards = rawTasks.filter(t => t.mode !== 'challenge').map(saved => {
       const t = { ...defaultTask(), ...saved };
       if (t.team == null) t.team = '';
       t.stage = String(t.stage);
@@ -1497,13 +1611,18 @@ async function refreshTaskQueue() {
         t.stage = t.difficulty;
         t.difficulty = 'Normal';
       }
-      t.challenge_type = String(t.challenge_type || 'Regular').replace(' Challenge', '');
-      t.challenge_number = String(t.challenge_number || '1');
       return t;
     });
+    if (droppedChallenge) {
+      addLog(`[Task] Removed ${droppedChallenge} old "Challenge" task(s) -- use the Challenge tab instead.`);
+      saveTaskQueue();
+    }
   } catch (e) {
     taskCards = [];
   }
+  // Fresh load of the whole queue (app start / screen init) -- every card is
+  // effectively new to the DOM, so let them all play the entrance stagger.
+  taskCards.forEach(t => enteringTaskIds.add(t.id));
   renderTaskList();
   renderTaskBuilder();
 }
@@ -1516,7 +1635,6 @@ async function refreshTaskQueue() {
     const d = TASK_DATA[t.mode];
     let s = d.label;
     if (t.mode === 'story' || t.mode === 'raid') s += ` · ${t.map} · ${/^\d+$/.test(t.stage) ? 'Stage ' + t.stage : t.stage}`;
-    if (t.mode === 'challenge') s += ` · ${t.challenge_type}`;
     if (t.mode === 'expedition') s += ` · ${t.map}`;
     return `${s} ×${t.repeat}`;
   }
@@ -1583,6 +1701,132 @@ async function refreshTaskQueue() {
 })();
 
 // ---------------------------------------------------------------------------
+// Challenge screen: Regular Challenge automation
+// ---------------------------------------------------------------------------
+// Regular Challenge has 3 fixed stage slots that each rotate through one of
+// the 5 Story maps over time (see main.py's CHALLENGE_STORY_MAPS comment) --
+// config here is split the same way the backend models it: the daily play
+// limit tracks each STAGE SLOT (whichever map is currently rotated into it),
+// while Macro Operation assignment is tracked per MAP, since that's what
+// needs to follow the map around as it rotates through slots.
+const CHALLENGE_STAGE_SLOTS = ['1', '2', '3'];
+// Mirrors main.py's CHALLENGE_STORY_MAPS -- keep in sync if Story's map
+// list (TASK_DATA.story.maps) ever changes.
+const CHALLENGE_STORY_MAPS = ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb", 'Flower Forest'];
+let challengeState = null;
+
+async function refreshChallengeScreen() {
+  try {
+    challengeState = await pywebview.api.get_challenge_settings();
+  } catch (e) {
+    challengeState = null;
+  }
+  await refreshTaskTemplates();  // shares the same Macro Operation list Task Builder uses
+  renderChallengeScreen();
+}
+
+function renderChallengeScreen() {
+  const s = challengeState;
+  const enabledBtn = document.getElementById('toggle-challenge-enabled');
+  if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
+  const playMode = (s && s.play_mode) || 'solo';
+  const soloBtn = document.getElementById('challenge-mode-solo');
+  const mmBtn = document.getElementById('challenge-mode-matchmaking');
+  if (soloBtn) soloBtn.classList.toggle('active', playMode === 'solo');
+  if (mmBtn) mmBtn.classList.toggle('active', playMode === 'matchmaking');
+  const lastReset = document.getElementById('challenge-last-reset');
+  if (lastReset) lastReset.textContent = (s && s.last_reset_date) || '-';
+
+  const stageList = document.getElementById('challenge-stage-list');
+  if (stageList) {
+    const cap = s ? s.cap : 10;
+    stageList.innerHTML = CHALLENGE_STAGE_SLOTS.map(slot => {
+      const info = (s && s.stages && s.stages[slot]) || { enabled: true, count: 0, ready: true };
+      const atCap = cap > 0 && info.count >= cap;
+      const pct = cap > 0 ? Math.min(100, Math.round((info.count / cap) * 100)) : 0;
+      const statusChip = atCap ? '<span class="challenge-cap-chip">Capped</span>'
+        : info.ready ? '<span class="challenge-ready-chip">Ready</span>'
+        : '<span class="challenge-cap-chip" style="color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 14%, transparent); border-color: color-mix(in srgb, var(--text-muted) 35%, transparent);">Played this window</span>';
+      return `
+        <div class="task-card" style="--tqc: ${atCap ? 'var(--rose)' : 'var(--amber)'}; cursor: default;">
+          <div class="tq-text" style="min-width: 0;">
+            <div class="tq-title">Regular Challenge #${slot} ${statusChip}</div>
+            <div class="challenge-map-row">
+              <button class="toggle-switch ${info.enabled ? 'on' : ''}" onclick="toggleChallengeStage('${slot}', this)"></button>
+              <span class="flex-1"></span>
+              <div class="challenge-count-group">
+                <input type="number" class="block-input" min="0" style="width: 52px;" value="${info.count}"
+                       onchange="setChallengeStageCount('${slot}', this.value)">
+                <span class="challenge-count-sep">/ ${cap}</span>
+              </div>
+            </div>
+            <div class="challenge-progress"><div class="challenge-progress-fill" style="width: ${pct}%; background: ${atCap ? 'var(--rose)' : 'var(--amber)'};"></div></div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  const mapList = document.getElementById('challenge-map-list');
+  if (!mapList) return;
+  if (!s) { mapList.innerHTML = '<div class="rh-empty">Couldn\'t load Challenge settings.</div>'; return; }
+  const macroOpts = (current) => `<option value="">No Macro</option>` +
+    taskTemplates.map(n => `<option value="${n}" ${n === current ? 'selected' : ''}>&#9654; ${n}</option>`).join('');
+  mapList.innerHTML = CHALLENGE_STORY_MAPS.map(map => {
+    const info = s.maps[map] || { macro: '' };
+    return `
+      <div class="task-card" style="--tqc: var(--lilac); cursor: default;">
+        <div class="tq-text" style="min-width: 0;">
+          <div class="tq-title">${map}</div>
+          <div class="challenge-map-row">
+            <select class="task-select" style="width: 100%;" onchange="setChallengeMapMacro('${escJs(map)}', this.value)">
+              ${macroOpts(info.macro)}
+            </select>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// Attribute-quote escaping for map names with apostrophes (King's Tomb),
+// same problem renderPlaceUnitMapGrid's own comment already flagged.
+function escJs(s) { return s.replace(/'/g, "\\'"); }
+
+async function toggleChallengeEnabled(btn) {
+  const isOn = !btn.classList.contains('on');
+  btn.classList.toggle('on', isOn);
+  bounceToggle(btn);
+  try { await pywebview.api.set_challenge_enabled(isOn); } catch (e) {}
+}
+
+async function setChallengePlayMode(playMode) {
+  try { await pywebview.api.set_challenge_play_mode(playMode); } catch (e) {}
+  await refreshChallengeScreen();
+}
+
+async function toggleChallengeStage(stage, btn) {
+  const isOn = !btn.classList.contains('on');
+  btn.classList.toggle('on', isOn);
+  bounceToggle(btn);
+  try { await pywebview.api.set_challenge_stage_enabled(stage, isOn); } catch (e) {}
+}
+
+async function setChallengeMapMacro(map, value) {
+  try { await pywebview.api.set_challenge_map_macro(map, value); } catch (e) {}
+}
+
+async function setChallengeStageCount(stage, value) {
+  const count = Math.max(0, parseInt(value, 10) || 0);
+  try { await pywebview.api.set_challenge_stage_count(stage, count); } catch (e) {}
+  await refreshChallengeScreen();
+}
+
+async function resetChallengeCounts() {
+  try { await pywebview.api.reset_challenge_counts(); } catch (e) {}
+  addLog('[Challenge] Play counts reset.');
+  await refreshChallengeScreen();
+}
+
+// ---------------------------------------------------------------------------
 // Creation screen: block-based drag-and-drop routine builder
 // ---------------------------------------------------------------------------
 // Pathing is no longer a draggable block: every routine's Pre Start phase has
@@ -1623,6 +1867,18 @@ let phaseCollapsed = { prestart: false, battle: false };
 let recordingBlockId = null;
 let savedPaths = [];
 
+// renderPhases() rebuilds the ENTIRE block list via innerHTML on nearly every
+// Creation interaction (toggling Once, clone/remove, drag-drop reorder,
+// changing a Setting block's kind, etc.) -- if every .block-row played its
+// entrance animation unconditionally, every block would replay it on every
+// one of those interactions, not just the block that actually changed. So
+// the base CSS rule has no animation; only rows/panels tagged .entering get
+// one, and that tag is applied ONLY to genuinely new rows (added here, then
+// consumed the next time renderPhases() runs) or to the phase shell on a
+// real fresh load (new template, template load) via creationFreshLoad.
+let enteringBlockIds = new Set();
+let creationFreshLoad = true;
+
 // The template's Team Loadout + the Pre Start walk config. Loadout used to
 // live on each Task card; it belongs to the routine, so it saves with the
 // template and the task inherits it through its Macro Operation pick.
@@ -1656,6 +1912,7 @@ function addBlock(type, phase, atIndex) {
   const params = {};
   def.params.forEach(p => { params[p.key] = p.default; });
   const block = { id: newBlockId(), type, params, once: false };
+  enteringBlockIds.add(block.id);
   if (type === 'setting_change') { block.kind = 'toggle'; block.value = 'off'; }
   if (type === 'place_unit') { block.hotkey = ''; }
   if (type === 'walk') { block.params.path = ''; }
@@ -1688,6 +1945,7 @@ function cloneBlock(id) {
   if (!loc) return;
   const src = creationPhases[loc.phase][loc.idx];
   const copy = { ...src, id: newBlockId(), params: { ...src.params } };
+  enteringBlockIds.add(copy.id);
   creationPhases[loc.phase].splice(loc.idx + 1, 0, copy);
   renderPhases();
 }
@@ -2128,11 +2386,11 @@ function renderBlockRow(b, phase) {
     : b.type === 'auto_upgrade_unit' ? renderAutoUpgradeControls(b)
     : b.type === 'sell_unit' ? renderSellUnitControls(b) : '';
   const onceBtn = `<button type="button" class="block-mod-btn ${b.once ? 'on' : ''}" onclick="toggleBlockOnce('${b.id}')" title="Only run this block once, even if the routine repeats">Once</button>`;
+  const entering = enteringBlockIds.has(b.id) ? ' entering' : '';
   return `
-    <div class="block-row" style="--blk: ${def.color};" draggable="true" data-id="${b.id}"
+    <div class="block-row${entering}" style="--blk: ${def.color};" draggable="true" data-id="${b.id}"
          ondragstart="if (['INPUT','SELECT','BUTTON'].includes(event.target.tagName)) { event.preventDefault(); return false; } event.dataTransfer.setData('block-reorder', '${b.id}')"
-         ondragover="event.preventDefault(); event.stopPropagation(); event.currentTarget.classList.add('drag-over')"
-         ondragleave="event.currentTarget.classList.remove('drag-over')"
+         ondragover="onBlockRowDragOver(event, '${phase}', '${b.id}')"
          ondrop="onBlockDrop(event, '${phase}', '${b.id}')">
       <span class="block-drag-handle">&#8942;&#8942;</span>
       <span class="block-label">${def.label}</span>
@@ -2445,7 +2703,7 @@ function applyPlaceUnitPosition() {
 // get to its spot. Auto (the game's default pathing) or a recorded custom
 // path. Runs once per task by definition -- you only walk out once -- so the
 // "Runs once" chip is fixed, not a toggle, and the row has no delete.
-function renderWalkRow() {
+function renderWalkRow(entering) {
   const isRecording = recordingBlockId === 'walkpath';
   const modeSeg = `
     <div class="seg-toggle">
@@ -2460,7 +2718,7 @@ function renderWalkRow() {
       <select class="block-input" style="width:auto;" onchange="setWalkPath(this.value)"><option value="">Pick saved path...</option>${options}</select>`;
   }
   return `
-    <div class="block-row pinned" style="--blk: var(--teal);">
+    <div class="block-row pinned${entering ? ' entering' : ''}" style="--blk: var(--teal);">
       <svg class="w-3.5 h-3.5 flex-shrink-0" style="color: var(--teal);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 2.5l8 8-3.5 1-4 6.5-2-2L5.5 22 2 18.5 8 12l-2-2 6.5-4z"/>
       </svg>
@@ -2496,6 +2754,12 @@ function renderCreationLoadout() {
 function renderPhases() {
   const el = document.getElementById('creation-phases');
   if (!el) return;
+  // Only a genuine fresh load (initial page render, New Template, Load
+  // Template) plays the phase-panel/pinned-row entrance -- every other call
+  // is just reflecting an edit to the existing list, so those shells should
+  // stay put. Consumed once per call, same one-shot idea as enteringBlockIds.
+  const freshPhase = creationFreshLoad;
+  const panelEntering = freshPhase ? ' entering' : '';
   el.innerHTML = PHASES.map(phase => {
     const blocks = creationPhases[phase];
     const emptyText = phase === 'prestart'
@@ -2511,12 +2775,12 @@ function renderPhases() {
     if (phase === 'prestart') {
       const settingRows = blocks.filter(b => b.type === 'setting_change').map(b => renderBlockRow(b, phase)).join('');
       const unitRows = blocks.filter(b => b.type !== 'setting_change').map(b => renderBlockRow(b, phase)).join('');
-      body = settingRows + renderWalkRow() + (blocks.length === 0 ? emptyDiv : unitRows);
+      body = settingRows + renderWalkRow(freshPhase) + (blocks.length === 0 ? emptyDiv : unitRows);
     } else {
       body = blocks.length === 0 ? emptyDiv : blocks.map(b => renderBlockRow(b, phase)).join('');
     }
     return `
-      <div class="phase-panel ${phaseCollapsed[phase] ? 'collapsed' : ''}">
+      <div class="phase-panel${panelEntering} ${phaseCollapsed[phase] ? 'collapsed' : ''}">
         <div class="phase-head" onclick="togglePhaseCollapsed('${phase}')">
           <svg class="phase-chevron w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
             <polyline points="6 9 12 15 18 9"/>
@@ -2531,21 +2795,87 @@ function renderPhases() {
       </div>
     `;
   }).join('');
+  enteringBlockIds.clear();
+  creationFreshLoad = false;
   renderCreationLoadout();
+}
+
+// Opens a real gap where a dragged block (from the palette OR an existing
+// row being reordered) would land, instead of just highlighting a border --
+// a single placeholder element moved to wherever the cursor currently is,
+// whose height transitioning from 0 (see .block-drop-placeholder in
+// style.css) makes the actual block-rows around it slide apart/back
+// together for free, no manual per-row animation needed.
+let blockDropPlaceholder = null;
+
+function getBlockDropPlaceholder() {
+  if (!blockDropPlaceholder) {
+    blockDropPlaceholder = document.createElement('div');
+    blockDropPlaceholder.className = 'block-drop-placeholder';
+  }
+  return blockDropPlaceholder;
+}
+
+function openBlockDropPlaceholder() {
+  const placeholder = getBlockDropPlaceholder();
+  requestAnimationFrame(() => placeholder.classList.add('open'));
+}
+
+function removeBlockDropPlaceholder() {
+  if (blockDropPlaceholder) blockDropPlaceholder.classList.remove('open');
+  if (blockDropPlaceholder && blockDropPlaceholder.parentNode) {
+    blockDropPlaceholder.parentNode.removeChild(blockDropPlaceholder);
+  }
+}
+
+// Cleans up on ANY drag end (dropped, cancelled, dropped outside a valid
+// target) regardless of where it happened -- dragend always fires on the
+// element the drag started from.
+document.addEventListener('dragend', removeBlockDropPlaceholder);
+
+// Hovering the top half of a row opens the gap above it (insert before);
+// the bottom half opens it below (insert after) -- tracked via
+// dataset.dropAfter so onBlockDrop's actual index math matches exactly
+// where the gap was shown, not just "always before this row" like before.
+function onBlockRowDragOver(e, phase, targetId) {
+  e.preventDefault();
+  e.stopPropagation();
+  const row = e.currentTarget;
+  const rect = row.getBoundingClientRect();
+  const after = (e.clientY - rect.top) >= rect.height / 2;
+  row.dataset.dropAfter = after ? '1' : '';
+  const placeholder = getBlockDropPlaceholder();
+  if (after) row.after(placeholder);
+  else row.before(placeholder);
+  openBlockDropPlaceholder();
 }
 
 function onCanvasDragOver(e, phase) {
   e.preventDefault();
-  document.getElementById(`creation-canvas-${phase}`).classList.add('drag-over');
+  const zone = document.getElementById(`creation-canvas-${phase}`);
+  zone.classList.add('drag-over');
+  // Only claim the placeholder here when the cursor isn't over a specific
+  // row -- each row's own dragover (onBlockRowDragOver) already places it
+  // more precisely, and this would otherwise fight that on every bubbled
+  // dragover event.
+  if (e.target === zone) {
+    zone.appendChild(getBlockDropPlaceholder());
+    openBlockDropPlaceholder();
+  }
 }
 
 function onCanvasDragLeave(e, phase) {
-  document.getElementById(`creation-canvas-${phase}`).classList.remove('drag-over');
+  const zone = document.getElementById(`creation-canvas-${phase}`);
+  zone.classList.remove('drag-over');
+  // relatedTarget is where the pointer moved TO -- still inside the zone
+  // (e.g. onto a child row) isn't actually leaving it, just bubbling.
+  if (!zone.contains(e.relatedTarget)) removeBlockDropPlaceholder();
 }
 
 function onCanvasDrop(e, phase) {
   e.preventDefault();
   document.getElementById(`creation-canvas-${phase}`).classList.remove('drag-over');
+  removeBlockDropPlaceholder();
   const type = e.dataTransfer.getData('block-type');
   if (type) { addBlock(type, phase); return; }
   const draggedId = e.dataTransfer.getData('block-reorder');
@@ -2575,19 +2905,22 @@ function moveBlockToPhase(id, phase, toIdx) {
 function onBlockDrop(e, phase, targetId) {
   e.preventDefault();
   e.stopPropagation();
-  e.currentTarget.classList.remove('drag-over');
+  const dropAfter = e.currentTarget.dataset.dropAfter === '1';
+  removeBlockDropPlaceholder();
 
   const list = creationPhases[phase];
   const newType = e.dataTransfer.getData('block-type');
   if (newType) {
-    const toIdx = list.findIndex(b => b.id === targetId);
+    let toIdx = list.findIndex(b => b.id === targetId);
+    if (toIdx !== -1 && dropAfter) toIdx += 1;
     addBlock(newType, phase, toIdx === -1 ? null : toIdx);
     return;
   }
 
   const draggedId = e.dataTransfer.getData('block-reorder');
   if (!draggedId || draggedId === targetId) return;
-  const toIdx = list.findIndex(b => b.id === targetId);
+  let toIdx = list.findIndex(b => b.id === targetId);
+  if (toIdx !== -1 && dropAfter) toIdx += 1;
   moveBlockToPhase(draggedId, phase, toIdx === -1 ? null : toIdx);
 }
 
@@ -2618,6 +2951,7 @@ function newTemplate() {
   creationEquipment = 'include';
   document.getElementById('template-name').value = '';
   document.getElementById('template-select').value = '';
+  creationFreshLoad = true;
   renderPhases();
   renderCreationLoadout();
 }
@@ -2727,6 +3061,7 @@ async function loadSelectedTemplate() {
       creationTeam = payload.team || '';
       creationEquipment = payload.equipment === 'exclude' ? 'exclude' : 'include';
     }
+    creationFreshLoad = true;
     renderPhases();
     document.getElementById('template-name').value = data.name || name;
   } catch (e) {}
@@ -2761,6 +3096,8 @@ window.addEventListener('pywebviewready', async () => {
   try {
     const version = await pywebview.api.get_version();
     document.getElementById('ver-badge').textContent = `v${version}`;
+    const loadingVer = document.getElementById('ver-badge-loading');
+    if (loadingVer) loadingVer.textContent = `v${version}`;
   } catch (e) {}
   try {
     const info = await pywebview.api.get_time_info();
