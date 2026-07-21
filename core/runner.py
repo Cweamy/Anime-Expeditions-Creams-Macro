@@ -240,15 +240,22 @@ SETTLE_DELAY = 0.6  # lets a panel-open animation (e.g. Settings) finish before 
 WARNING_WAIT_TIMEOUT = 10.0
 WARNING_POLL_INTERVAL = 1.0
 
-# Place Unit block execution: hover-search for a valid tile by its pixel
-# color (see _find_valid_place_spot), click once a valid one's found, then
-# verify. Replaced the old click-first-then-check-a-rejection-image-and-
-# nudge approach -- this way a click only ever fires once a genuinely
+# Place Unit block execution: search a small box for a valid tile by its
+# pixel color (see _find_valid_place_spot), click once a valid one's found,
+# then verify. Replaced the old click-first-then-check-a-rejection-image-
+# and-nudge approach -- this way a click only ever fires once a genuinely
 # valid tile is confirmed, instead of firing blind and finding out after.
 PLACE_VALID_PIXEL_TOLERANCE = 12  # each channel allowed to be this far under 0xff (white) -- antialiasing/compression can soften a genuinely-white tile just enough to miss an exact match
-PLACE_PIXEL_STEP = 2       # how many pixels the hover point moves per search step
-PLACE_PIXEL_MAX_RADIUS = 70  # how far the search is allowed to wander from the saved spot before giving up
-PLACE_PIXEL_SEARCH_SETTLE = 0.03  # brief settle after each hover move before sampling its pixel
+PLACE_SEARCH_BOX_SIZE = 38  # side length of the region captured/scanned around the saved spot (i.e. the saved spot +/-19px each way)
+PLACE_PIXEL_SEARCH_SETTLE = 0.03  # brief settle after each move before capturing
+# The placement-mode highlight overlay apparently needs to actually see the
+# cursor move/hover, not just land on a coordinate -- a single move then one
+# capture consistently found nothing even on spots that would have been
+# valid a moment later. Small back-and-forth nudges (real relative moves,
+# not a static cursor) keep prodding the game's own hover state along while
+# repeatedly rescanning, up to PLACE_SEARCH_WIGGLE_TIMEOUT.
+PLACE_SEARCH_WIGGLE_OFFSETS = [(2, 0), (-2, 0), (0, 2), (0, -2)]
+PLACE_SEARCH_WIGGLE_TIMEOUT = 2.5
 PLACE_HOTKEY_SETTLE = 0.35  # after pressing the hotkey, before the pixel search starts sampling -- the
 # placement-mode overlay (what actually turns a tile white/red) needs real time to render; sampling too
 # soon reads the tile's normal color instead and finds neither valid nor blocked
@@ -851,13 +858,22 @@ class MacroRunner:
                 continue
 
             play_mode = challenge.get("play_mode") or "solo"
-            ok = self._run_one_challenge_stage(hwnd, stop_event, slot, play_mode, challenge, coords, scroll_power,
-                                                 scroll_nudges, default_walk_paths, reward_region, stats_region,
-                                                 webhook)
+            result = self._run_one_challenge_stage(hwnd, stop_event, slot, play_mode, challenge, coords,
+                                                     scroll_power, scroll_nudges, default_walk_paths,
+                                                     reward_region, stats_region, webhook)
             if self._checkpoint(stop_event):
                 return
-            if ok:
+            if result == "win":
                 self._mark_challenge_stage_played(slot)
+            elif result == "loss":
+                # Only a WIN puts this slot on cooldown -- a loss still only
+                # gets the one attempt per window everyone else gets, not an
+                # extra free retry from being marked played when it wasn't
+                # actually cleared. The match already ran its normal Leave
+                # Stage + Return to Lobby (see _handle_match_result), so
+                # there's nothing left to recover from here.
+                self._log(f'[Macro] Challenge #{slot} was a loss -- not marking it played, '
+                           f'still available this window.')
             else:
                 self._log(f'[Macro] Challenge #{slot} didn\'t complete cleanly -- recovering to the lobby.')
                 # A quick, targeted Leave Stage + Return to Lobby is tried
@@ -882,14 +898,21 @@ class MacroRunner:
     def _run_one_challenge_stage(self, hwnd, stop_event: threading.Event, slot: str, play_mode: str,
                                    challenge: dict, coords: dict, scroll_power: int, scroll_nudges: int,
                                    default_walk_paths: dict, reward_region: dict, stats_region: dict,
-                                   webhook: dict) -> bool:
+                                   webhook: dict) -> str:
+        """Returns "win", "loss", or None -- None covers both a genuine
+        technical failure (never got into the stage, map never recognized,
+        etc.) AND the run being stopped mid-way, same as _play_one_match's
+        own result convention. Callers (_run_challenges) only put the slot
+        on cooldown for "win" -- a loss still only gets one shot per
+        window, same as everyone else's, not an extra free retry from
+        being falsely marked played."""
         self._log(f"[Macro] Challenge #{slot}: entering ({play_mode})...")
         self._set_status(current_task=f"Challenge #{slot}", map="-", action="Entering Challenge...",
                           mode="challenge", stage="-", difficulty="-", play_mode=play_mode, macro="-")
         if not self._enter_challenge_stage(hwnd, stop_event, slot, play_mode, coords, webhook):
-            return False
+            return None
         if self._checkpoint(stop_event):
-            return False
+            return None
 
         self._log(f"[Macro] Challenge #{slot}: identifying the map...")
         self._set_status(action="Identifying Challenge map...")
@@ -897,14 +920,14 @@ class MacroRunner:
         detected_map = None
         while time.time() < deadline:
             if self._checkpoint(stop_event):
-                return False
+                return None
             detected_map = self._detect_current_challenge_map(hwnd)
             if detected_map:
                 break
             time.sleep(MATCH_RESULT_POLL_INTERVAL)
         if not detected_map:
             self._log(f"[Macro] Challenge #{slot}: never recognized a map -- stopping.")
-            return False
+            return None
 
         macro_name = (challenge.get("maps", {}).get(detected_map) or {}).get("macro") or ""
         if macro_name:
@@ -929,7 +952,7 @@ class MacroRunner:
         result = self._play_one_match(hwnd, stop_event, task, default_walk_paths, first_repeat=True,
                                         webhook=webhook)
         if result is None:
-            return False
+            return None
         duration = self._format_duration(time.time() - battle_started)
 
         # Challenge always leaves + returns to lobby afterward (repeat=
@@ -938,8 +961,8 @@ class MacroRunner:
         # Challenge -> stage-slot navigation again, not a quick requeue.
         if not self._handle_match_result(hwnd, stop_event, task, result, duration, reward_region, stats_region,
                                            webhook, repeat=False):
-            return False
-        return not self._checkpoint(stop_event)
+            return None
+        return None if self._checkpoint(stop_event) else result
 
     def _enter_challenge_stage(self, hwnd, stop_event: threading.Event, slot: str, play_mode: str, coords: dict,
                                  webhook: dict) -> bool:
@@ -2585,6 +2608,27 @@ class MacroRunner:
             return
         prestart_blocks = blocks.get("prestart") if "prestart" in blocks else blocks.get("before")
         prestart_blocks = self._strip_auto_upgrade_for_expedition(prestart_blocks or [], task)
+
+        # Walk Path used to be saved as a separate top-level blocks["walk"]
+        # config instead of a real block in this list -- ui/app.js's own
+        # Creation UI migrates that into a real walk_path block the moment
+        # a template's opened there, but a template that's never been
+        # reopened+resaved since that change is still sitting on disk in
+        # the OLD shape, and this runner has no other path left that reads
+        # blocks["walk"] anymore (confirmed from a real report: Challenge's
+        # "Kings Tomb" template silently stopped walking Auto -- it had
+        # never been touched in Creation since the update). Migrated here
+        # too, the same way (a synthesized block at the very top, where it
+        # always effectively ran before), so a template someone never
+        # happens to open in the editor still walks correctly.
+        legacy_walk = blocks.get("walk")
+        if legacy_walk and not any(b.get("type") == "walk_path" for b in prestart_blocks):
+            prestart_blocks = [{
+                "type": "walk_path", "params": {}, "once": False,
+                "mode": "custom" if legacy_walk.get("mode") == "custom" else "auto",
+                "pathName": legacy_walk.get("pathName") or "",
+            }] + prestart_blocks
+
         if not prestart_blocks:
             self._log(f'[Macro] Template "{macro_name}" has no Pre Start blocks.')
             return
@@ -2622,7 +2666,8 @@ class MacroRunner:
                         next_block and next_block.get("type") == "place_unit"
                         and block.get("hotkey") and next_block.get("hotkey") == block.get("hotkey"))
                     self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name,
-                                                 self._last_unit_ordinal, next_is_same_unit=next_is_same_unit)
+                                                 self._last_unit_ordinal, next_is_same_unit=next_is_same_unit,
+                                                 verify=False)
                 elif btype == "setting_change":
                     self._run_setting_block(hwnd, stop_event, block, i)
                 elif btype == "auto_upgrade_unit":
@@ -2690,73 +2735,68 @@ class MacroRunner:
             self._keyboard.key_up(keys.VK_SHIFT)
             self._quick_place_shift_down = False
 
-    @staticmethod
-    def _place_pixel_search_offsets() -> list:
-        # Center first, then an expanding ring of PLACE_PIXEL_STEP-pixel
-        # offsets -- moving the hover point (not clicking) in small
-        # increments to find a valid tile is finer-grained and safer than
-        # the old click-first-and-see-what-happens nudge, which risked
-        # actually registering a click on a genuinely wrong tile.
-        offsets = [(0, 0)]
-        r = PLACE_PIXEL_STEP
-        while r <= PLACE_PIXEL_MAX_RADIUS:
-            offsets.extend([(r, 0), (-r, 0), (0, r), (0, -r), (r, r), (-r, r), (r, -r), (-r, -r)])
-            r += PLACE_PIXEL_STEP
-        return offsets
-
-    def _sample_screen_pixel(self, screen_x: int, screen_y: int) -> tuple:
-        """The exact single on-screen pixel at absolute screen coords, as
-        (r, g, b) -- used for a placement-validity check instead of
-        template matching (see _find_valid_place_spot). Reverted from an
-        averaged small-patch sample -- that made things worse in practice
-        (the valid-tile indicator is apparently thin/edge-shaped, not a
-        solid fill, so averaging a patch around it mostly captured
-        surrounding non-white background instead of the indicator itself).
-        A single pixel plus PLACE_VALID_PIXEL_TOLERANCE on the comparison
-        is what's actually in use."""
+    def _scan_place_search_box(self, left: int, top: int, orig_x: int, orig_y: int):
+        """One capture of the PLACE_SEARCH_BOX_SIZE x PLACE_SEARCH_BOX_SIZE
+        region centered on (orig_x, orig_y) -- window-client coords --
+        scanned in memory for a pixel at/near 0xffffff (white, within
+        PLACE_VALID_PIXEL_TOLERANCE per channel). Returns the (dx, dy)
+        offset of whichever valid pixel is CLOSEST to the center, or None
+        if nothing valid was found anywhere in the box."""
+        import numpy as np
         from core.ocr import capture_region
-        patch = capture_region(screen_x, screen_y, 1, 1)
-        b, g, r = patch[0, 0]
-        return int(r), int(g), int(b)
+        half = PLACE_SEARCH_BOX_SIZE // 2
+        patch = capture_region(left + orig_x - half, top + orig_y - half,
+                                 PLACE_SEARCH_BOX_SIZE, PLACE_SEARCH_BOX_SIZE)
+        b, g, r = patch[:, :, 0].astype(int), patch[:, :, 1].astype(int), patch[:, :, 2].astype(int)
+        floor = 255 - PLACE_VALID_PIXEL_TOLERANCE
+        valid_mask = (r >= floor) & (g >= floor) & (b >= floor)
+        ys, xs = np.where(valid_mask)
+        if len(xs) == 0:
+            return None
+        dists = (xs - half) ** 2 + (ys - half) ** 2
+        best = int(np.argmin(dists))
+        return int(xs[best]) - half, int(ys[best]) - half
 
     def _find_valid_place_spot(self, hwnd, stop_event: threading.Event, left: int, top: int,
                                  orig_x: int, orig_y: int, name: str):
-        """Hovers the mouse (no click) over (orig_x, orig_y) -- window-
-        client coords -- and samples the pixel under it: at/near 0xffffff
-        (white, within PLACE_VALID_PIXEL_TOLERANCE per channel) means this
-        tile is valid to place on; anything else (0xff262a is the specific
-        "blocked" indicator reported, but any other color is treated the
-        same way) means it isn't. If blocked, walks the hover point
-        PLACE_PIXEL_STEP pixels at a time in an expanding ring, covering the
-        same set of points around the original spot every time, but getting
-        there with a REAL RELATIVE move from wherever the cursor currently
-        is (updating based on the cursor, not re-teleporting from the fixed
-        origin every step) until a valid pixel is found or
-        PLACE_PIXEL_MAX_RADIUS is exhausted. Returns the (x, y) window-
-        client offset a valid pixel was found at, or None."""
-        offsets = self._place_pixel_search_offsets()
+        """Moves onto (orig_x, orig_y) -- window-client coords -- then
+        repeatedly wiggles the cursor a little and rescans a small box
+        around it (see _scan_place_search_box) until a valid tile turns up
+        or PLACE_SEARCH_WIGGLE_TIMEOUT runs out. The wiggling isn't
+        cosmetic -- reported (and confirmed from a real run) that a single
+        move-then-capture consistently found nothing even on spots that
+        WOULD have read as valid a moment later: the placement-mode
+        highlight overlay apparently needs to actually see the cursor
+        moving/hovering there before it renders at all, not just land on a
+        coordinate. Returns the (x, y) window-client offset it settled on,
+        or None if nothing valid ever showed up in time."""
         self._mouse.move_to(left + orig_x, top + orig_y)
         time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
-        prev_dx, prev_dy = 0, 0
-        for dx, dy in offsets:
+
+        deadline = time.time() + PLACE_SEARCH_WIGGLE_TIMEOUT
+        wiggle_idx = 0
+        while True:
             if self._checkpoint(stop_event):
                 return None
-            step_dx, step_dy = dx - prev_dx, dy - prev_dy
-            if (step_dx, step_dy) != (0, 0):
-                self._mouse.nudge(step_dx, step_dy)
-                time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
-            prev_dx, prev_dy = dx, dy
-            cx, cy = orig_x + dx, orig_y + dy
-            rgb = self._sample_screen_pixel(left + cx, top + cy)
-            if all(channel >= 255 - PLACE_VALID_PIXEL_TOLERANCE for channel in rgb):
+            found = self._scan_place_search_box(left, top, orig_x, orig_y)
+            if found is not None:
+                dx, dy = found
+                cx, cy = orig_x + dx, orig_y + dy
                 if (dx, dy) != (0, 0):
+                    self._mouse.move_to(left + cx, top + cy)
+                    time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
                     self._log(f'[Macro] Place Unit "{name}": aligned to a valid tile at offset ({dx}, {dy}).')
                 return cx, cy
-        return None
+            if time.time() >= deadline:
+                return None
+            wx, wy = PLACE_SEARCH_WIGGLE_OFFSETS[wiggle_idx % len(PLACE_SEARCH_WIGGLE_OFFSETS)]
+            self._mouse.nudge(wx, wy)
+            wiggle_idx += 1
+            time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
 
     def _run_place_unit_block(self, hwnd, stop_event: threading.Event, left: int, top: int, block: dict,
                                 index: int, macro_name: str, unit_ordinal: int = None,
-                                next_is_same_unit: bool = False) -> None:
+                                next_is_same_unit: bool = False, verify: bool = True) -> None:
         params = block.get("params") or {}
         name = params.get("name") or f"#{index}"
         hotkey = block.get("hotkey")
@@ -2785,6 +2825,15 @@ class MacroRunner:
         # already solid evidence the placement landed -- good enough for a
         # fast consecutive run, even without also re-confirming after.
         is_quick_place = self._quick_place_shift_down or next_is_same_unit
+        # verify=False for every Pre Start placement, not just quick-place
+        # chains (see _run_prestart_blocks/_run_battle_blocks_tick's own
+        # calls) -- the wait-for-unit_exist-then-maybe-double-click-to-
+        # recheck step only makes sense for a mid-battle reinforcement,
+        # where confirming it actually landed matters more than speed.
+        # Pre Start already trusts the pre-click pixel-white confirmation
+        # for quick-place; this extends that same trust to every other
+        # Pre Start placement too instead of just the chained ones.
+        skip_verify = is_quick_place or not verify
 
         if self._quick_place_shift_down:
             self._log(f'[Macro] Place Unit "{name}": quick-placing (Shift held, same unit as last).')
@@ -2824,8 +2873,8 @@ class MacroRunner:
             self._release_quick_place_shift()
             return
         if spot is None:
-            self._log(f'[Macro] Place Unit "{name}": no valid (white) tile found within '
-                       f'{PLACE_PIXEL_MAX_RADIUS}px of ({orig_x}, {orig_y}) -- giving up.')
+            self._log(f'[Macro] Place Unit "{name}": no valid (white) tile found in the '
+                       f'{PLACE_SEARCH_BOX_SIZE}x{PLACE_SEARCH_BOX_SIZE} box around ({orig_x}, {orig_y}) -- giving up.')
             if not next_is_same_unit:
                 self._release_quick_place_shift()
             return
@@ -2855,12 +2904,13 @@ class MacroRunner:
         if not next_is_same_unit:
             self._release_quick_place_shift()
 
-        if is_quick_place:
-            # No verify here -- see is_quick_place's own comment above.
+        if skip_verify:
+            # No verify here -- see skip_verify's own comment above.
             # Position is still recorded, just without waiting on
             # unit_exist first; the white-pixel hit before the click is
             # what's trusted instead.
-            self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) (quick-place).')
+            reason = 'quick-place' if is_quick_place else 'Pre Start'
+            self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) ({reason}).')
             if unit_ordinal is not None:
                 self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
             if (cur_x, cur_y) != (orig_x, orig_y):
