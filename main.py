@@ -1071,6 +1071,21 @@ class Api:
         ok = self.runner.debug_force_rejoin(hwnd, lambda: self.game_hwnd)
         return {"ok": ok}
 
+    def debug_test_macro_operation(self, mode: str, macro_name: str) -> dict:
+        # Settings > Debug > "Test Pre Start"/"Test Battle": runs a chosen
+        # Macro Operation's Pre Start or Battle blocks against Roblox as it
+        # is right now, no lobby/gamemode/map/stage/teleport setup needed
+        # first -- navigate to wherever the blocks should actually run
+        # (the unit-placement screen for Pre Start, an actual battle for
+        # Battle blocks) by hand, press this, watch it go. Runs as a real
+        # tracked run (self.runner.is_running() reports True the same as a
+        # normal Start), so the existing Stop/Pause buttons and F2/F5
+        # hotkeys work on it unchanged -- see MacroRunner.start_debug_test.
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+        return self.runner.start_debug_test(lambda: self.game_hwnd, mode, macro_name)
+
     def open_assets_folder(self) -> dict:
         # Settings > General > "Open Assets Folder" -- see core.vision's
         # override lookup (constants.ASSETS_OVERRIDE_DIR): a same-named PNG

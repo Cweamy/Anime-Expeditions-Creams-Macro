@@ -12,6 +12,23 @@ resolves fine, but a SPACE where the code has an underscore does not. Every
 file in this folder is lowercase snake_case with no spaces for exactly
 that reason -- keep any new one the same way.
 
+FOLDER LAYOUT
+-------------
+Every button that has more than one visual variant on file (nav_start_
+game.png/_2/_3/_4, expedition.png/_2, and so on -- the ones this catalog
+below describes as "tried in order"/"same idea as nav_start_game.png and
+friends") lives grouped together in its own subfolder named after the
+base button (Assets/ui/nav_start_game/nav_start_game.png, .../
+nav_start_game_2.png, ...) instead of all loose in one flat folder.
+Nothing in the code or in this catalog needs to know about that --
+core.vision.template_path still resolves a plain name like
+"nav_start_game_2" on its own, falling back to a shallow search of this
+folder's immediate subfolders if it's not directly here. Everything
+that's still just ONE image (no numbered variant) stays loose at the top
+level as before. Dropping a same-named override (see REPLACING AN IMAGE
+YOURSELF below) still works exactly the same regardless of which
+subfolder the bundled original lives in -- overrides always stay flat.
+
 REPLACING AN IMAGE YOURSELF
 ----------------------------
 If a button isn't being found/clicked reliably on your setup (a common

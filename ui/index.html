@@ -771,6 +771,41 @@
         </section>
       </div>
 
+      <!-- Runs a chosen Macro Operation's Pre Start or Battle blocks
+           against Roblox as it is right now -- no lobby/gamemode/map/
+           stage/teleport setup needed first, just navigate to wherever the
+           blocks should actually run by hand. Runs as a real tracked run
+           (same as pressing the Dashboard's own Start), so Stop/Pause and
+           F2/F5 work on it unchanged -- see MacroRunner.start_debug_test. -->
+      <div class="settings-category" data-cat="debug" style="margin-top: 20px;">
+        <section class="rp-panel">
+          <header class="rp-panel-head">
+            <span class="rp-head-tag" style="--rp-tag: var(--slate);">Capture</span>
+            <span class="rp-head-title">Macro Operation Test</span>
+            <span class="rp-head-rule"></span>
+          </header>
+
+          <div class="setting-row" style="padding: 14px;">
+            <div>
+              <div class="setting-label">Macro Operation</div>
+              <div class="setting-desc">Which saved template's Pre Start/Battle blocks to run.</div>
+            </div>
+            <select id="debug-macro-op-select" class="task-select" style="width: 220px; flex-shrink: 0;"></select>
+          </div>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Test Pre Start / Battle</div>
+              <div class="setting-desc">Runs once through Pre Start (place units, flip settings), or ticks Battle blocks continuously until you press Stop -- this counts as a real run, so F2/Stop and F5/Pause work on it.</div>
+            </div>
+            <div style="display: flex; gap: 8px; flex-shrink: 0;">
+              <button id="btn-debug-test-prestart" onclick="testMacroOperation(this, 'prestart')" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Test Pre Start</button>
+              <button id="btn-debug-test-battle" onclick="testMacroOperation(this, 'battle')" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Test Battle</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
       <!-- core.stage_select's map-name search: a debug capture of exactly the
            band it scans (so a reference crop in Assets/maps/ can be
            checked/tuned against it) plus the scroll-wheel strength it uses

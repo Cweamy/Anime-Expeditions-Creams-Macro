@@ -240,23 +240,21 @@ SETTLE_DELAY = 0.6  # lets a panel-open animation (e.g. Settings) finish before 
 WARNING_WAIT_TIMEOUT = 10.0
 WARNING_POLL_INTERVAL = 1.0
 
-# Place Unit block execution: click, check for a rejection message, nudge
-# and retry if blocked, then verify. cannot_place/max_placement_reached are
-# matched over gameplay art (see vision.find_bottommost_image's reasoning),
-# so their thresholds are set a bit stricter than the general default.
-PLACE_UNIT_CLICK_SETTLE = 0.25   # lets a rejection message actually render before checking for it
-PLACE_UNIT_RECHECK_SETTLE = 0.6  # longer settle for the same-spot recheck before actually nudging away
-PLACE_UNIT_MAX_NUDGES = 10
-# Small offsets tried in order when a spot is rejected -- a simple expanding
-# cross/diagonal pattern, not a specific direction, since "slightly move
-# until it works" doesn't imply which way is more likely to be clear.
-PLACE_UNIT_NUDGE_OFFSETS = [
-    (0, 0), (12, 0), (-12, 0), (0, 12), (0, -12),
-    (16, 16), (-16, 16), (16, -16), (-16, -16), (24, 0),
-]
+# Place Unit block execution: hover-search for a valid tile by its exact
+# pixel color (see _find_valid_place_spot), click once a valid one's found,
+# then verify. Replaced the old click-first-then-check-a-rejection-image-
+# and-nudge approach -- this way a click only ever fires once a genuinely
+# valid tile is confirmed, instead of firing blind and finding out after.
+PLACE_VALID_PIXEL_RGB = (0xFF, 0xFF, 0xFF)   # 0xffffff, exact match -- this tile is valid to place on
+PLACE_PIXEL_STEP = 2       # how many pixels the hover point moves per search step
+PLACE_PIXEL_MAX_RADIUS = 40  # how far the search is allowed to wander from the saved spot before giving up
+PLACE_PIXEL_SEARCH_SETTLE = 0.03  # brief settle after each hover move before sampling its pixel
+PLACE_HOTKEY_SETTLE = 0.35  # after pressing the hotkey, before the pixel search starts sampling -- the
+# placement-mode overlay (what actually turns a tile white/red) needs real time to render; sampling too
+# soon reads the tile's normal color instead and finds neither valid nor blocked
+PLACE_UNIT_CLICK_SETTLE = 0.25   # lets the placement actually register before the next check
 PLACE_UNIT_VERIFY_TIMEOUT = 2.0
 PLACE_UNIT_VERIFY_ATTEMPTS = 3  # search-then-click retried up to this many times before giving up on verifying
-CANNOT_PLACE_THRESHOLD = 0.85
 MAX_PLACEMENT_THRESHOLD = 0.85
 UNIT_INFO_RESET_CLICK = (3, 3)  # near-empty corner of the Roblox screen -- closes the unit info panel after verifying
 SCREEN_MIDDLE_CLICK = (576, 378)  # dead center of the 1152x756 game client area -- see FIXED_WIN_W/H in core.config
@@ -270,14 +268,20 @@ BATTLE_BLOCK_CLICK_SETTLE = 0.3
 # just not ready, so it keeps its remaining `times` budget and tries again
 # later rather than giving up or burning through a poll every second.
 UPGRADE_RETRY_WAIT = 5.0
+UPGRADE_PANEL_LOAD_TIMEOUT = 3.0  # how long to wait for the info panel to actually finish loading after clicking the unit
 
 # Auto Upgrade Unit's priority menu (see _run_auto_upgrade_unit_tick):
-# right-clicking a selected unit opens a fixed-position context menu with
-# Priority 1-6 stacked rows, then a Disable row one more row-height below
-# Priority 6.
-AUTO_UPGRADE_MENU_CLICK = (345, 453)  # right-click point that opens the menu
-AUTO_UPGRADE_PRIORITY_1 = (427, 487)  # Priority 1's row
-AUTO_UPGRADE_PRIORITY_ROW_HEIGHT = 34
+# right-clicking "priority_upgrade" (an icon/label found on the selected
+# unit's info panel) opens a context menu with Priority 1-6 stacked rows,
+# then a Disable row one more row-height below Priority 6. The row
+# positions are computed from priority_upgrade's OWN matched width/height
+# (self-scaling if the UI ever renders at a different size) instead of a
+# second set of fixed coordinates -- these multipliers are eyeballed
+# proportions, not measurements off a real capture, so they're the first
+# thing to adjust if the priority rows land off:
+AUTO_UPGRADE_PRIORITY_ROW_HEIGHT_MULT = 1.35  # one row's height, as a multiple of priority_upgrade's own height
+AUTO_UPGRADE_PRIORITY_FIRST_ROW_MULT = 1.8    # icon center down to Priority 1's row, same unit (its own height)
+AUTO_UPGRADE_PRIORITY_X_OFFSET_MULT = 2.4     # icon center right to a row's click point, in multiples of its width
 # Auto Upgrade Unit chains TWO nested UI transitions (select the unit ->
 # its info panel opens, right-click -> the priority menu opens on top of
 # that) before the priority-row click means anything -- BATTLE_BLOCK_CLICK_
@@ -365,6 +369,13 @@ class MacroRunner:
         # block skipped via "Once" on a repeat keeps whatever position its
         # first placement recorded rather than losing it.
         self._placed_unit_positions = {}
+        # Whether Left Shift is currently being held down for a "quick
+        # place" chain (see _run_place_unit_block) -- true from right
+        # before the FIRST of a run of consecutive same-unit Place Unit
+        # blocks is clicked, through the last one, then released. Reset
+        # False any time a run/test starts fresh so a leftover held key
+        # from an interrupted previous run can never bleed into a new one.
+        self._quick_place_shift_down = False
         # The running #ordinal counter place_unit blocks share -- Pre Start
         # blocks number first, Battle-phase place_unit blocks (see
         # _run_battle_blocks_tick) continue counting from wherever Pre
@@ -406,6 +417,88 @@ class MacroRunner:
             daemon=True)
         self._thread.start()
         return {"ok": True}
+
+    def start_debug_test(self, hwnd_getter, mode: str, macro_name: str, debug_screenshots: bool = False) -> dict:
+        """Settings > Debug > "Test Pre Start"/"Test Battle" -- runs a
+        chosen Macro Operation's Pre Start or Battle blocks against Roblox
+        as it is right now, WITHOUT going through the whole lobby/gamemode/
+        map/stage/teleport setup a real task needs first. Goes through the
+        exact same self._thread/self._stop_event start() itself uses (just
+        targeting _run_debug_test instead of _run) specifically so this
+        shows up as "running" the same way a real run does and F2/Stop
+        actually interrupts it, instead of being a one-shot blocking call
+        nothing can cancel (see debug_check_expedition_wave/
+        debug_force_rejoin, which are that simpler kind on purpose -- this
+        one's meant to run for a while, e.g. Battle blocks ticking
+        indefinitely, so it needs the real thing)."""
+        if self.is_running():
+            return {"ok": False, "reason": "already_running"}
+        if mode not in ("prestart", "battle"):
+            return {"ok": False, "reason": "bad_mode"}
+        if not macro_name:
+            return {"ok": False, "reason": "no_macro"}
+        self._stop_event = threading.Event()
+        self._pause_event.clear()
+        self._paused_logged = False
+        self._debug_screenshots = bool(debug_screenshots)
+        self._current_hwnd = None
+        self._left_stage_this_run = True  # nothing to Leave Stage from -- there's no real match here
+        self._thread = threading.Thread(
+            target=self._run_debug_test,
+            args=(hwnd_getter, mode, macro_name, self._stop_event),
+            daemon=True)
+        self._thread.start()
+        return {"ok": True}
+
+    def _run_debug_test(self, hwnd_getter, mode: str, macro_name: str, stop_event: threading.Event) -> None:
+        hwnd = hwnd_getter() if hwnd_getter else None
+        if not hwnd or not wm.is_window(hwnd):
+            self._log("[Debug] No Roblox window found -- can't test.")
+            self._set_status(action="Idle")
+            return
+        self._current_hwnd = hwnd
+        # A click/keypress has to actually reach the game, not whatever else
+        # happened to have focus (this is fired from a Settings button click,
+        # not guaranteed to be Roblox already) -- same focus-fix _run() does
+        # before a real Start.
+        wm.show_window(hwnd)
+        if not wm.activate_window(hwnd):
+            self._log("[Debug] Couldn't confirm Roblox actually took focus -- clicks may not register "
+                       "until it does. Continuing anyway.")
+        # Enough of a task shape for _run_prestart_blocks/_load_battle_blocks
+        # to work with -- both only ever read task["macro"] and (for
+        # _strip_auto_upgrade_for_expedition) task["mode"]/task["map"], not
+        # anything about a real match in progress.
+        task = {"macro": macro_name, "mode": "story", "map": "-", "difficulty": "-"}
+        try:
+            if mode == "prestart":
+                self._log(f'[Debug] Testing Pre Start blocks from "{macro_name}"...')
+                self._run_prestart_blocks(hwnd, stop_event, task, first_repeat=True)
+            else:
+                self._log(f'[Debug] Testing Battle blocks from "{macro_name}"...')
+                battle_blocks = self._load_battle_blocks(task)
+                if not battle_blocks:
+                    self._log(f'[Debug] Template "{macro_name}" has no Battle blocks.')
+                else:
+                    self._battle_block_index = 0
+                    self._battle_block_state = {}
+                    self._last_unit_ordinal = 0
+                    self._quick_place_shift_down = False
+                    # Ticks continuously (same as a real match's own poll
+                    # loop) instead of running through the block list once
+                    # and stopping -- Battle blocks are built to keep
+                    # running for the length of a match (Upgrade Unit
+                    # retrying over time, etc.), so this needs to keep
+                    # ticking until Stop is pressed to actually exercise
+                    # that, not just fire once.
+                    while not self._checkpoint(stop_event):
+                        self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat=True,
+                                                       macro_name=macro_name)
+                        time.sleep(MATCH_RESULT_POLL_INTERVAL)
+        finally:
+            if not (stop_event is not None and stop_event.is_set()):
+                self._log("[Debug] Test finished.")
+            self._set_status(action="Idle")
 
     def stop(self) -> dict:
         # Setting the event is enough on its own -- _checkpoint (called
@@ -680,13 +773,43 @@ class MacroRunner:
                 return
             loop_pass += 1
 
+    def _challenge_has_ready_stage(self) -> bool:
+        """Quick side-effect-free check for whether Challenge automation
+        has at least one enabled, not-yet-capped stage slot ready to run
+        right now -- used by _run_task's repeat loop to decide whether to
+        pause a task's repeats and go run Challenge before continuing
+        (see challenge_wants_in there), not just once at the very start of
+        a Start press. Same enabled/cap/ready checks _run_challenges itself
+        makes per slot, just without actually running anything."""
+        if self._get_challenge_settings is None:
+            return False
+        try:
+            challenge = self._get_challenge_settings()
+        except Exception:
+            return False
+        if not challenge.get("enabled"):
+            return False
+        cap = challenge.get("cap", 0)
+        for slot in CHALLENGE_STAGE_SLOTS:
+            info = challenge.get("stages", {}).get(slot) or {}
+            if not info.get("enabled"):
+                continue
+            if cap and info.get("count", 0) >= cap:
+                continue
+            if info.get("ready"):
+                return True
+        return False
+
     def _run_challenges(self, hwnd, stop_event: threading.Event, coords: dict, scroll_power: int,
                           scroll_nudges: int, default_walk_paths: dict, reward_region: dict, stats_region: dict,
                           webhook: dict) -> None:
         """Runs every ready (enabled, under today's cap, off its own
         cooldown) Regular Challenge stage slot once each, in #1/#2/#3
-        order, then returns -- called once per Start (see _run), before
-        the Task Queue ever starts. Challenge is Story's own flow with the
+        order, then returns -- called once before the Task Queue ever
+        starts (see _run), AND again between repeats of an in-progress
+        task whenever _challenge_has_ready_stage says a slot's ready (see
+        _run_task's repeat loop), not just that one time at the start
+        anymore. Challenge is Story's own flow with the
         game picking a random one of CHALLENGE_STORY_MAPS for you instead
         of you picking it, so the actual battle (Pre Start, Start Game,
         Victory/Defeat, reward reading) reuses _play_one_match/
@@ -954,14 +1077,47 @@ class MacroRunner:
                 duration = self._format_duration(time.time() - battle_started)
 
                 is_last_repeat = repeat_index == repeat_total
+                # Challenge used to only ever get checked once, right at the
+                # very start of a Start press, before the Task Queue even
+                # began -- a task with a huge repeat count (effectively
+                # "forever") meant Challenge's own cooldown resetting
+                # partway through a run was never revisited at all. Checked
+                # here too now, between every repeat: if a slot's ready,
+                # this repeat forces a real Leave Stage (same as the task's
+                # own last repeat would) instead of Repeat Stage, so the
+                # task cleanly steps out of its own stage before Challenge's
+                # navigation (which starts from the lobby) runs.
+                challenge_wants_in = (not is_last_repeat) and self._challenge_has_ready_stage()
                 if not self._handle_match_result(hwnd, stop_event, task, result, duration,
-                                                  reward_region, stats_region, webhook, repeat=not is_last_repeat):
+                                                  reward_region, stats_region, webhook,
+                                                  repeat=(not is_last_repeat) and not challenge_wants_in):
                     if stop_event.is_set():
                         return False
                     task_failed = True
                     break
                 if self._checkpoint(stop_event):
                     return False
+
+                if challenge_wants_in:
+                    self._log(f'[Macro] Challenge stage ready -- pausing "{map_name}" to run it '
+                               f'before continuing.')
+                    self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges,
+                                          default_walk_paths, reward_region, stats_region, webhook)
+                    if self._checkpoint(stop_event):
+                        return False
+                    self._log(f'[Macro] Challenge pass finished -- resuming "{map_name}".')
+                    # Left the stage entirely for Challenge (repeat=False
+                    # above already did Leave Stage + Return to Lobby), so
+                    # this repeat re-enters the task from scratch exactly
+                    # like the very first one did, not a quick Repeat Stage
+                    # requeue -- there's no stage left to requeue INTO.
+                    if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords,
+                                                  scroll_power, scroll_nudges, webhook):
+                        if stop_event.is_set():
+                            return False
+                        task_failed = True
+                        break
+                    continue
 
                 if not is_last_repeat:
                     if task.get("play_mode") == "matchmaking":
@@ -1186,6 +1342,7 @@ class MacroRunner:
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
         self._battle_block_state = {}
+        self._release_quick_place_shift()  # safety net -- never enter a match with Shift stuck down from before
         # exp_extract is a recurring checkpoint choice (Extract AND Continue
         # offered side by side), not a one-shot terminal event -- confirmed
         # from a real test run where extract_after=2 still extracted on the
@@ -1538,6 +1695,10 @@ class MacroRunner:
         as many times as needed. Uses a stop_event that's never set (there's
         no real run to interrupt), so a click's own wait-for-follow-up can
         still time out normally, it just can't be cancelled early."""
+        wm.show_window(hwnd)
+        if not wm.activate_window(hwnd):
+            self._log("[Debug] Couldn't confirm Roblox actually took focus -- clicks may not register "
+                       "until it does. Continuing anyway.")
         self._log("[Debug] Testing Expedition wave-result check (single tick)...")
         result = self._check_expedition_wave_result(hwnd, threading.Event())
         self._log(f"[Debug] Expedition wave-result check returned: {result!r}")
@@ -1618,7 +1779,7 @@ class MacroRunner:
                 self._battle_block_state = {}
             elif btype == "place_unit":
                 # Mid-battle placement (a reinforcement dropped in later,
-                # not a Pre Start starter) -- same click/verify/nudge-retry
+                # not a Pre Start starter) -- same pixel-search-place/verify
                 # logic Pre Start uses, one-shot like Sell Unit. Continues
                 # the SAME #ordinal count Pre Start's place_unit blocks left
                 # off at, matching ui/app.js's listPlacedUnits() (which
@@ -1627,8 +1788,14 @@ class MacroRunner:
                 # unit placed here by #index still resolve correctly.
                 self._last_unit_ordinal += 1
                 left, top, _, _ = wm.get_window_rect_screen(hwnd)
+                next_index = self._battle_block_index + 1
+                next_block = battle_blocks[next_index] if next_index < len(battle_blocks) else None
+                next_is_same_unit = bool(
+                    next_block and next_block.get("type") == "place_unit"
+                    and block.get("hotkey") and next_block.get("hotkey") == block.get("hotkey"))
                 self._run_place_unit_block(hwnd, stop_event, left, top, block, self._battle_block_index + 1,
-                                             macro_name, self._last_unit_ordinal)
+                                             macro_name, self._last_unit_ordinal,
+                                             next_is_same_unit=next_is_same_unit)
                 done = True
                 self._battle_block_state = {}
             elif btype == "wait_ms":
@@ -1706,14 +1873,27 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return True
 
+        # Waits for the info panel to actually finish loading instead of a
+        # single check right after BATTLE_BLOCK_CLICK_SETTLE (0.3s) -- that
+        # was reported as consistently too fast right after a unit was just
+        # placed (the panel can still be settling), landing on neither
+        # image and burning a full UPGRADE_RETRY_WAIT (5s) for nothing.
+        # Polling for EITHER one to show up (whichever the panel actually
+        # ends up in) is the real "wait until it's loaded" this needs,
+        # not just a longer fixed sleep.
         try:
-            upgrade_match = vision.find_image(hwnd, "upgradeable")
+            upgrade_match, found_name = vision.wait_for_image_any(
+                hwnd, ("upgradeable", "not_upgradeable"), timeout=UPGRADE_PANEL_LOAD_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound:
-            upgrade_match = None
+            upgrade_match, found_name = None, None
+        if found_name == "not_upgradeable":
+            not_upgrade_match, upgrade_match = upgrade_match, None
+        else:
+            not_upgrade_match = None
         if upgrade_match is not None:
-            self._log(f'{label}: found Upgradeable (score {upgrade_match["score"]:.2f}) -- clicking it '
+            self._log(f'{label}: found Upgradeable (score {upgrade_match["score"]:.2f}) -- pressing T '
                        f'({state["remaining"]} left after this).')
-            vision.click_match(self._mouse, hwnd, upgrade_match)
+            self._keyboard.tap(ord("T"))
             time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
             if self._checkpoint(stop_event):
                 return True
@@ -1727,10 +1907,6 @@ class MacroRunner:
             state["next_attempt"] = 0.0
             return state["remaining"] <= 0
 
-        try:
-            not_upgrade_match = vision.find_image(hwnd, "not_upgradeable")
-        except vision.TemplateNotFound:
-            not_upgrade_match = None
         if not_upgrade_match is not None:
             self._log(f'{label}: not upgradeable yet (score {not_upgrade_match["score"]:.2f}) -- '
                        f'waiting {UPGRADE_RETRY_WAIT:.0f}s and retrying.')
@@ -1852,10 +2028,11 @@ class MacroRunner:
         return False
 
     def _run_auto_upgrade_unit_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int) -> bool:
-        """One-shot: click the unit, right-click to open its priority menu,
-        click the configured priority row (or Disable for "None"), then a
-        reset click. Always "done" after one try -- setting a priority
-        isn't a repeated action the way Upgrade Unit's clicks are."""
+        """One-shot: click the unit, right-click "priority_upgrade" (found
+        on its info panel) to open its priority menu, click the configured
+        priority row (or Disable for "None"), then a reset click. Always
+        "done" after one try -- setting a priority isn't a repeated action
+        the way Upgrade Unit's clicks are."""
         label = f'Battle block #{block_num} (Auto Upgrade Unit)'
         pos = self._placed_unit_click_point(block, label)
         if pos is None:
@@ -1868,7 +2045,20 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return True
 
-        self._mouse.click(left + AUTO_UPGRADE_MENU_CLICK[0], top + AUTO_UPGRADE_MENU_CLICK[1], button="right")
+        try:
+            priority_match = vision.find_image(hwnd, "priority_upgrade")
+        except vision.TemplateNotFound as exc:
+            self._log(f'{label}: {exc}')
+            return True
+        if priority_match is None:
+            self._log(f'{label}: "priority_upgrade" not found on the info panel -- skipping.')
+            return True
+
+        debug_path = self._debug_save(hwnd, "priority_upgrade", priority_match)
+        suffix = f" Debug: {debug_path}" if debug_path else ""
+        self._log(f'{label}: found "priority_upgrade" (score {priority_match["score"]:.2f}) -- '
+                   f'right-clicking it.{suffix}')
+        vision.right_click_match(self._mouse, hwnd, priority_match)
         time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
         if self._checkpoint(stop_event):
             return True
@@ -1885,8 +2075,15 @@ class MacroRunner:
             except ValueError:
                 row_index = 0
             self._log(f'{label}: setting priority {priority}.')
-        row_y = AUTO_UPGRADE_PRIORITY_1[1] + row_index * AUTO_UPGRADE_PRIORITY_ROW_HEIGHT
-        self._mouse.click(left + AUTO_UPGRADE_PRIORITY_1[0], top + row_y)
+        # Row positions computed off priority_upgrade's OWN matched w/h
+        # (see the constants' own comment) instead of a second set of fixed
+        # coordinates -- self-scaling if the icon itself ever renders at a
+        # different size.
+        row_height = priority_match["h"] * AUTO_UPGRADE_PRIORITY_ROW_HEIGHT_MULT
+        row_x = priority_match["cx"] + priority_match["w"] * AUTO_UPGRADE_PRIORITY_X_OFFSET_MULT
+        first_row_y = priority_match["cy"] + priority_match["h"] * AUTO_UPGRADE_PRIORITY_FIRST_ROW_MULT
+        row_y = first_row_y + row_index * row_height
+        self._mouse.click(left + int(row_x), top + int(row_y))
         time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
         if self._checkpoint(stop_event):
             return True
@@ -1903,6 +2100,12 @@ class MacroRunner:
     def _handle_match_result(self, hwnd, stop_event: threading.Event, task: dict, result: str, duration: str,
                               reward_region: dict, stats_region: dict, webhook: dict, repeat: bool) -> bool:
         label = "Victory" if result == "win" else "Defeat"
+
+        # A Battle-phase quick-place chain (see _run_place_unit_block) could
+        # still be holding Shift down right up to the moment Victory/Defeat
+        # actually landed -- released here, before anything else, so it's
+        # never still held into the result screen and beyond.
+        self._release_quick_place_shift()
 
         # Only the CAPTURE (a couple of screenshots, maybe one scroll) has to
         # happen while the result screen is actually still up -- the OCR
@@ -2449,32 +2652,100 @@ class MacroRunner:
         # since Battle-phase place_unit blocks (see _run_battle_blocks_tick)
         # continue this same count after Pre Start's blocks are done.
         self._last_unit_ordinal = 0
-        for i, block in enumerate(prestart_blocks, start=1):
+        self._quick_place_shift_down = False
+        try:
+            for i, block in enumerate(prestart_blocks, start=1):
+                if self._checkpoint(stop_event):
+                    return
+                if block.get("type") == "place_unit":
+                    self._last_unit_ordinal += 1
+                if block.get("once") and not first_repeat:
+                    # "Once" (see the block's Once chip in Creation) means only
+                    # the task's FIRST entry into this stage runs it -- e.g. a
+                    # starter placement that shouldn't be re-placed (and would
+                    # just get rejected as a duplicate/waste a click) on every
+                    # repeat of the same stage.
+                    self._log(f'[Macro] Skipping block #{i} -- marked "Once" and this isn\'t the first repeat.')
+                    continue
+                btype = block.get("type")
+                if btype == "place_unit":
+                    next_block = prestart_blocks[i] if i < len(prestart_blocks) else None
+                    next_is_same_unit = bool(
+                        next_block and next_block.get("type") == "place_unit"
+                        and block.get("hotkey") and next_block.get("hotkey") == block.get("hotkey"))
+                    self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name,
+                                                 self._last_unit_ordinal, next_is_same_unit=next_is_same_unit)
+                elif btype == "setting_change":
+                    self._run_setting_block(hwnd, stop_event, block, i)
+                elif btype == "auto_upgrade_unit":
+                    self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, i)
+                else:
+                    self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
+                time.sleep(0.2)  # brief gap between blocks so the game UI can settle
+        finally:
+            # Safety net -- a "Once"-skipped block right after the last
+            # quick-place placement (or the list just ending mid-chain)
+            # would otherwise leave Shift stuck down for good, since
+            # next_is_same_unit's own block never actually runs to release
+            # it. Whatever else happens, Shift never leaves this function
+            # still held.
+            self._release_quick_place_shift()
+
+    def _release_quick_place_shift(self) -> None:
+        if self._quick_place_shift_down:
+            self._keyboard.key_up(keys.VK_SHIFT)
+            self._quick_place_shift_down = False
+
+    @staticmethod
+    def _place_pixel_search_offsets() -> list:
+        # Center first, then an expanding ring of PLACE_PIXEL_STEP-pixel
+        # offsets -- moving the hover point (not clicking) in small
+        # increments to find a valid tile is finer-grained and safer than
+        # the old click-first-and-see-what-happens nudge, which risked
+        # actually registering a click on a genuinely wrong tile.
+        offsets = [(0, 0)]
+        r = PLACE_PIXEL_STEP
+        while r <= PLACE_PIXEL_MAX_RADIUS:
+            offsets.extend([(r, 0), (-r, 0), (0, r), (0, -r), (r, r), (-r, r), (r, -r), (-r, -r)])
+            r += PLACE_PIXEL_STEP
+        return offsets
+
+    def _sample_screen_pixel(self, screen_x: int, screen_y: int) -> tuple:
+        """The exact single on-screen pixel at absolute screen coords, as
+        (r, g, b) -- used for a color-exact placement-validity check
+        instead of template matching (see _find_valid_place_spot)."""
+        from core.ocr import capture_region
+        patch = capture_region(screen_x, screen_y, 1, 1)
+        b, g, r = patch[0, 0]
+        return int(r), int(g), int(b)
+
+    def _find_valid_place_spot(self, hwnd, stop_event: threading.Event, left: int, top: int,
+                                 orig_x: int, orig_y: int, name: str):
+        """Hovers the mouse (no click) over (orig_x, orig_y) -- window-
+        client coords -- and samples the exact pixel under it: 0xffffff
+        (white, exact) means this tile is valid to place on; anything else
+        (0xff262a is the specific "blocked" indicator reported, but any
+        other color is treated the same way) means it isn't. If blocked,
+        nudges the hover point PLACE_PIXEL_STEP pixels at a time in an
+        expanding ring around the original spot until a valid pixel is
+        found or PLACE_PIXEL_MAX_RADIUS is exhausted. Returns the (x, y)
+        window-client offset a valid pixel was found at, or None."""
+        for dx, dy in self._place_pixel_search_offsets():
             if self._checkpoint(stop_event):
-                return
-            if block.get("type") == "place_unit":
-                self._last_unit_ordinal += 1
-            if block.get("once") and not first_repeat:
-                # "Once" (see the block's Once chip in Creation) means only
-                # the task's FIRST entry into this stage runs it -- e.g. a
-                # starter placement that shouldn't be re-placed (and would
-                # just get rejected as a duplicate/waste a click) on every
-                # repeat of the same stage.
-                self._log(f'[Macro] Skipping block #{i} -- marked "Once" and this isn\'t the first repeat.')
-                continue
-            btype = block.get("type")
-            if btype == "place_unit":
-                self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name, self._last_unit_ordinal)
-            elif btype == "setting_change":
-                self._run_setting_block(hwnd, stop_event, block, i)
-            elif btype == "auto_upgrade_unit":
-                self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, i)
-            else:
-                self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
-            time.sleep(0.2)  # brief gap between blocks so the game UI can settle
+                return None
+            cx, cy = orig_x + dx, orig_y + dy
+            self._mouse.move_to(left + cx, top + cy)
+            time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
+            rgb = self._sample_screen_pixel(left + cx, top + cy)
+            if rgb == PLACE_VALID_PIXEL_RGB:
+                if (dx, dy) != (0, 0):
+                    self._log(f'[Macro] Place Unit "{name}": aligned to a valid tile at offset ({dx}, {dy}).')
+                return cx, cy
+        return None
 
     def _run_place_unit_block(self, hwnd, stop_event: threading.Event, left: int, top: int, block: dict,
-                                index: int, macro_name: str, unit_ordinal: int = None) -> None:
+                                index: int, macro_name: str, unit_ordinal: int = None,
+                                next_is_same_unit: bool = False) -> None:
         params = block.get("params") or {}
         name = params.get("name") or f"#{index}"
         hotkey = block.get("hotkey")
@@ -2484,76 +2755,99 @@ class MacroRunner:
         if not (orig_x or orig_y):
             self._log(f'[Macro] Place Unit "{name}" has no position set -- skipping.')
             return
+        orig_x, orig_y = int(orig_x), int(orig_y)
 
-        # Z first, always -- clears whatever the cursor/UI was last doing so
-        # the hotkey press right after it reliably starts a fresh placement
-        # instead of potentially colliding with leftover state.
-        self._keyboard.tap(ord("Z"))
-        time.sleep(0.1)
+        # Quick place: a run of consecutive Place Unit blocks for the SAME
+        # unit (matched by hotkey) holds Left Shift down from right before
+        # the first one is clicked through the last one -- while it's held,
+        # the same unit stays selected, so every placement after the first
+        # skips Z/the hotkey press entirely and just places straight into
+        # the next spot. self._quick_place_shift_down being already True
+        # here means this call IS one of those continuations.
+        # Whether THIS placement is part of a quick-place run at all (either
+        # continuing one, or about to start one that continues after it) --
+        # used below to skip the unit_exist verify step, which otherwise
+        # breaks the whole point of quick-place: a click, then wait, then
+        # (if not immediately confirmed) ANOTHER click and up to
+        # PLACE_UNIT_VERIFY_TIMEOUT more seconds, before the next hover-and-
+        # click can even start. The pre-click pixel-white confirmation is
+        # already solid evidence the placement landed -- good enough for a
+        # fast consecutive run, even without also re-confirming after.
+        is_quick_place = self._quick_place_shift_down or next_is_same_unit
 
-        if hotkey:
-            vk = keys.key_name_to_vk(hotkey)
-            if vk is not None:
-                self._log(f'[Macro] Place Unit "{name}": pressing hotkey "{hotkey}".')
-                self._keyboard.tap(vk)
-                time.sleep(0.15)  # lets the placement cursor/ghost actually appear before the click
-            else:
-                self._log(f'[Macro] Place Unit "{name}": hotkey "{hotkey}" isn\'t recognized -- skipping key press.')
+        if self._quick_place_shift_down:
+            self._log(f'[Macro] Place Unit "{name}": quick-placing (Shift held, same unit as last).')
         else:
-            self._log(f'[Macro] Place Unit "{name}" has no hotkey set -- skipping key press.')
+            # Z first, always -- clears whatever the cursor/UI was last doing
+            # so the hotkey press right after it reliably starts a fresh
+            # placement instead of potentially colliding with leftover state.
+            self._keyboard.tap(ord("Z"))
+            time.sleep(0.1)
 
-        # Click, then check for a rejection message. cannot_place/
-        # max_placement_reached are optional templates (like nav_disband) --
-        # a missing image just means that check is silently skipped rather
-        # than failing the block, since not everyone will have added them.
-        cur_x, cur_y = int(orig_x), int(orig_y)
-        placed = False
-        for attempt in range(1, PLACE_UNIT_MAX_NUDGES + 1):
-            if self._checkpoint(stop_event):
-                return
-            self._mouse.click(left + cur_x, top + cur_y)
-            time.sleep(PLACE_UNIT_CLICK_SETTLE)
+            if hotkey:
+                vk = keys.key_name_to_vk(hotkey)
+                if vk is not None:
+                    self._log(f'[Macro] Place Unit "{name}": pressing hotkey "{hotkey}" -- entering placing mode.')
+                    self._keyboard.tap(vk)
+                    time.sleep(PLACE_HOTKEY_SETTLE)
+                else:
+                    self._log(f'[Macro] Place Unit "{name}": hotkey "{hotkey}" isn\'t recognized -- '
+                               f'skipping key press.')
+            else:
+                self._log(f'[Macro] Place Unit "{name}" has no hotkey set -- skipping key press.')
 
-            try:
-                limit_match = vision.find_image(hwnd, "max_placement_reached", threshold=MAX_PLACEMENT_THRESHOLD)
-            except vision.TemplateNotFound:
-                limit_match = None
-            if limit_match is not None:
-                self._log(f'[Macro] Place Unit "{name}": max placement limit reached -- skipping this block.')
-                return
+            if next_is_same_unit:
+                self._log(f'[Macro] Place Unit "{name}": next placement is the same unit -- '
+                           f'holding Shift for quick-place.')
+                self._keyboard.key_down(keys.VK_SHIFT)
+                self._quick_place_shift_down = True
 
-            try:
-                blocked_match = vision.find_bottommost_image(hwnd, "cannot_place", threshold=CANNOT_PLACE_THRESHOLD)
-            except vision.TemplateNotFound:
-                blocked_match = None
-            if blocked_match is None:
-                placed = True
-                break
+        spot = self._find_valid_place_spot(hwnd, stop_event, left, top, orig_x, orig_y, name)
+        if self._checkpoint(stop_event):
+            self._release_quick_place_shift()
+            return
+        if spot is None:
+            self._log(f'[Macro] Place Unit "{name}": no valid (white) tile found within '
+                       f'{PLACE_PIXEL_MAX_RADIUS}px of ({orig_x}, {orig_y}) -- giving up.')
+            if not next_is_same_unit:
+                self._release_quick_place_shift()
+            return
+        cur_x, cur_y = spot
 
-            # Recheck the SAME spot once more with a longer settle before
-            # actually nudging away -- PLACE_UNIT_CLICK_SETTLE (0.25s) can
-            # be too quick for a laggy game to have rendered the real
-            # placement state yet, so a spot that's actually fine can look
-            # rejected on the first check alone. Retrying in place is cheap
-            # next to burning a whole nudge attempt (and drifting further
-            # from the intended position) over a false rejection.
-            self._mouse.click(left + cur_x, top + cur_y)
-            time.sleep(PLACE_UNIT_RECHECK_SETTLE)
-            try:
-                blocked_match = vision.find_bottommost_image(hwnd, "cannot_place", threshold=CANNOT_PLACE_THRESHOLD)
-            except vision.TemplateNotFound:
-                blocked_match = None
-            if blocked_match is None:
-                placed = True
-                break
+        self._mouse.click(left + cur_x, top + cur_y)
+        time.sleep(PLACE_UNIT_CLICK_SETTLE)
+        if self._checkpoint(stop_event):
+            self._release_quick_place_shift()
+            return
 
-            dx, dy = PLACE_UNIT_NUDGE_OFFSETS[attempt % len(PLACE_UNIT_NUDGE_OFFSETS)]
-            cur_x, cur_y = int(orig_x) + dx, int(orig_y) + dy
-            self._log(f'[Macro] Place Unit "{name}": can\'t place there (attempt {attempt}/{PLACE_UNIT_MAX_NUDGES}, '
-                       f'score {blocked_match["score"]:.2f}) -- nudging to ({cur_x}, {cur_y}).')
+        # max_placement_reached is optional (like nav_disband) -- a missing
+        # image just means this check is silently skipped, not that the
+        # block fails, since not everyone will have added it.
+        try:
+            limit_match = vision.find_image(hwnd, "max_placement_reached", threshold=MAX_PLACEMENT_THRESHOLD)
+        except vision.TemplateNotFound:
+            limit_match = None
+        if limit_match is not None:
+            self._log(f'[Macro] Place Unit "{name}": max placement limit reached -- skipping this block.')
+            if not next_is_same_unit:
+                self._release_quick_place_shift()
+            return
 
-        if not placed:
-            self._log(f'[Macro] Place Unit "{name}": still blocked after {PLACE_UNIT_MAX_NUDGES} nudges -- giving up.')
+        # Last of this quick-place run (or not part of one at all) --
+        # release Shift now that the click that needed it is done.
+        if not next_is_same_unit:
+            self._release_quick_place_shift()
+
+        if is_quick_place:
+            # No verify here -- see is_quick_place's own comment above.
+            # Position is still recorded, just without waiting on
+            # unit_exist first; the white-pixel hit before the click is
+            # what's trusted instead.
+            self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) (quick-place).')
+            if unit_ordinal is not None:
+                self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+            if (cur_x, cur_y) != (orig_x, orig_y):
+                self._save_corrected_position(macro_name, index, cur_x, cur_y, name)
             return
 
         # Verify: look for unit_exist FIRST, before clicking anything -- it
@@ -2595,7 +2889,7 @@ class MacroRunner:
                    f'(score {exists_match["score"]:.2f}).')
         if unit_ordinal is not None:
             self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
-        if (cur_x, cur_y) != (int(orig_x), int(orig_y)):
+        if (cur_x, cur_y) != (orig_x, orig_y):
             self._save_corrected_position(macro_name, index, cur_x, cur_y, name)
 
     def _reset_unit_info_panel(self, hwnd) -> None:

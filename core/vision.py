@@ -88,13 +88,32 @@ def template_path(name: str, template_dir: str = UI_ASSETS_DIR) -> str:
     over the bundled reference image with the same name -- replacing a
     template that isn't matching well on someone's setup is just "drop a
     same-named .png in the Assets folder next to the exe", no
-    rebuild/reinstall needed."""
+    rebuild/reinstall needed.
+
+    Related variants of the same button (nav_start_game.png/_2/_3/_4, and
+    similar) live grouped together in their own subfolder of template_dir
+    (Assets/ui/nav_start_game/nav_start_game.png, .../nav_start_game_2.png,
+    ...) instead of all loose in one flat folder -- callers still just ask
+    for the plain name, so if it's not directly in template_dir this falls
+    back to a shallow search of template_dir's immediate subfolders before
+    giving up. Overrides stay flat (dropped straight in the override folder
+    regardless of which subfolder the bundled version lives in)."""
     override_dir = _override_dir(template_dir)
     if override_dir != template_dir:
         override_path = os.path.join(override_dir, f"{name}.png")
         if os.path.isfile(override_path):
             return override_path
-    return os.path.join(template_dir, f"{name}.png")
+    direct_path = os.path.join(template_dir, f"{name}.png")
+    if os.path.isfile(direct_path):
+        return direct_path
+    if os.path.isdir(template_dir):
+        for entry in os.listdir(template_dir):
+            sub = os.path.join(template_dir, entry)
+            if os.path.isdir(sub):
+                candidate = os.path.join(sub, f"{name}.png")
+                if os.path.isfile(candidate):
+                    return candidate
+    return direct_path
 
 
 def clear_template_cache() -> None:
@@ -437,6 +456,13 @@ def double_click_match(mouse, hwnd: int, match: dict) -> None:
     caller)."""
     left, top, _, _ = wm.get_window_rect_screen(hwnd)
     mouse.double_click(left + match["cx"], top + match["cy"])
+
+
+def right_click_match(mouse, hwnd: int, match: dict) -> None:
+    """Same as click_match, but right-clicks -- for a match that's itself
+    what opens a context menu (see Auto Upgrade Unit's own caller)."""
+    left, top, _, _ = wm.get_window_rect_screen(hwnd)
+    mouse.click(left + match["cx"], top + match["cy"], button="right")
 
 
 def shuffle_click_match(mouse, hwnd: int, match: dict) -> None:

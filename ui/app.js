@@ -748,6 +748,21 @@ async function loadSettingsUI() {
   } catch (e) {}
   loadWebhookUI();
   refreshRobloxWindowList();
+  refreshDebugMacroOpSelect();
+}
+
+// Settings > Debug > "Test Pre Start"/"Test Battle" -- same list_templates()
+// every Macro Operation dropdown elsewhere already pulls from.
+async function refreshDebugMacroOpSelect() {
+  const sel = document.getElementById('debug-macro-op-select');
+  if (!sel) return;
+  let names = [];
+  try { names = await pywebview.api.list_templates(); } catch (e) { names = []; }
+  const prev = sel.value;
+  sel.innerHTML = names.length
+    ? names.map(n => `<option value="${n}">${n}</option>`).join('')
+    : '<option value="">No Macro Operations saved yet</option>';
+  if (names.includes(prev)) sel.value = prev;
 }
 
 // Settings > Debug > "Select Roblox Window": lists every standalone Roblox
@@ -1013,6 +1028,39 @@ async function forceRejoin(btn) {
     btn.textContent = 'Failed';
   }
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1600);
+}
+
+// Settings > Debug > "Test Pre Start"/"Test Battle" -- starts a chosen
+// Macro Operation's blocks running against Roblox as it is right now, as a
+// REAL tracked run (not a quick one-shot like testExpeditionWave/
+// forceRejoin above) -- Battle mode in particular ticks indefinitely until
+// Stop is pressed, so this only starts it and gets out of the way; the
+// existing refreshStatus() poll (every 1.5s) is what keeps the Dashboard's
+// own Start/Stop/Pause buttons in sync with it from here on, exactly like
+// a normal Start does.
+async function testMacroOperation(btn, mode) {
+  const sel = document.getElementById('debug-macro-op-select');
+  const macroName = sel ? sel.value : '';
+  if (!macroName) {
+    addLog('[Debug] No Macro Operation selected to test.');
+    return;
+  }
+  switchScreen('dashboard');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+  try {
+    const result = await pywebview.api.debug_test_macro_operation(mode, macroName);
+    if (!result.ok) {
+      const reasons = { no_roblox: 'Roblox not found.', already_running: 'already running.',
+                         bad_mode: 'bad mode.', no_macro: 'no Macro Operation selected.' };
+      addLog(`[Debug] Couldn't start test: ${reasons[result.reason] || result.reason || 'error'}`);
+    }
+    setMacroButtons(!!result.ok, false);
+  } catch (e) {
+    addLog("[Debug] Couldn't start test.");
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1200);
 }
 
 // Settings > Debug > "Story Map Region" -- same dance as saveDebugScreenshot:
@@ -2862,8 +2910,43 @@ function getBlockDropPlaceholder() {
   if (!blockDropPlaceholder) {
     blockDropPlaceholder = document.createElement('div');
     blockDropPlaceholder.className = 'block-drop-placeholder';
+    // The placeholder itself has no drop handling of its own by default --
+    // dropping directly ON it (exactly what its own "here's the gap" visual
+    // invites) had nowhere to go but bubble straight past the row it's
+    // sitting next to, up to the canvas-level ondrop, which just appends to
+    // the end (toIdx: null) instead of landing where the placeholder was
+    // actually showing. ondragover needs its own preventDefault too --
+    // without it the browser refuses the drop outright the moment the
+    // cursor is over the placeholder rather than a row.
+    blockDropPlaceholder.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); };
+    blockDropPlaceholder.ondrop = onPlaceholderDrop;
   }
   return blockDropPlaceholder;
+}
+
+// Resolves a drop landing on the placeholder div itself into the same
+// index math onBlockDrop uses for a row -- toIdx is just "how many
+// .block-row elements sit before the placeholder right now", since
+// onBlockRowDragOver already positioned it exactly where the block should
+// land as the drag moved across rows.
+function onPlaceholderDrop(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const placeholder = blockDropPlaceholder;
+  const zone = placeholder && placeholder.parentElement;
+  if (!zone) { removeBlockDropPlaceholder(); return; }
+  const phase = zone.id === 'creation-canvas-prestart' ? 'prestart' : 'battle';
+  let toIdx = 0;
+  for (const child of zone.children) {
+    if (child === placeholder) break;
+    if (child.classList && child.classList.contains('block-row')) toIdx++;
+  }
+  removeBlockDropPlaceholder();
+
+  const newType = e.dataTransfer.getData('block-type');
+  if (newType) { addBlock(newType, phase, toIdx); return; }
+  const draggedId = e.dataTransfer.getData('block-reorder');
+  if (draggedId) moveBlockToPhase(draggedId, phase, toIdx);
 }
 
 function openBlockDropPlaceholder() {
@@ -2944,6 +3027,17 @@ function moveBlockToPhase(id, phase, toIdx) {
   if (loc.phase !== phase && !PHASE_ALLOWED[phase].includes(b.type)) {
     addLog(`[Creation] "${BLOCK_TYPES[b.type].label}" can't go in ${PHASE_LABELS[phase]}.`);
     return;
+  }
+  // Same-list reorder where the drop target sits AT OR AFTER the dragged
+  // block's own current spot: toIdx was computed against the list as it
+  // looked before the splice below removes the source, so once that
+  // removal shifts everything after it back by one, toIdx has to shift
+  // down by one too or the insert lands one slot too early -- in the
+  // worst case (dropping just below where the block already was) that
+  // puts it right back where it started, looking like the drop did
+  // nothing at all despite the placeholder showing it landing correctly.
+  if (loc.phase === phase && toIdx != null && toIdx > loc.idx) {
+    toIdx -= 1;
   }
   creationPhases[loc.phase].splice(loc.idx, 1);
   const list = creationPhases[phase];
