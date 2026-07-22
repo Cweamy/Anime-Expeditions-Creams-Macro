@@ -276,6 +276,40 @@ def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
     return load_template_grays(name, template_dir)[0]
 
 
+# Sticky switch for the BitBlt-dead-capture fallback below: some NVIDIA
+# setups (hardware-accelerated GPU scheduling / fullscreen-optimized DX
+# flip-model presentation, per real reports of "every image search fails
+# but the game is clearly on screen") return all-black frames from
+# BitBlt-style SCREEN grabs (what mss does) while the WINDOW-content
+# capture path (PrintWindow with PW_RENDERFULLCONTENT on Windows --
+# already this codebase's proven answer to DX-composited windows, see
+# window_win.capture_window_rgb -- or CGWindowListCreateImage on mac)
+# renders the same window fine. Once one dead screen-grab is confirmed
+# genuinely dead (the window capture of the same moment had real pixels),
+# every later capture goes straight to the window path instead of paying
+# for both on every poll.
+_use_window_capture = False
+
+
+def _capture_window_gray(hwnd: int, region: tuple = None):
+    """The window-content capture path (PrintWindow / CGWindowListCreateImage
+    -- see wm.capture_window_rgb), normalized to reference space and
+    cropped to `region` exactly like the primary path. Returns None if the
+    window couldn't be rendered."""
+    result = wm.capture_window_rgb(hwnd)
+    if not result:
+        return None
+    rgb, w, h = result
+    img = np.frombuffer(rgb, np.uint8).reshape(h, w, 3)
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    if gray.shape[:2] != (config.FIXED_WIN_H, config.FIXED_WIN_W):
+        gray = cv2.resize(gray, (config.FIXED_WIN_W, config.FIXED_WIN_H), interpolation=cv2.INTER_AREA)
+    if region is not None:
+        rx, ry, rw, rh = (int(v) for v in region)
+        gray = gray[max(0, ry):ry + rh, max(0, rx):rx + rw]
+    return gray
+
+
 def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
     """Grayscale screenshot of the game window, or a sub-rect of it in
     REFERENCE-space coordinates (x, y, w, h) -- e.g. the Nav's Play button
@@ -293,10 +327,24 @@ def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
     and skipped.
 
     A plain screen-region grab (not the PrintWindow trick get_roblox_snapshot
-    uses) is fine here: the runner only ever calls this while Roblox is the
-    actually-visible, docked/arranged, foreground game (never from a screen
-    that hides it), so there's nothing else that could be captured instead.
+    uses) is the DEFAULT here: the runner only ever calls this while Roblox
+    is the actually-visible, docked/arranged, foreground game (never from a
+    screen that hides it), so there's normally nothing else that could be
+    captured instead. The exception is setups where BitBlt screen grabs
+    come back black entirely (see _use_window_capture above -- reported on
+    NVIDIA GPU-scheduling/fullscreen-optimization setups): a dead frame
+    triggers a one-time check against the window-content capture path, and
+    if THAT has real pixels for the same moment, all future captures
+    switch to it for the rest of the session.
     """
+    global _use_window_capture
+    if _use_window_capture:
+        gray = _capture_window_gray(hwnd, region)
+        if gray is not None:
+            return gray
+        # window path failed this tick -- fall through to the screen grab
+        # rather than returning nothing at all.
+
     import mss
     left, top, sx, sy = _window_geometry(hwnd)
     if region is not None:
@@ -320,6 +368,21 @@ def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
         # INTER_AREA: this is almost always a shrink, where it's the
         # recommended anti-aliasing choice (see _scaled_templates).
         gray = cv2.resize(gray, (out_w, out_h), interpolation=cv2.INTER_AREA)
+
+    if not gray.any():
+        # Every pixel zero -- either a genuinely black moment (loading
+        # screens do that, harmless to double-check) or the dead-BitBlt
+        # NVIDIA case (see _use_window_capture). The tiebreaker is whether
+        # the window-content capture of this same moment has real pixels:
+        # if yes, the screen-grab path is dead on this setup -- adopt the
+        # window path for the rest of the session.
+        window_gray = _capture_window_gray(hwnd, region)
+        if window_gray is not None and window_gray.any():
+            _use_window_capture = True
+            print("[vision] Screen captures are coming back black but the window itself renders "
+                  "(BitBlt-dead setup, common with NVIDIA GPU scheduling/fullscreen optimizations) -- "
+                  "switching to window-content capture for this session.")
+            return window_gray
     return gray
 
 
