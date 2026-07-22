@@ -999,7 +999,8 @@ class MacroRunner:
             return False
         if loaded_match is None:
             if not stop_event.is_set():
-                self._log("[Macro] Challenge screen never loaded -- stopping.")
+                self._log(f'[Macro] "challenge_loaded" not found within {CHALLENGE_SCREEN_TIMEOUT:.0f}s -- '
+                           f"can't confirm the Challenge screen opened, stopping.")
             return False
 
         if slot not in CHALLENGE_STAGE_CLICK:
@@ -1508,7 +1509,9 @@ class MacroRunner:
                 self._log(f"[Macro] Defeat. (score {defeat_match['score']:.2f})")
                 return "loss"
             time.sleep(MATCH_RESULT_POLL_INTERVAL)
-        self._log(f"[Macro] Timed out after {MATCH_RESULT_TIMEOUT / 60:.0f} min waiting for Victory/Defeat.")
+        self._log(f'[Macro] Neither "victory" nor "defeat" matched within {MATCH_RESULT_TIMEOUT / 60:.0f} min. '
+                   f'If the result screen was actually showing, its reference image isn\'t matching your '
+                   f'setup -- add your own crop via Settings > General > Image Manager.')
         self._save_debug_screenshot_unconditional(hwnd, "match_result_timeout")
         return None
 
@@ -2026,8 +2029,9 @@ class MacroRunner:
             self._log(f'{label}: not upgradeable yet (score {not_upgrade_match["score"]:.2f}) -- '
                        f'waiting {UPGRADE_RETRY_WAIT:.0f}s and retrying.')
         else:
-            self._log(f'{label}: neither Upgradeable nor Not Upgradeable found -- '
-                       f'waiting {UPGRADE_RETRY_WAIT:.0f}s and retrying.')
+            self._log(f'{label}: neither "upgradeable" nor "not_upgradeable" found on the info panel '
+                       f'(within {UPGRADE_PANEL_LOAD_TIMEOUT:.0f}s) -- waiting {UPGRADE_RETRY_WAIT:.0f}s '
+                       f'and retrying.')
         state["next_attempt"] = time.time() + UPGRADE_RETRY_WAIT
         return False
 
@@ -2608,7 +2612,8 @@ class MacroRunner:
             return
         if team_match is None:
             if not stop_event.is_set():
-                self._log('[Macro] Team panel never opened (no "team" match) -- skipping.')
+                self._log(f'[Macro] "team" not found within {TEAM_PANEL_TIMEOUT:.0f}s after pressing H -- '
+                           f'the team panel never opened, skipping Team Loadout.')
             return
         try:
             self._apply_team_loadout_panel(hwnd, stop_event, team_match, team_num, equipment)
@@ -2683,7 +2688,8 @@ class MacroRunner:
             return
         if confirm_match is None:
             if not stop_event.is_set():
-                self._log('[Macro] Confirm button never showed up -- stopping Team Loadout here.')
+                self._log(f'[Macro] "confirm" not found within {TEAM_PANEL_TIMEOUT:.0f}s after picking the '
+                           f'loadout row -- stopping Team Loadout here.')
             return
         vision.click_match(self._mouse, hwnd, confirm_match)
         self._log("[Macro] Clicked Confirm.")
@@ -3193,7 +3199,10 @@ class MacroRunner:
             self._handle_disconnect(hwnd, stop_event, webhook, task, result)
             return False
         if result == "timeout" and not stop_event.is_set():
-            self._log("[Macro] Never teleported in-game (Unit Manager not found) -- stopping.")
+            self._log(f'[Macro] "nav_unitmanager" not found within {timeout:.0f}s -- never teleported '
+                       f'in-game (or the Unit Manager button isn\'t matching your setup -- if you\'re '
+                       f'visibly in the match, add your own crop of it via Settings > General > '
+                       f'Image Manager). Stopping.')
         return False
 
     def _wait_for_teleport_or_stuck(self, hwnd, stop_event: threading.Event, timeout: float) -> str:
@@ -3408,7 +3417,9 @@ class MacroRunner:
                 # Never managed to click it even once, and it's already
                 # gone -- this is the wrong screen entirely, not a slow
                 # teleport, so there's nothing to keep waiting on.
-                self._log('[Macro] Couldn\'t find "nav_start" -- stopping.')
+                self._log(f'[Macro] "nav_start" not found within {SOLO_START_TIMEOUT:.0f}s -- the Start '
+                           f'button never showed up (if it\'s visibly on screen, add your own crop of it '
+                           f'via Settings > General > Image Manager). Stopping.')
                 return False
             else:
                 self._log("[Macro] Start already clicked -- still teleporting, waiting longer.")
@@ -3432,7 +3443,8 @@ class MacroRunner:
                 return False
             self._log("[Macro] Didn't teleport yet -- checking again.")
 
-        self._log(f"[Macro] Never teleported in-game after {SOLO_START_RETRY_ATTEMPTS} tries -- stopping.")
+        self._log(f'[Macro] "nav_unitmanager" never matched across {SOLO_START_RETRY_ATTEMPTS} Start '
+                   f'attempts -- never teleported in-game, stopping.')
         return False
 
     def _click_found_image(self, hwnd, name: str, timeout: float, stop_event: threading.Event = None) -> dict:
@@ -3454,7 +3466,7 @@ class MacroRunner:
             return None
         if match is None:
             if stop_event is None or not stop_event.is_set():
-                self._log(f'[Macro] Couldn\'t find "{name}" -- stopping.')
+                self._log(f'[Macro] "{name}" not found within {timeout:.0f}s -- stopping.')
             return None
         debug_path = self._debug_save(hwnd, name, match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -3484,7 +3496,7 @@ class MacroRunner:
                 return False
             if match is None:
                 if stop_event is None or not stop_event.is_set():
-                    self._log(f'[Macro] Couldn\'t find "{name}" -- stopping.')
+                    self._log(f'[Macro] "{name}" not found within {timeout:.0f}s -- stopping.')
                 return False
 
             debug_path = self._debug_save(hwnd, name, match)
@@ -3629,7 +3641,8 @@ class MacroRunner:
                 self._log("[Macro] Warning cleared -- Start Game is up.")
                 return
             time.sleep(WARNING_POLL_INTERVAL)
-        self._log("[Macro] Warning didn't clear (or Start Game didn't show up) in time -- continuing anyway.")
+        self._log(f'[Macro] "warning" still showing (or "nav_start_game" still not found) after '
+                   f'{WARNING_WAIT_TIMEOUT:.0f}s -- continuing anyway.')
 
     def _open_settings_search(self, hwnd, stop_event: threading.Event):
         """Opens Settings and clicks its search box. Returns the search
@@ -3826,7 +3839,9 @@ class MacroRunner:
             return False
         if match is None:
             if not stop_event.is_set():
-                self._log("[Macro] Enter Matchmaking never showed up -- stopping.")
+                self._log(f'[Macro] "{image_name}" not found within {MATCHMAKING_WAIT_TIMEOUT:.0f}s -- the '
+                           f'Enter Matchmaking button never showed up (if it\'s visibly on screen, add your '
+                           f'own crop of it via Settings > General > Image Manager). Stopping.')
             return False
         debug_path = self._debug_save(hwnd, image_name, match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -3855,7 +3870,9 @@ class MacroRunner:
             return False
         if match is None:
             if not stop_event.is_set():
-                self._log("[Macro] Stage select screen never opened -- stopping.")
+                self._log(f'[Macro] "nav_select_stage" not found within {STAGE_SCREEN_TIMEOUT:.0f}s -- the '
+                           f'stage select screen never opened (if it\'s visibly open, add your own crop of '
+                           f'the Select Stage button via Settings > General > Image Manager). Stopping.')
             return False
 
         # nav_select_stage confirms the CONFIRM BUTTON is on screen, not
@@ -3901,7 +3918,8 @@ class MacroRunner:
         # disconnect already uses instead of stopping the whole run over it.
         # (_attempt_rejoin itself skips this on a multi-instance setup --
         # see its own comment.)
-        self._log("[Macro] Play button never showed up -- attempting a rejoin via deep link.")
+        self._log(f'[Macro] "nav_play" not found within {LOBBY_CHECK_TIMEOUT:.0f}s -- not on the lobby '
+                   f'(likely a silent disconnect), attempting a rejoin via deep link.')
         return self._attempt_rejoin(hwnd, stop_event)
 
     def _click_play(self, hwnd, stop_event: threading.Event) -> bool:
@@ -3912,7 +3930,7 @@ class MacroRunner:
             self._log(f"[Macro] {exc}")
             return False
         if match is None:
-            self._log("[Macro] Play button vanished before it could be clicked -- stopping.")
+            self._log('[Macro] "nav_play" vanished before it could be clicked -- stopping.')
             return False
         debug_path = self._debug_save(hwnd, name, match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -4004,7 +4022,8 @@ class MacroRunner:
             return False
         if match is None:
             if not stop_event.is_set():
-                self._log(f'[Macro] "{map_name}" never showed up -- stopping.')
+                self._log(f'[Macro] "{image_name}" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- '
+                           f'couldn\'t find the "{map_name}" card, stopping.')
             return False
         debug_path = self._debug_save(hwnd, image_name, match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -4078,8 +4097,10 @@ class MacroRunner:
                         return False
             if match is None:
                 if not stop_event.is_set():
-                    self._log(f"[Macro] Gamemode menu never opened after {PLAY_CLICK_RETRY_ATTEMPTS} attempt(s) "
-                               f"(no Back button found) -- stopping.")
+                    self._log(f'[Macro] "nav_back" not found within {STORY_SCREEN_TIMEOUT:.0f}s x '
+                               f'{PLAY_CLICK_RETRY_ATTEMPTS} attempt(s) -- the gamemode menu never opened '
+                               f'(if it\'s visibly open, add your own crop of its Back button via '
+                               f'Settings > General > Image Manager). Stopping.')
                     self._save_debug_screenshot_unconditional(hwnd, "gamemode_menu_timeout")
                 return False
 
@@ -4114,7 +4135,8 @@ class MacroRunner:
                 return False
             if match is None:
                 if not stop_event.is_set():
-                    self._log("[Macro] Expedition card never showed up -- stopping.")
+                    self._log(f'[Macro] "expedition" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
+                               f'Expedition card never showed up, stopping.')
                 return False
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -4133,7 +4155,8 @@ class MacroRunner:
                 return False
             if match is None:
                 if not stop_event.is_set():
-                    self._log("[Macro] Challenge card never showed up -- stopping.")
+                    self._log(f'[Macro] "challenge" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
+                               f'Challenge card never showed up, stopping.')
                 return False
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -4152,7 +4175,8 @@ class MacroRunner:
                 return False
             if match is None:
                 if not stop_event.is_set():
-                    self._log("[Macro] Raid card never showed up -- stopping.")
+                    self._log(f'[Macro] "raid" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
+                               f'Raid card never showed up, stopping.')
                 return False
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""

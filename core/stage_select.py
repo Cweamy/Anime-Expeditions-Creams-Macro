@@ -99,5 +99,7 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
             mouse.scroll(-scroll_step)
         time.sleep(SETTLE_DELAY)
 
-    log(f'[Macro] Couldn\'t find map "{map_name}" after {MAX_PASSES} passes -- stopping.')
+    log(f'[Macro] Map name "{map_name}" never matched in the carousel after {MAX_PASSES} full passes -- '
+        f'stopping. If its card was visibly scrolling by, the name-label crop isn\'t matching your setup '
+        f'-- add your own via Settings > General > Image Manager (Map Names tab).')
     return False
