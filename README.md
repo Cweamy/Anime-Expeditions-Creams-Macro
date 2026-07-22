@@ -84,7 +84,7 @@ No `git clone`, no Python needed.
 
 The `Assets/` folder is every image the macro searches for on screen, kept **outside** the exe on purpose: one folder per button/text, and you can open, replace, or add extra crops freely (Settings > Debug > **Image Manager** captures and crops them for you, straight from your Roblox screen). Updates never overwrite images you've changed or added.
 
-Prefer a single tiny file to share around? **`Creams Macro - Anime Expeditions Bootstrapper.exe`** (also under Assets) downloads and extracts that same zip for you on first run, then keeps the app up to date on every launch.
+(The old bootstrapper exe is no longer uploaded to releases — the zip is the one download. If you already have a bootstrapper from before, it keeps working: it fetches this same zip. Need a fresh one to share around? Build it locally with `build_bootstrap.py`.)
 
 > Windows SmartScreen may warn about an unrecognized app the first time (normal for small open-source tools) — click **More info → Run anyway**, or build it yourself from source below.
 
@@ -144,7 +144,8 @@ Assets/map/      # full map images for the Set Position picker
 Assets/maps/     # map name-label crops for map-select image search (same
                  # folder-per-name layout as Assets/ui)
 Paths/defaults/  # known-good default walk paths, shipped with the repo
-bootstrap.py     # tiny downloader exe -- what most users actually run (see Installation)
+bootstrap.py     # tiny installer exe -- downloads/extracts the release zip and launches
+                 # the app; built locally via build_bootstrap.py, not uploaded to releases
 build_pyinstaller.py # builds the real app exe
 build_bootstrap.py # builds bootstrap.py into its own small exe
 ```
@@ -153,7 +154,7 @@ build_bootstrap.py # builds bootstrap.py into its own small exe
 
 Issues and PRs are welcome. Every push/PR runs a CI sanity check (Python + JS syntax); there's no automated test suite yet, so please describe how you tested a change manually in your PR.
 
-To cut a release: bump `VERSION`, commit, then tag with an **annotated** tag whose message is a short, human-readable changelog: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. That message becomes both the GitHub Release body and what gets posted to Discord (see below) — a lightweight tag (no `-a`/`-m`) falls back to just the tagged commit's own message, which is usually not what you want announced. Pushing the tag triggers the release workflow, which builds both exes with PyInstaller (see `build_pyinstaller.py`/`build_bootstrap.py`), packages the app exe together with the user-editable `Assets/` folder into `Creams-Macro-Anime-Expeditions.zip` (plus a standalone `Assets.zip` the updater/bootstrapper use), and publishes a GitHub Release (what both the auto-updater and the bootstrapper check against).
+To cut a release: bump `VERSION`, commit, then tag with an **annotated** tag whose message is a short, human-readable changelog: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. That message becomes both the GitHub Release body and what gets posted to Discord (see below) — a lightweight tag (no `-a`/`-m`) falls back to just the tagged commit's own message, which is usually not what you want announced. Pushing the tag triggers the release workflow, which builds the app exe with PyInstaller (see `build_pyinstaller.py`), packages it together with the user-editable `Assets/` folder into `Creams-Macro-Anime-Expeditions.zip` — the release's **only** uploaded asset, which new installs, the auto-updater, and any bootstrapper copies all read from — and publishes a GitHub Release.
 
 Every push to `main` posts a one-line summary to a Discord "git log" channel; every tagged release posts its changelog to a separate Discord "update log" channel. Both are wired via `DISCORD_GIT_LOGS_WEBHOOK`/`DISCORD_UPDATE_LOGS_WEBHOOK` repo secrets (Settings > Secrets and variables > Actions) — unset in a fork, so both steps just no-op instead of failing.
 

@@ -331,23 +331,20 @@ class Api:
             # anything, it doesn't read source files at runtime. Running
             # from source: the usual source-zip-over-the-install swap.
             if constants.IS_FROZEN:
-                if not self._update_info.get("exe_url"):
-                    msg = ("No exe attached to this release -- can't self-update the build. "
+                if not self._update_info.get("release_zip_url"):
+                    msg = ("No release zip attached to this release -- can't self-update the build. "
                            f'Grab it manually: {self._update_info.get("url")}')
                     self.push_log(f"[Update] {msg}")
                     self._update_progress = {"phase": "error", "percent": None, "message": msg}
                     return
-                new_exe = updater.download_exe_update(self._update_info["exe_url"], self.push_log, on_progress)
-                # Bring in any reference images that are NEW in this release
-                # before restarting -- the swapped exe may search for them.
-                # Add-only (never overwrites the user's own edited/added
-                # images -- see core.updater's Assets section) and
-                # best-effort: a failed Assets fetch logs and moves on
-                # rather than aborting an otherwise-downloaded exe update.
-                if self._update_info.get("assets_zip_url"):
-                    self._update_progress = {"phase": "staging", "percent": 100,
-                                             "message": "Merging new Assets images..."}
-                    updater.merge_assets_update(self._update_info["assets_zip_url"], self.push_log)
+                # One download covers the whole update: the new exe is
+                # extracted out of the release zip and staged for the swap,
+                # and any reference images NEW in this release are add-only
+                # merged from that same file (never overwriting the user's
+                # own edited/added images -- see core.updater's Assets
+                # section) before the restart.
+                new_exe = updater.download_release_update(
+                    self._update_info["release_zip_url"], self.push_log, on_progress)
                 self._update_progress = {"phase": "staging", "percent": 100, "message": "Preparing update..."}
                 helper_path = updater.stage_exe_update(new_exe)
             else:
@@ -1943,7 +1940,7 @@ def _launch_ui():
         # ASSETS_DIR), so a bare exe with no Assets next to it (shared solo,
         # or an old bootstrapper install from before the zip layout) would
         # have every image search dead on arrival. This restores it from the
-        # release's Assets.zip when missing -- a no-op costing one isdir/
+        # release zip's Assets when missing -- a no-op costing one isdir/
         # listdir in the normal case, and on a background thread so a slow
         # download can never hold up startup.
         try:

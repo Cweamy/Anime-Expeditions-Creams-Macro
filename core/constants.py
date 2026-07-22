@@ -56,7 +56,7 @@ UI_DIR = os.path.join(BUNDLE_DIR, "ui")
 # there's exactly one Assets location and editing it directly IS the way to
 # customize, no override indirection needed. If the folder is missing at
 # launch (someone downloaded/kept only the bare exe), core.updater.
-# ensure_assets_present fetches the current release's Assets.zip to restore
+# ensure_assets_present fetches the current release zip's Assets to restore
 # it rather than leaving every image search dead.
 ASSETS_DIR = os.path.join(APP_DIR, "Assets")
 

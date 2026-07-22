@@ -1,12 +1,12 @@
 name: Release
 
 # Triggered by pushing a version tag (vX.Y.Z, matching VERSION at the repo
-# root -- see the release checklist in README.md). Builds the real app exe
-# and a small bootstrapper exe with PyInstaller (see build_pyinstaller.py/
-# build_bootstrap.py), packages the exe together with the user-editable
-# Assets/ folder into the primary download zip (see the packaging step
-# below for why Assets ships loose instead of bundled), and publishes
-# everything on a GitHub Release for that tag.
+# root -- see the release checklist in README.md). Builds the app exe with
+# PyInstaller (see build_pyinstaller.py), packages it together with the
+# user-editable Assets/ folder into the ONE download zip (see the
+# packaging step below for why Assets ships loose instead of bundled, and
+# why the zip is the only uploaded asset), and publishes it on a GitHub
+# Release for that tag.
 #
 # PyInstaller, not Nuitka: Nuitka's C-compile step took 15-20+ minutes per
 # release (see git history) for a repo this size. PyInstaller just bundles
@@ -23,10 +23,10 @@ name: Release
 # explicit --hidden-import flags this time instead of switching build
 # tools blind a second time.
 #
-# core/updater.py's in-app update check downloads whichever of these
-# assets is relevant (the bare exe + Assets.zip when running frozen, the
-# tag's source zip when running from source) -- this workflow doesn't need
-# to do anything updater-specific beyond just publishing them here.
+# core/updater.py's in-app update check downloads the release zip when
+# running frozen (exe + new Assets images both come out of it), or the
+# tag's source zip when running from source -- this workflow doesn't need
+# to do anything updater-specific beyond just publishing here.
 on:
   push:
     tags:
@@ -55,37 +55,35 @@ jobs:
       - name: Build app exe (PyInstaller)
         run: python build_pyinstaller.py
 
-      - name: Build bootstrapper exe (PyInstaller)
-        run: python build_bootstrap.py
-
-      # Assets/ is deliberately NOT bundled inside the exe anymore (see
+      # Assets/ is deliberately NOT bundled inside the exe (see
       # build_pyinstaller.py) -- it ships as a loose, user-editable folder so
       # anyone can open/replace/add the macro's reference images (one folder
       # per searched name, any number of variant .pngs each -- see
       # core/vision.py's template_variant_paths and the Image Manager in
-      # Settings > Debug) without rebuilding anything. So the primary
-      # download becomes a ZIP of exe + Assets side by side, plus:
-      #   - Assets.zip -- just the Assets tree, fetched by core/updater.py
-      #     when an exe-swap update needs any NEW reference images this
-      #     release added (existing user files are never overwritten), and
-      #     by ensure_assets_present when someone runs a bare exe with no
-      #     Assets folder next to it at all.
-      #   - the bare app exe -- still uploaded on its own because the
-      #     in-app updater swaps just the exe file in place (user's edited
-      #     Assets folder stays untouched, which is the whole point).
-      # Dashes (not spaces) in the zip names on purpose: GitHub rewrites
-      # spaces in uploaded asset filenames to dots (see core/updater.py's
-      # FALLBACK_EXE_NAME), so dashed names stay predictable for the
-      # constructed fallback URLs updater.py/bootstrap.py build when the
-      # API call is rate-limited.
-      - name: Package release zips (exe + editable Assets folder)
+      # Settings > General) without rebuilding anything.
+      #
+      # This ONE zip is the release's only uploaded asset, on purpose --
+      # v0.3.0 also shipped the bare exe, an Assets.zip, and the
+      # bootstrapper, and four downloads plus GitHub's two automatic source
+      # archives made the asset list a wall where picking the wrong file
+      # was easy. Everything now reads from this single zip: new installs
+      # extract it, core/updater.py pulls both the new exe AND any new
+      # Assets images out of it (download_release_update /
+      # ensure_assets_present), and bootstrap.py installs from it (the
+      # bootstrapper exe itself is no longer built/uploaded here -- build
+      # it locally via build_bootstrap.py if a small shareable installer
+      # is needed; already-distributed copies keep working since they
+      # fetch this zip by name). Dashed zip name on purpose: GitHub
+      # rewrites spaces in uploaded asset filenames to dots, so a dashed
+      # name stays predictable for the constructed fallback URLs
+      # updater.py/bootstrap.py build when the API call is rate-limited.
+      - name: Package release zip (exe + editable Assets folder)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item "dist/Creams Macro - Anime Expeditions.exe" package/
           Copy-Item Assets package/Assets -Recurse
           Compress-Archive -Path package/* -DestinationPath "dist/Creams-Macro-Anime-Expeditions.zip"
-          Compress-Archive -Path Assets -DestinationPath "dist/Assets.zip"
 
       - name: Get changelog from the tag message
         # A curated summary, not GitHub's raw commit-list changelog --
@@ -124,9 +122,6 @@ jobs:
           body: ${{ steps.changelog.outputs.body }}
           files: |
             dist/Creams-Macro-Anime-Expeditions.zip
-            dist/Assets.zip
-            dist/Creams Macro - Anime Expeditions.exe
-            dist/Creams Macro - Anime Expeditions Bootstrapper.exe
 
       # Python script, not inline bash+jq -- the jq version sent Discord
       # invalid JSON (HTTP 400, code 50109) on the real runner the first

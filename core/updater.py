@@ -10,17 +10,19 @@ it over the install dir, skipping anything the user owns (settings.json,
 debug/, Paths/, Templates/, regenerated Assets -- same list .gitignore
 excludes).
 
-Running as a built exe (see build_pyinstaller.py): downloads the new
-release's EXE ASSET and swaps the exe file itself -- robocopying loose .py
-source over a compiled exe's directory wouldn't do anything, the exe
-doesn't read scattered source files at runtime. This mirrors the sibling
-Anime Squadron project's core.updater, which already solved the batch-
-script choreography (wait for the old exe to actually exit, move it aside,
-move the new one into place, relaunch, clean up) -- ported here rather than
-re-solving it blind. The user-editable Assets/ folder beside the exe is
-NEVER part of the swap -- an exe update leaves it alone except for an
-add-only merge of any reference images that are new in the release (see
-merge_assets_update / the Assets section below).
+Running as a built exe (see build_pyinstaller.py): downloads the release
+zip (the only binary asset a release publishes -- exe + Assets/ side by
+side), extracts the new exe out of it, and swaps the exe file itself --
+robocopying loose .py source over a compiled exe's directory wouldn't do
+anything, the exe doesn't read scattered source files at runtime. The
+batch-script swap choreography (wait for the old exe to actually exit,
+move it aside, move the new one into place, relaunch, clean up) mirrors
+the sibling Anime Squadron project's core.updater, which already solved
+it -- ported here rather than re-solving it blind. The user-editable
+Assets/ folder beside the exe is NEVER part of the swap -- an update
+leaves it alone except for an add-only merge, from that same zip, of any
+reference images that are new in the release (see the Assets section
+below).
 
 Either way: main.Api.apply_update stages the update, launches the relaunch
 helper detached, THEN closes the app -- the helper doesn't touch any files
@@ -40,19 +42,18 @@ from . import constants
 GITHUB_REPO = "Cweamy/Anime-Expeditions-Creams-Macro"
 RELEASES_LATEST_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
-# GitHub replaces spaces with dots in uploaded asset filenames (confirmed
-# against real releases), so build_pyinstaller.py's "Creams Macro - Anime
-# Expeditions.exe" actually ends up hosted under this name -- used as a
-# best-effort fallback download link if the API call in check_for_update
-# gets rate-limited (see its docstring), same fallback the sibling Anime
-# Squadron project's core.updater already needed for the same reason.
-FALLBACK_EXE_NAME = "Creams.Macro.-.Anime.Expeditions.exe"
-# The Assets-only zip release.yml uploads alongside the exe (dashed name on
-# purpose -- no space-to-dot rewriting to second-guess). Downloaded during
-# an exe update to pick up any NEW reference images that release added
-# (see merge_assets_update), and by ensure_assets_present when the app
-# launches with no Assets folder beside the exe at all.
-ASSETS_ZIP_NAME = "Assets.zip"
+# The packaged release zip (exe + the loose Assets/ folder side by side,
+# see release.yml) -- the ONE download everything uses: new installs, the
+# bootstrapper, AND frozen-build updates (the exe is extracted out of it
+# and swapped, the Assets entries add-only merged, all from a single
+# download -- see download_release_update). Dashed name on purpose:
+# GitHub rewrites spaces in uploaded asset filenames to dots, dashes stay
+# put, so the constructed fallback URL below stays predictable when the
+# API call in check_for_update gets rate-limited. Releases used to also
+# ship the bare exe and a separate Assets.zip for these flows; folded into
+# this one file to keep the release's asset list from being a wall of
+# downloads where picking the wrong one is easy.
+RELEASE_ZIP_NAME = "Creams-Macro-Anime-Expeditions.zip"
 # BUNDLE_DIR, not APP_DIR -- VERSION ships as part of the app itself (it's
 # what identifies which release you're running), not user-owned data.
 VERSION_FILE = os.path.join(constants.BUNDLE_DIR, "VERSION")
@@ -134,23 +135,12 @@ def check_for_update(timeout: float = 6.0, log=None) -> dict:
             "current_version": current,
             "url": f"https://github.com/{GITHUB_REPO}/releases/tag/{tag}",
             "zip_url": f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip",
-            "exe_url": f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{FALLBACK_EXE_NAME}",
-            "assets_zip_url": f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{ASSETS_ZIP_NAME}",
+            "release_zip_url": f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{RELEASE_ZIP_NAME}",
             "notes": "",
         }
 
-    # "bootstrapper" must be excluded here -- every release has TWO .exe
-    # assets (the real app and the small bootstrapper, see release.yml),
-    # and picking whichever happens to come first in the API's asset order
-    # risked self-updating by overwriting the real app with the tiny
-    # bootstrapper. bootstrap.py's own _find_exe_asset_url() already
-    # excludes it the same way; this just needed the same filter.
-    exe_asset = next(
-        (a for a in data.get("assets", [])
-         if a.get("name", "").lower().endswith(".exe") and "bootstrapper" not in a.get("name", "").lower()),
-        None)
-    assets_zip_asset = next(
-        (a for a in data.get("assets", []) if a.get("name", "").lower() == ASSETS_ZIP_NAME.lower()),
+    release_zip_asset = next(
+        (a for a in data.get("assets", []) if a.get("name", "").lower() == RELEASE_ZIP_NAME.lower()),
         None)
     return {
         "available": True,
@@ -158,10 +148,8 @@ def check_for_update(timeout: float = 6.0, log=None) -> dict:
         "current_version": current,
         "url": data.get("html_url") or f"https://github.com/{GITHUB_REPO}/releases",
         "zip_url": data.get("zipball_url") or f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip",
-        "exe_url": exe_asset["browser_download_url"] if exe_asset else
-                   f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{FALLBACK_EXE_NAME}",
-        "assets_zip_url": assets_zip_asset["browser_download_url"] if assets_zip_asset else
-                          f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{ASSETS_ZIP_NAME}",
+        "release_zip_url": release_zip_asset["browser_download_url"] if release_zip_asset else
+                           f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{RELEASE_ZIP_NAME}",
         "notes": (data.get("body") or "").strip(),
     }
 
@@ -251,34 +239,37 @@ start "" "run.bat"
 # ---------------------------------------------------------------------------
 # Assets (the user-editable reference-image folder shipped BESIDE the exe,
 # not inside it -- see build_pyinstaller.py / release.yml / core.constants.
-# ASSETS_DIR). Add-only on purpose, everywhere: an update may bring in
-# reference images that are NEW in a release (a new macro step's button
-# crop, a new map's name label), but never overwrites a file already on
-# disk -- those are exactly the user-replaced/user-added variants the loose
-# folder exists to protect. Trade-off, accepted: a release that FIXES an
-# existing image won't propagate over a local copy -- delete the local
-# file/folder and update again to take the shipped one. The source-update
-# path enforces the same policy via robocopy /XC /XN /XO (see
-# _write_source_helper_script).
+# ASSETS_DIR). Sourced from the release zip's Assets/ entries (no separate
+# Assets.zip asset anymore -- see RELEASE_ZIP_NAME). Add-only on purpose,
+# everywhere: an update may bring in reference images that are NEW in a
+# release (a new macro step's button crop, a new map's name label), but
+# never overwrites a file already on disk -- those are exactly the
+# user-replaced/user-added variants the loose folder exists to protect.
+# Trade-off, accepted: a release that FIXES an existing image won't
+# propagate over a local copy -- delete the local file/folder and update
+# again to take the shipped one. The source-update path enforces the same
+# policy via robocopy /XC /XN /XO (see _write_source_helper_script).
 # ---------------------------------------------------------------------------
 
 def _extract_assets_zip_addonly(zip_path: str, log) -> int:
-    """Extracts an Assets.zip into constants.ASSETS_DIR, skipping every file
-    that already exists (see the add-only policy note above). Handles the
-    zip's entries whether they're rooted at "Assets/..." (how release.yml's
-    Compress-Archive lays them out) or bare "ui/..." -- and refuses any
-    entry that would escape the Assets folder (absolute paths / ".."), since
-    zip filenames are ultimately untrusted input. Returns how many files
-    were actually written."""
+    """Extracts the Assets/ entries of a release zip into constants.
+    ASSETS_DIR, skipping every file that already exists (see the add-only
+    policy note above). ONLY entries rooted at "Assets/..." are touched --
+    the release zip also carries the app exe at its root, which must never
+    end up inside the Assets folder -- and any entry that would escape the
+    folder (absolute paths / "..") is refused outright, since zip filenames
+    are ultimately untrusted input. Returns how many files were actually
+    written."""
     added = 0
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             if info.is_dir():
                 continue
             parts = info.filename.replace("\\", "/").split("/")
-            if parts and parts[0].lower() == "assets":
-                parts = parts[1:]
-            if not parts or any(p in ("", ".", "..") for p in parts) or ":" in parts[0]:
+            if len(parts) < 2 or parts[0].lower() != "assets":
+                continue  # the exe (or anything else at the zip root) -- not an Assets file
+            parts = parts[1:]
+            if any(p in ("", ".", "..") for p in parts) or ":" in parts[0]:
                 continue
             dest = os.path.join(constants.ASSETS_DIR, *parts)
             if os.path.exists(dest):
@@ -292,20 +283,17 @@ def _extract_assets_zip_addonly(zip_path: str, log) -> int:
     return added
 
 
-def merge_assets_update(assets_zip_url: str, log) -> bool:
-    """Downloads a release's Assets.zip and add-only merges it into the
-    local Assets folder -- called during an exe update (main.Api._apply_
-    update_background) so a release that ADDS reference images doesn't
-    leave the freshly-swapped exe searching for files that aren't on disk
-    yet. Never raises: an exe update that can't fetch Assets.zip (rate
-    limit, offline blip mid-update) should still swap the exe rather than
-    abort -- worst case a genuinely-new image is missing and the runner's
-    own TemplateNotFound message says exactly which and where."""
+def merge_assets_update(release_zip_url: str, log) -> bool:
+    """Downloads a release zip and add-only merges its Assets/ entries into
+    the local Assets folder, ignoring the exe it also carries -- the
+    restore path ensure_assets_present uses. Never raises: a failed fetch
+    (rate limit, offline) logs and reports False rather than breaking the
+    caller's flow."""
     tmp_root = tempfile.mkdtemp(prefix="aecm_assets_")
-    zip_path = os.path.join(tmp_root, ASSETS_ZIP_NAME)
+    zip_path = os.path.join(tmp_root, RELEASE_ZIP_NAME)
     try:
-        log(f"[Update] Downloading {assets_zip_url}...")
-        resp = requests.get(assets_zip_url, timeout=60, stream=True)
+        log(f"[Update] Downloading {release_zip_url}...")
+        resp = requests.get(release_zip_url, timeout=120, stream=True)
         resp.raise_for_status()
         with open(zip_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=1 << 16):
@@ -327,7 +315,7 @@ def ensure_assets_present(log) -> bool:
     """Startup safety net for a bare exe with NO Assets folder next to it
     (someone shared just the exe, or an old bootstrapper install predating
     the exe+Assets zip layout): without Assets/ui every image search is
-    dead on arrival, so try to fetch this exact version's Assets.zip from
+    dead on arrival, so try to fetch this exact version's release zip from
     its GitHub release and lay it down. Checks the ui/ subfolder rather
     than the bare Assets dir since Settings' "Open Assets Folder" creates
     empty scaffolding folders -- existing-but-empty needs the download just
@@ -342,12 +330,14 @@ def ensure_assets_present(log) -> bool:
     except OSError:
         pass
     log("[Update] No Assets folder found beside the app -- downloading it from GitHub...")
-    # This exact version's Assets first (guaranteed to match what the exe
-    # searches for), falling back to latest if that tag's asset is missing
-    # (e.g. a release cut before Assets.zip existed).
+    # This exact version's release zip first (its Assets are guaranteed to
+    # match what the exe searches for), falling back to latest if that
+    # tag's asset is missing (e.g. a release cut before the zip layout
+    # existed). Only the zip's Assets/ entries are extracted -- the exe it
+    # also carries is ignored (see _extract_assets_zip_addonly).
     current = get_current_version()
-    urls = [f"https://github.com/{GITHUB_REPO}/releases/download/v{current}/{ASSETS_ZIP_NAME}",
-            f"https://github.com/{GITHUB_REPO}/releases/latest/download/{ASSETS_ZIP_NAME}"]
+    urls = [f"https://github.com/{GITHUB_REPO}/releases/download/v{current}/{RELEASE_ZIP_NAME}",
+            f"https://github.com/{GITHUB_REPO}/releases/latest/download/{RELEASE_ZIP_NAME}"]
     for url in urls:
         if merge_assets_update(url, log):
             log("[Update] Assets folder restored.")
@@ -366,10 +356,21 @@ def _current_exe_path() -> str:
     return os.path.abspath(sys.argv[0])
 
 
-def download_exe_update(exe_url: str, log, on_progress=None) -> str:
-    """Downloads the new exe alongside the running one (as `<exe>.update`,
-    not overwriting it yet -- the running exe's file is likely still
-    locked). Returns the downloaded path for apply_exe_update to swap in.
+def download_release_update(release_zip_url: str, log, on_progress=None) -> str:
+    """Downloads the release zip and stages BOTH halves of a frozen-build
+    update from that single file: the new exe is extracted alongside the
+    running one (as `<exe>.update`, not overwriting it yet -- the running
+    exe's file is likely still locked; stage_exe_update's helper swaps it
+    in after this process exits), and any NEW Assets images are add-only
+    merged immediately. Releases used to ship the bare exe and a separate
+    Assets.zip so these were two downloads -- folded into the one zip the
+    release publishes anyway (see RELEASE_ZIP_NAME). Returns the staged
+    exe's path.
+
+    The Assets merge is best-effort: a corrupt/odd Assets entry logs and
+    moves on rather than aborting an exe update that's already fully
+    downloaded. A MISSING exe inside the zip, though, is a real failure --
+    there'd be nothing to update to -- so that raises.
 
     on_progress(downloaded_bytes, total_bytes), if given, is called after
     every chunk -- see stage_source_update's docstring for what total=0
@@ -377,18 +378,52 @@ def download_exe_update(exe_url: str, log, on_progress=None) -> str:
     """
     current_exe = _current_exe_path()
     new_exe = current_exe + ".update"
-    log(f"[Update] Downloading {exe_url}...")
-    resp = requests.get(exe_url, stream=True, timeout=120)
-    resp.raise_for_status()
-    total = int(resp.headers.get("content-length") or 0)
-    downloaded = 0
-    with open(new_exe, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=1 << 16):
-            f.write(chunk)
-            downloaded += len(chunk)
-            if on_progress:
-                on_progress(downloaded, total)
-    return new_exe
+    tmp_root = tempfile.mkdtemp(prefix="aecm_update_")
+    zip_path = os.path.join(tmp_root, RELEASE_ZIP_NAME)
+    try:
+        log(f"[Update] Downloading {release_zip_url}...")
+        resp = requests.get(release_zip_url, stream=True, timeout=120)
+        resp.raise_for_status()
+        total = int(resp.headers.get("content-length") or 0)
+        downloaded = 0
+        with open(zip_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                f.write(chunk)
+                downloaded += len(chunk)
+                if on_progress:
+                    on_progress(downloaded, total)
+
+        with zipfile.ZipFile(zip_path) as zf:
+            # The app exe sits at the zip's root (release.yml packages
+            # "<exe>" + "Assets/" side by side) -- matched by position and
+            # extension rather than exact name so a future exe rename
+            # doesn't silently break updating.
+            exe_info = next(
+                (i for i in zf.infolist()
+                 if not i.is_dir()
+                 and "/" not in i.filename.replace("\\", "/")
+                 and i.filename.lower().endswith(".exe")),
+                None)
+            if exe_info is None:
+                raise RuntimeError(f"No app exe found inside {RELEASE_ZIP_NAME} -- can't stage the update.")
+            with zf.open(exe_info) as src, open(new_exe, "wb") as out:
+                while True:
+                    chunk = src.read(1 << 16)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+
+        try:
+            _extract_assets_zip_addonly(zip_path, log)
+        except Exception as exc:
+            log(f"[Update] Assets merge skipped ({exc}) -- existing Assets folder left as-is.")
+        return new_exe
+    finally:
+        try:
+            os.remove(zip_path)
+            os.rmdir(tmp_root)
+        except OSError:
+            pass
 
 
 def stage_exe_update(new_exe_path: str) -> str:
