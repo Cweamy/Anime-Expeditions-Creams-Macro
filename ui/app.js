@@ -112,18 +112,46 @@ function showDocked() {
   }
 }
 
-// Any modal that hides the docked Roblox window while it's up (see each
-// one's own hide_game() call) -- checked by switchScreen() before it would
-// otherwise show_game() out from under one of them. #update-modal covers
-// BOTH the "update available" prompt and the auto-update progress bar
-// (applyUpdate() just toggles sections within the same modal), so this
-// covers the actual downloading/applying phase too, not just the prompt.
+// Set by the two capture dances (usePlaceUnitRobloxScreen /
+// startImageCapture) while they deliberately hop to the Dashboard WITH
+// their modal still open: the whole point of the hop is that the game
+// becomes visible for the screenshot, so during it the modal must NOT
+// count as a blocking overlay or show_game() would be suppressed and the
+// capture would grab our own UI instead of Roblox.
+let captureDanceActive = false;
+
+// Any modal that the docked Roblox window must not be shown on top of --
+// checked by switchScreen() (and the F4 game toggle through it) before it
+// would otherwise show_game() out from under one. Roblox is a native
+// child window: it paints over ALL DOM regardless of z-index, so showing
+// it under an open modal doesn't close the modal, it just hides it while
+// the invisible overlay keeps eating clicks -- the exact "pressed F4 with
+// something open and the UI broke" report. Two tiers:
+//   - update/scale modals: always blocking (their own show/dismiss
+//     handlers manage hide_game/show_game explicitly).
+//   - transient tool modals (Image Manager, Set Position picker, the
+//     path-name prompt): blocking EXCEPT mid-capture-dance (see
+//     captureDanceActive above). Their close paths call
+//     restoreGameIfDashboard() so the game comes back if they were
+//     closed while sitting on the Dashboard.
 function isBlockingOverlayOpen() {
-  const ids = ['update-modal', 'scale-warning-modal'];
-  return ids.some(id => {
+  const isOpen = id => {
     const el = document.getElementById(id);
     return el && el.style.display !== 'none' && el.style.display !== '';
-  });
+  };
+  if (['update-modal', 'scale-warning-modal'].some(isOpen)) return true;
+  if (!captureDanceActive && ['im-modal', 'pu-modal', 'path-name-modal'].some(isOpen)) return true;
+  return false;
+}
+
+// Shared "modal just closed" restore: shows the game again only where it's
+// actually supposed to be visible (Dashboard) and only if no OTHER
+// blocking overlay is still up -- same logic dismissUpdateModal/
+// dismissScaleWarning already used individually.
+function restoreGameIfDashboard() {
+  if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
+    try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -153,12 +181,7 @@ async function showUpdateAvailable() {
 function dismissUpdateModal() {
   clearInterval(updateProgressPoll);
   document.getElementById('update-modal').style.display = 'none';
-  // Only restore Roblox if Dashboard is where it's actually supposed to be
-  // visible right now (switchScreen() already keeps it hidden on every
-  // other screen) AND no other overlay (e.g. the scale warning) is still up.
-  if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
-    try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
-  }
+  restoreGameIfDashboard();
 }
 
 // ---------------------------------------------------------------------------
@@ -180,9 +203,7 @@ async function showScaleWarning() {
 
 function dismissScaleWarning() {
   document.getElementById('scale-warning-modal').style.display = 'none';
-  if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
-    try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
-  }
+  restoreGameIfDashboard();
 }
 
 async function manualCheckForUpdate() {
@@ -2276,6 +2297,7 @@ async function savePathName() {
   const name = document.getElementById('path-name-input').value.trim();
   if (!name) return;
   document.getElementById('path-name-modal').style.display = 'none';
+  restoreGameIfDashboard();
   try {
     const result = await pywebview.api.save_pending_path(name);
     if (result.ok) {
@@ -2297,6 +2319,7 @@ async function savePathName() {
 
 async function discardPathRecording() {
   document.getElementById('path-name-modal').style.display = 'none';
+  restoreGameIfDashboard();
   try { await pywebview.api.discard_pending_path(); } catch (e) {}
   pendingRecordingTarget = null;
   addLog('[Macro Manager] Recording discarded.');
@@ -2679,6 +2702,7 @@ async function openPlaceUnitModal(blockId) {
 function closePlaceUnitModal() {
   document.getElementById('pu-modal').style.display = 'none';
   puState.blockId = null;
+  restoreGameIfDashboard();  // see isBlockingOverlayOpen -- game stays hidden while this modal is up
 }
 
 function renderPlaceUnitCategoryTabs() {
@@ -2744,13 +2768,21 @@ async function selectPlaceUnitMap(name) {
 // settle and paint a real frame, capture, then come straight back. The modal
 // stays open the whole time (the game just paints over it for a moment).
 async function usePlaceUnitRobloxScreen() {
-  switchScreen('dashboard');
-  await new Promise(resolve => setTimeout(resolve, 400));
+  // captureDanceActive: this hop NEEDS show_game() to fire even though our
+  // modal is open (see isBlockingOverlayOpen) -- the game being visible is
+  // what makes the screenshot possible at all.
+  captureDanceActive = true;
   let result = null;
   try {
-    result = await pywebview.api.get_roblox_snapshot();
-  } catch (e) {}
-  switchScreen('creation');
+    switchScreen('dashboard');
+    await new Promise(resolve => setTimeout(resolve, 400));
+    try {
+      result = await pywebview.api.get_roblox_snapshot();
+    } catch (e) {}
+    switchScreen('creation');
+  } finally {
+    captureDanceActive = false;
+  }
   if (!result || !result.ok) {
     addLog(`[Macro Manager] Couldn't capture Roblox screen: ${(result && result.reason) || 'error'}`);
     return;
@@ -2977,6 +3009,7 @@ function closeImageManager() {
   document.getElementById('im-modal').style.display = 'none';
   imState.image = null;
   imState.sel = null;
+  restoreGameIfDashboard();  // closed while on the Dashboard (e.g. via the F6/F4 hotkeys) -- bring the game back
 }
 
 async function refreshImageManagerData() {
@@ -3131,14 +3164,21 @@ async function deleteTemplateImage(name, file, el) {
 // for a moment). prefillName comes from a card's "+" button -- straight to
 // cropping a new variant of that specific name.
 async function startImageCapture(prefillName) {
-  const returnScreen = currentScreen;
-  switchScreen('dashboard');
-  await new Promise(resolve => setTimeout(resolve, 400));
+  const returnScreen = currentScreen === 'dashboard' ? lastNonDashboardScreen : currentScreen;
+  // See usePlaceUnitRobloxScreen -- the game must actually show during
+  // this hop despite the open modal.
+  captureDanceActive = true;
   let result = null;
   try {
-    result = await pywebview.api.capture_image_search_screen();
-  } catch (e) {}
-  switchScreen(returnScreen);
+    switchScreen('dashboard');
+    await new Promise(resolve => setTimeout(resolve, 400));
+    try {
+      result = await pywebview.api.capture_image_search_screen();
+    } catch (e) {}
+    switchScreen(returnScreen);
+  } finally {
+    captureDanceActive = false;
+  }
   if (!result || !result.ok) {
     addLog(`[Images] Couldn't capture Roblox screen: ${(result && result.reason) || 'error'} -- is Roblox docked?`);
     return;
