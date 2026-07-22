@@ -70,17 +70,25 @@ ADD_DATA = [
 cmd = [
     sys.executable, "-m", "PyInstaller",
     "--onefile",
-    "--windowed",  # no console window
+    "--windowed",  # no console window (macOS: also produces the .app bundle)
     "--noconfirm",
     f"--name={EXE_NAME}",
-    f"--icon={os.path.join(ROOT, 'logo.ico')}",
     "--distpath=dist",
     "--workpath=build",
 ]
+# .ico is a Windows icon format -- macOS bundles want .icns, and passing
+# the .ico there just fails the build. The mac app keeps PyInstaller's
+# default icon until someone makes an .icns (testers: `--icon=logo.icns`
+# here once one exists).
+if sys.platform != "darwin":
+    cmd.append(f"--icon={os.path.join(ROOT, 'logo.ico')}")
 for mod in HIDDEN_IMPORTS:
     cmd += [f"--hidden-import={mod}"]
 for src, dest in ADD_DATA:
-    cmd += [f"--add-data={os.path.join(ROOT, src)};{dest}"]
+    # --add-data's separator is ';' on Windows but ':' on POSIX -- exactly
+    # what os.pathsep is. Hardcoded ';' was the mac CI build's first
+    # failure ("Wrong syntax, should be --add-data=SOURCE:DEST").
+    cmd += [f"--add-data={os.path.join(ROOT, src)}{os.pathsep}{dest}"]
 cmd.append(os.path.join(ROOT, "main.py"))
 
 print("Building exe with PyInstaller...")

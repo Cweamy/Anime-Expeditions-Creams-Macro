@@ -1,0 +1,52 @@
+name: macOS Asset Build
+
+# Manually builds the macOS zip from CURRENT MAIN and attaches it to an
+# existing release -- for when a tag's own macos job failed on something
+# already fixed on main (a tag-triggered rerun would execute the workflow
+# and build script AS OF THE TAG'S COMMIT, i.e. still broken -- the same
+# reasoning behind discord-release-post.yml). First used for v0.4.0, whose
+# tagged build script still had the Windows-only --add-data separator.
+#
+# Usage: Actions > macOS Asset Build > Run workflow > enter the tag, or
+# `gh workflow run macos-asset.yml -f tag=v0.4.0`.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the macOS zip to (e.g. v0.4.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build app (PyInstaller)
+        run: python build_pyinstaller.py
+
+      # Same packaging as release.yml's macos job -- see its comments.
+      - name: Package macOS zip (.app + editable Assets folder)
+        run: |
+          mkdir -p package
+          cp -R "dist/Creams Macro - Anime Expeditions.app" package/
+          cp -R Assets package/Assets
+          cd package && ditto -c -k --keepParent --sequesterRsrc . ../dist/Creams-Macro-Anime-Expeditions-macOS.zip
+
+      - name: Upload macOS asset to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: dist/Creams-Macro-Anime-Expeditions-macOS.zip
