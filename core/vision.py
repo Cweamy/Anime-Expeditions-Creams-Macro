@@ -23,8 +23,44 @@ import time
 import cv2
 import numpy as np
 
+from . import config
 from . import constants
 from . import window as wm
+
+# ---------------------------------------------------------------------------
+# Reference space: every coordinate in this codebase -- fixed clicks,
+# search regions, reference images, saved Place Unit positions -- is
+# defined against a game viewport of exactly config.FIXED_WIN_W x
+# FIXED_WIN_H (1152x756). On Windows the docker forces the real window to
+# exactly that size, so reference == reality. Everywhere that stops being
+# true -- macOS Retina screens where a capture comes back at 2x pixel
+# density, a mac window the arranger couldn't resize (Accessibility
+# permission missing), any future setup with a differently-sized game
+# window -- these helpers keep the whole pipeline in reference space:
+# captures get resized INTO it (so templates match at their true size on
+# any screen), and click positions get scaled back OUT of it (so a match
+# found at reference (x, y) lands on the real screen proportionally --
+# effectively %-based coordinates). Scale 1.0 (the Windows norm) skips the
+# resize entirely, costing one comparison.
+# ---------------------------------------------------------------------------
+
+def _window_geometry(hwnd: int):
+    """(left, top, sx, sy): the window's screen origin plus its actual
+    size as a fraction of reference size. sx/sy fall back to 1.0 for a
+    degenerate rect so a mid-close window can't divide by zero."""
+    left, top, right, bottom = wm.get_window_rect_screen(hwnd)
+    w, h = right - left, bottom - top
+    sx = (w / config.FIXED_WIN_W) if w > 0 else 1.0
+    sy = (h / config.FIXED_WIN_H) if h > 0 else 1.0
+    return left, top, sx, sy
+
+
+def ref_to_screen(hwnd: int, x: float, y: float):
+    """Reference-space point -> absolute screen point, scaled to the
+    window's real size. THE way to turn any stored/fixed coordinate into
+    a click position."""
+    left, top, sx, sy = _window_geometry(hwnd)
+    return int(left + x * sx), int(top + y * sy)
 
 UI_ASSETS_DIR = os.path.join(constants.ASSETS_DIR, "ui")
 # Map name-label crops (core.stage_select) -- kept separate from Assets/ui
@@ -241,30 +277,50 @@ def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
 
 
 def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
-    """Grayscale screenshot of the docked Roblox window, or a sub-rect of it
-    in client-space coordinates (x, y, w, h) -- e.g. the Nav's Play button
+    """Grayscale screenshot of the game window, or a sub-rect of it in
+    REFERENCE-space coordinates (x, y, w, h) -- e.g. the Nav's Play button
     lives in a small fixed corner, so a caller that already knows roughly
     where to look can pass region to search a much smaller, faster image
     instead of the whole 1152x756 window.
 
+    Returned image is ALWAYS at reference dimensions (region's own w/h, or
+    the full 1152x756) regardless of the window's real on-screen size or
+    pixel density: the grab rect is scaled out to the actual window
+    (see _window_geometry) and the grabbed pixels resized back -- which is
+    what lets one set of reference images match on a Retina Mac's 2x
+    captures or any non-reference window size at all. At the Windows norm
+    (window exactly reference-sized, 1x density) both steps are identity
+    and skipped.
+
     A plain screen-region grab (not the PrintWindow trick get_roblox_snapshot
     uses) is fine here: the runner only ever calls this while Roblox is the
-    actually-visible, docked, foreground game (never from a screen that
-    hides it), so there's nothing else that could be captured instead.
+    actually-visible, docked/arranged, foreground game (never from a screen
+    that hides it), so there's nothing else that could be captured instead.
     """
     import mss
-    left, top, right, bottom = wm.get_window_rect_screen(hwnd)
+    left, top, sx, sy = _window_geometry(hwnd)
     if region is not None:
         rx, ry, rw, rh = region
-        left, top = left + rx, top + ry
-        right, bottom = left + rw, top + rh
-    width, height = right - left, bottom - top
-    if width <= 0 or height <= 0:
+        grab_left, grab_top = left + rx * sx, top + ry * sy
+        grab_w, grab_h = rw * sx, rh * sy
+        out_w, out_h = int(rw), int(rh)
+    else:
+        grab_left, grab_top = left, top
+        grab_w, grab_h = config.FIXED_WIN_W * sx, config.FIXED_WIN_H * sy
+        out_w, out_h = config.FIXED_WIN_W, config.FIXED_WIN_H
+    if grab_w <= 0 or grab_h <= 0:
         return None
     with mss.MSS() as sct:
-        shot = sct.grab({"left": left, "top": top, "width": width, "height": height})
+        shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
+                          "width": int(round(grab_w)), "height": int(round(grab_h))})
         bgr = np.array(shot)[:, :, :3]
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    if gray.shape[:2] != (out_h, out_w):
+        # Non-reference capture (Retina 2x, off-size window) -- normalize.
+        # INTER_AREA: this is almost always a shrink, where it's the
+        # recommended anti-aliasing choice (see _scaled_templates).
+        gray = cv2.resize(gray, (out_w, out_h), interpolation=cv2.INTER_AREA)
+    return gray
 
 
 def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold: float = DEFAULT_THRESHOLD,
@@ -367,6 +423,11 @@ def save_match_debug(hwnd: int, name: str, match: dict) -> str:
     with mss.MSS() as sct:
         shot = sct.grab({"left": left, "top": top, "width": right - left, "height": bottom - top})
         bgr = np.array(shot)[:, :, :3].copy()
+    # match coords are reference-space -- normalize the screenshot to the
+    # same space before drawing on it (identity at the Windows norm, see
+    # capture_game_gray).
+    if bgr.shape[:2] != (config.FIXED_WIN_H, config.FIXED_WIN_W):
+        bgr = cv2.resize(bgr, (config.FIXED_WIN_W, config.FIXED_WIN_H), interpolation=cv2.INTER_AREA)
     x, y, w, h = match["x"], match["y"], match["w"], match["h"]
     cv2.rectangle(bgr, (x, y), (x + w, y + h), (0, 255, 0), 2)
     cv2.putText(bgr, f"{name} {match['score']:.2f}", (x, max(12, y - 6)),
@@ -383,10 +444,11 @@ def save_region_debug(hwnd: int, name: str, region: tuple) -> str:
     first. region is in the game window's own client coords (x, y, w, h)."""
     import mss
     os.makedirs(DEBUG_DIR, exist_ok=True)
-    left, top, right, bottom = wm.get_window_rect_screen(hwnd)
+    left, top, sx, sy = _window_geometry(hwnd)
     rx, ry, rw, rh = region
     with mss.MSS() as sct:
-        shot = sct.grab({"left": left + rx, "top": top + ry, "width": rw, "height": rh})
+        shot = sct.grab({"left": int(left + rx * sx), "top": int(top + ry * sy),
+                          "width": int(round(rw * sx)), "height": int(round(rh * sy))})
         bgr = np.array(shot)[:, :, :3]
     path = os.path.join(DEBUG_DIR, f"region_{name}.png")
     cv2.imwrite(path, bgr)
@@ -533,32 +595,30 @@ def wait_for_image_any(hwnd: int, names: tuple, region: tuple = None, threshold:
 
 
 def click_match(mouse, hwnd: int, match: dict) -> None:
-    """Clicks a match's center -- match coords are window-client-space (what
-    find_image/wait_for_image return), so they're offset by the game
-    window's own screen position (borderless + docked, so window rect ==
-    client rect, same convention core.window.get_roblox_snapshot uses)."""
-    left, top, _, _ = wm.get_window_rect_screen(hwnd)
-    mouse.click(left + match["cx"], top + match["cy"])
+    """Clicks a match's center -- match coords are reference-space (what
+    find_image/wait_for_image return, since captures are normalized to
+    reference dimensions), converted to a real screen point through
+    ref_to_screen so the click lands proportionally whatever the window's
+    actual on-screen size is."""
+    mouse.click(*ref_to_screen(hwnd, match["cx"], match["cy"]))
 
 
 def double_click_match(mouse, hwnd: int, match: dict) -> None:
     """Same as click_match, but double-clicks -- for buttons that only
     sometimes register a single click reliably (see exp_extract's own
     caller)."""
-    left, top, _, _ = wm.get_window_rect_screen(hwnd)
-    mouse.double_click(left + match["cx"], top + match["cy"])
+    mouse.double_click(*ref_to_screen(hwnd, match["cx"], match["cy"]))
 
 
 def right_click_match(mouse, hwnd: int, match: dict) -> None:
     """Same as click_match, but right-clicks -- for a match that's itself
     what opens a context menu (see Auto Upgrade Unit's own caller)."""
-    left, top, _, _ = wm.get_window_rect_screen(hwnd)
-    mouse.click(left + match["cx"], top + match["cy"], button="right")
+    x, y = ref_to_screen(hwnd, match["cx"], match["cy"])
+    mouse.click(x, y, button="right")
 
 
 def shuffle_click_match(mouse, hwnd: int, match: dict) -> None:
     """Same as click_match, but hovers in with a few small moves first (see
     Mouse.shuffle_click) -- for a button reported not to reliably register
     a click game-side even when the click itself visually lands on it."""
-    left, top, _, _ = wm.get_window_rect_screen(hwnd)
-    mouse.shuffle_click(left + match["cx"], top + match["cy"])
+    mouse.shuffle_click(*ref_to_screen(hwnd, match["cx"], match["cy"]))

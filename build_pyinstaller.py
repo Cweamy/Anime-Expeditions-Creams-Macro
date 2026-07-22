@@ -33,12 +33,17 @@ EXE_NAME = "Creams Macro - Anime Expeditions"
 
 # winforms.py imports win32 unconditionally even though edgechromium is the
 # backend actually used at runtime -- PyInstaller's own pywebview hook
-# misses this one, same bug Nuitka's bundled plugin had.
-HIDDEN_IMPORTS = [
-    "webview.platforms.winforms",
-    "webview.platforms.edgechromium",
-    "webview.platforms.win32",
-]
+# misses this one, same bug Nuitka's bundled plugin had. The mac build
+# needs the cocoa backend collected instead (PyInstaller only bundles the
+# host platform's modules -- each OS builds its own binary).
+if sys.platform == "darwin":
+    HIDDEN_IMPORTS = ["webview.platforms.cocoa"]
+else:
+    HIDDEN_IMPORTS = [
+        "webview.platforms.winforms",
+        "webview.platforms.edgechromium",
+        "webview.platforms.win32",
+    ]
 
 # Data PyInstaller wouldn't otherwise know to bundle -- extracted to
 # sys._MEIPASS at runtime (see core/constants.py's BUNDLE_DIR, which reads

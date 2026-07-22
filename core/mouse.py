@@ -1,45 +1,41 @@
-import ctypes
+import sys
 import time
-from ctypes import wintypes
 
-from . import _sendinput as si
+from . import pacing
+
+# One cross-platform Mouse class over per-OS input primitives: Win32
+# SendInput on Windows (see _input_win/_sendinput), Quartz CGEvents on
+# macOS (see _input_mac). All the click choreography below (hold timing,
+# hover nudges, shuffle approach) is platform-neutral behavior tuned
+# against the game -- only the raw event synthesis differs per OS.
+if sys.platform == "darwin":
+    from . import _input_mac as backend
+else:
+    from . import _input_win as backend
 
 
 class Mouse:
-    """Screen-space mouse controller built on SendInput.
+    """Screen-space mouse controller.
 
-    All coordinates are absolute screen pixels. If you're clicking inside
-    the Roblox window, convert client coordinates to screen coordinates
-    with WindowManager.client_to_screen() first.
+    All coordinates are absolute screen pixels (macOS: global display
+    points -- same thing as far as callers are concerned, see
+    _input_mac's coordinate note). If you're clicking inside the Roblox
+    window, convert client coordinates to screen coordinates first.
+
+    Every click-style action ends with pacing.action_pause() -- the
+    user-adjustable "Macro Speed" extra delay (Settings > General), a
+    no-op at its default 0ms. Applied here at the choke point rather than
+    per call site so ONE setting slows every click the macro makes.
     """
 
-    _DOWN_FLAG = {
-        "left": si.MOUSEEVENTF_LEFTDOWN,
-        "right": si.MOUSEEVENTF_RIGHTDOWN,
-        "middle": si.MOUSEEVENTF_MIDDLEDOWN,
-    }
-    _UP_FLAG = {
-        "left": si.MOUSEEVENTF_LEFTUP,
-        "right": si.MOUSEEVENTF_RIGHTUP,
-        "middle": si.MOUSEEVENTF_MIDDLEUP,
-    }
-
     def move_to(self, x: int, y: int) -> None:
-        abs_x, abs_y = si.screen_to_absolute(x, y)
-        mi = si.MouseInput(
-            dx=abs_x, dy=abs_y, mouseData=0,
-            dwFlags=si.MOUSEEVENTF_MOVE | si.MOUSEEVENTF_ABSOLUTE | si.MOUSEEVENTF_VIRTUALDESK,
-            time=0, dwExtraInfo=0,
-        )
-        si.send_mouse_input(mi)
+        backend.move_abs(int(x), int(y))
 
     def down(self, button: str = "left") -> None:
-        mi = si.MouseInput(dx=0, dy=0, mouseData=0, dwFlags=self._DOWN_FLAG[button], time=0, dwExtraInfo=0)
-        si.send_mouse_input(mi)
+        backend.button_down(button)
 
     def up(self, button: str = "left") -> None:
-        mi = si.MouseInput(dx=0, dy=0, mouseData=0, dwFlags=self._UP_FLAG[button], time=0, dwExtraInfo=0)
-        si.send_mouse_input(mi)
+        backend.button_up(button)
 
     def nudge(self, dx: int = 1, dy: int = 0) -> None:
         """Sends a tiny *relative* move. A jump straight to a point via
@@ -47,8 +43,7 @@ class Mouse:
         (buttons, scrollable panels) only register real hover from an
         actual relative mouse-move event, which that absolute jump doesn't
         reliably fire on its own."""
-        mi = si.MouseInput(dx=dx, dy=dy, mouseData=0, dwFlags=si.MOUSEEVENTF_MOVE, time=0, dwExtraInfo=0)
-        si.send_mouse_input(mi)
+        backend.move_rel(dx, dy)
 
     def click(self, x: int = None, y: int = None, button: str = "left", hold: float = 0.05) -> None:
         if x is not None and y is not None:
@@ -59,6 +54,7 @@ class Mouse:
         self.down(button)
         time.sleep(hold)
         self.up(button)
+        pacing.action_pause()
 
     def double_click(self, x: int = None, y: int = None, button: str = "left", gap: float = 0.08) -> None:
         self.click(x, y, button)
@@ -74,7 +70,7 @@ class Mouse:
         visually lands -- a single absolute jump + one nudge wasn't always
         enough. Approaches from a random-ish nearby offset and nudges in
         toward the real point over a few steps, each a real relative
-        MOUSEEVENTF_MOVE, before finally clicking."""
+        move event, before finally clicking."""
         self.move_to(x - 6, y - 4)
         time.sleep(0.03)
         for dx, dy in ((3, 2), (2, 1), (1, 1)):
@@ -87,6 +83,7 @@ class Mouse:
         self.down(button)
         time.sleep(hold)
         self.up(button)
+        pacing.action_pause()
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, button: str = "left", steps: int = 15, duration: float = 0.2) -> None:
         self.move_to(x1, y1)
@@ -99,12 +96,14 @@ class Mouse:
             self.move_to(int(ix), int(iy))
             time.sleep(step_delay)
         self.up(button)
+        pacing.action_pause()
 
     def scroll(self, amount: int) -> None:
-        mi = si.MouseInput(dx=0, dy=0, mouseData=amount, dwFlags=si.MOUSEEVENTF_WHEEL, time=0, dwExtraInfo=0)
-        si.send_mouse_input(mi)
+        # Windows wheel-delta units (+-120 per notch) on both platforms --
+        # the mac backend converts to scroll lines itself. No
+        # action_pause() here: scrolls run in tight caller-paced loops
+        # (map carousel, reward list) that already sleep between notches.
+        backend.scroll(amount)
 
     def position(self):
-        pt = wintypes.POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-        return pt.x, pt.y
+        return backend.cursor_pos()

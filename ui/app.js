@@ -524,6 +524,18 @@ function bounceToggle(btn) {
   btn.classList.add('bounce');
 }
 
+// Settings > General > Macro Speed: extra ms after every click/keypress
+// (core/pacing.py). Clamped here too so a typo'd huge number can't freeze
+// every click behind a minutes-long sleep.
+async function saveActionDelay(input) {
+  const ms = Math.min(2000, Math.max(0, parseInt(input.value, 10) || 0));
+  input.value = ms;
+  try {
+    await pywebview.api.set_setting('action_delay_ms', ms);
+    addLog(`[Settings] Action delay set to ${ms}ms${ms ? '' : ' (full speed)'}.`);
+  } catch (e) {}
+}
+
 async function toggleSetting(key, btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
@@ -699,6 +711,8 @@ async function loadSettingsUI() {
   try {
     const s = await pywebview.api.get_settings();
     document.getElementById('toggle-start-minimized').classList.toggle('on', !!s.start_minimized);
+    const actionDelayEl = document.getElementById('setting-action-delay');
+    if (actionDelayEl) actionDelayEl.value = s.action_delay_ms || 0;
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
     if (debugScreenshotsEl) debugScreenshotsEl.classList.toggle('on', !!s.debug_screenshots);
     if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {

@@ -944,6 +944,30 @@
         </section>
       </div>
 
+      <!-- The user-adjustable "slow everything down" knob (core/pacing.py):
+           one extra delay added after EVERY click and keypress the macro
+           sends -- for machines/setups where the default cadence outruns
+           the game ("clicks too fast, the UI hasn't reacted yet"). Applied
+           live at the input layer, so it needs no restart and no per-step
+           tuning. -->
+      <div class="settings-category" data-cat="general" style="margin-top: 20px;">
+        <section class="rp-panel">
+          <header class="rp-panel-head">
+            <span class="rp-head-tag" style="--rp-tag: var(--slate);">Control</span>
+            <span class="rp-head-title">Macro Speed</span>
+            <span class="rp-head-rule"></span>
+          </header>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Action Delay</div>
+              <div class="setting-desc">Extra pause (milliseconds) after every click and keypress. 0 = full speed. If the macro clicks faster than your game keeps up, try 150-300. Takes effect immediately, even mid-run.</div>
+            </div>
+            <input id="setting-action-delay" type="number" min="0" max="2000" step="50" class="block-input" style="width: 90px; flex-shrink: 0;" onchange="saveActionDelay(this)">
+          </div>
+        </section>
+      </div>
+
       <div class="settings-category" data-cat="debug" style="margin-top: 20px;">
         <section class="rp-panel">
           <header class="rp-panel-head">

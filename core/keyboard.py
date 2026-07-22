@@ -1,36 +1,50 @@
+import sys
 import time
 
-from . import _sendinput as si
+from . import pacing
+
+# Same per-OS primitive split as core.mouse -- Win32 scan-code SendInput on
+# Windows, Quartz CGEvents on macOS (which also translates the app-wide
+# Win32 VK codes to mac keycodes, see _input_mac._VK_TO_MAC).
+if sys.platform == "darwin":
+    from . import _input_mac as backend
+else:
+    from . import _input_win as backend
 
 
 class Keyboard:
-    """Keyboard controller built on SendInput, using scan codes (not virtual-key
-    codes) for the actual event: scan-code injection matches what a real
-    keyboard driver reports and is picked up more reliably by games."""
+    """Keyboard controller over the per-OS input backend. Callers speak
+    Win32 virtual-key codes everywhere (core.keys, recorded walk paths,
+    block hotkeys) regardless of platform -- keeps every stored
+    keybinding/recording portable between Windows and macOS.
+
+    tap()/combo() end with pacing.action_pause() -- the same
+    user-adjustable Macro Speed delay Mouse's clicks get (a no-op at the
+    default 0ms). key_down/key_up stay raw: walk-path replay times those
+    precisely from the recording and must not be skewed per event.
+    """
 
     def key_down(self, vk: int) -> None:
-        scan = si.vk_to_scan(vk)
-        ki = si.KeyBdInput(wVk=0, wScan=scan, dwFlags=si.KEYEVENTF_SCANCODE, time=0, dwExtraInfo=0)
-        si.send_keyboard_input(ki)
+        backend.key_down(vk)
 
     def key_up(self, vk: int) -> None:
-        scan = si.vk_to_scan(vk)
-        ki = si.KeyBdInput(
-            wVk=0, wScan=scan,
-            dwFlags=si.KEYEVENTF_SCANCODE | si.KEYEVENTF_KEYUP,
-            time=0, dwExtraInfo=0,
-        )
-        si.send_keyboard_input(ki)
+        backend.key_up(vk)
 
-    def tap(self, vk: int, hold: float = 0.03) -> None:
+    def tap(self, vk: int, hold: float = 0.03, pace: bool = True) -> None:
         self.key_down(vk)
         time.sleep(hold)
         self.key_up(vk)
+        if pace:
+            pacing.action_pause()
 
     def type_text(self, text: str, delay: float = 0.02) -> None:
+        # pace=False per character -- a paced tap on every letter would
+        # turn typing a setting name into several seconds at higher Macro
+        # Speed delays. One pause at the end covers the whole string.
         for ch in text:
-            self.tap(ord(ch.upper()))
+            self.tap(ord(ch.upper()), pace=False)
             time.sleep(delay)
+        pacing.action_pause()
 
     def combo(self, *vks: int, hold: float = 0.05) -> None:
         for vk in vks:
@@ -38,3 +52,4 @@ class Keyboard:
         time.sleep(hold)
         for vk in reversed(vks):
             self.key_up(vk)
+        pacing.action_pause()

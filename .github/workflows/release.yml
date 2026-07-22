@@ -136,3 +136,43 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
           RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
         run: python .github/scripts/post_release_log.py
+
+  # macOS build -- same zip idea as the Windows job (app + editable Assets
+  # side by side), its own asset name (see core/updater.py's per-platform
+  # RELEASE_ZIP_NAME). Runs AFTER the Windows job on purpose: that job
+  # creates the release (name/changelog body), this one only appends its
+  # asset to it -- two jobs racing softprops/action-gh-release on the same
+  # tag can conflict. EXPERIMENTAL/UNTESTED build: the mac port ships for
+  # real-device testers, see core/window_mac.py's docstring.
+  build-macos:
+    runs-on: macos-latest
+    needs: build-and-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build app (PyInstaller)
+        run: python build_pyinstaller.py
+
+      - name: Package macOS zip (.app + editable Assets folder)
+        run: |
+          mkdir -p package
+          cp -R "dist/Creams Macro - Anime Expeditions.app" package/
+          cp -R Assets package/Assets
+          # ditto, not zip -- preserves the .app bundle's resource forks/
+          # permissions the way macOS expects; a plain zip of a .app can
+          # arrive un-launchable.
+          cd package && ditto -c -k --keepParent --sequesterRsrc . ../dist/Creams-Macro-Anime-Expeditions-macOS.zip
+
+      - name: Upload macOS asset to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Creams-Macro-Anime-Expeditions-macOS.zip

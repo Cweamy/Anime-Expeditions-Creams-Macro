@@ -2,23 +2,30 @@
 named JSON file, so a Custom Path block (see Creation tab) can replay it
 later instead of relying on Auto Select's live pathing.
 
-Recording works by *polling* GetAsyncKeyState for each watched key at a
-fixed interval on a background thread -- this reads real physical key state
-regardless of which window has focus, unlike a message-based keyboard hook,
-which matters here since the player is actively controlling Roblox while
-this records. Only state *transitions* (press/release) get logged, each
-timestamped relative to recording start, rather than one entry per poll --
-that's enough to reconstruct exactly when each key was held and for how
-long, at a small fraction of the size logging every poll tick would take.
+Recording works by *polling* the OS's live key state (GetAsyncKeyState on
+Windows, CGEventSourceKeyState on macOS -- see the per-OS input backends)
+for each watched key at a fixed interval on a background thread -- this
+reads real physical key state regardless of which window has focus, unlike
+a message-based keyboard hook, which matters here since the player is
+actively controlling Roblox while this records. Only state *transitions*
+(press/release) get logged, each timestamped relative to recording start,
+rather than one entry per poll -- that's enough to reconstruct exactly
+when each key was held and for how long, at a small fraction of the size
+logging every poll tick would take.
 """
-import ctypes
 import json
 import os
 import re
+import sys
 import threading
 import time
 
 from . import constants
+
+if sys.platform == "darwin":
+    from . import _input_mac as _input_backend
+else:
+    from . import _input_win as _input_backend
 
 # Writable -- your own recordings, has to live beside the real exe (see
 # core.constants), not wherever a frozen build's temp extraction lands.
@@ -51,8 +58,6 @@ _WATCHED_KEYS = {
     "i": ord("I"), "o": ord("O"),
 }
 
-_user32 = ctypes.windll.user32
-
 
 class RecordingAlreadyActive(Exception):
     pass
@@ -84,7 +89,7 @@ class _Recorder:
         held = {key: False for key in _WATCHED_KEYS}
         while not stop_event.is_set():
             for key, vk in _WATCHED_KEYS.items():
-                is_down = bool(_user32.GetAsyncKeyState(vk) & 0x8000)
+                is_down = _input_backend.is_key_down(vk)
                 if is_down != held[key]:
                     # The clock starts at the FIRST key transition, not at
                     # start(): however long the player fumbles between clicking

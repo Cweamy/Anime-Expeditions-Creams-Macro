@@ -53,7 +53,13 @@ RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 # ship the bare exe and a separate Assets.zip for these flows; folded into
 # this one file to keep the release's asset list from being a wall of
 # downloads where picking the wrong one is easy.
-RELEASE_ZIP_NAME = "Creams-Macro-Anime-Expeditions.zip"
+#
+# Per-platform: the macOS build is its own zip (a .app bundle + Assets --
+# see release.yml's macos job), and everything here that names the asset
+# (update download, ensure_assets_present's constructed URLs) should
+# resolve to the RUNNING platform's zip automatically.
+RELEASE_ZIP_NAME = ("Creams-Macro-Anime-Expeditions-macOS.zip" if sys.platform == "darwin"
+                     else "Creams-Macro-Anime-Expeditions.zip")
 # BUNDLE_DIR, not APP_DIR -- VERSION ships as part of the app itself (it's
 # what identifies which release you're running), not user-owned data.
 VERSION_FILE = os.path.join(constants.BUNDLE_DIR, "VERSION")
@@ -200,6 +206,9 @@ def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> st
 
 
 def _write_source_helper_script(helper_path: str, src_root: str, app_dir: str, tmp_root: str) -> None:
+    if sys.platform == "darwin":
+        _write_source_helper_script_mac(helper_path, src_root, app_dir, tmp_root)
+        return
     xd = " ".join(f'"{d}"' for d in _EXCLUDE_DIRS)
     xf = " ".join(f'"{f}"' for f in _EXCLUDE_FILES)
     script = f"""@echo off
@@ -234,6 +243,34 @@ start "" "run.bat"
 """
     with open(helper_path, "w", encoding="utf-8") as f:
         f.write(script)
+
+
+def _write_source_helper_script_mac(helper_path: str, src_root: str, app_dir: str, tmp_root: str) -> None:
+    """The .bat helper's macOS twin: rsync instead of robocopy (ships with
+    macOS), same exclusion list and the same add-only Assets policy
+    (--ignore-existing), relaunching via run.sh instead of run.bat."""
+    excludes = " ".join(f"--exclude '{d}/'" for d in _EXCLUDE_DIRS) + " --exclude 'Assets/'"
+    excludes += " " + " ".join(f"--exclude '{f}'" for f in _EXCLUDE_FILES)
+    script = f"""#!/bin/bash
+# Give the just-closed app a moment to release its file handles.
+sleep 2
+
+rsync -a {excludes} "{src_root}/" "{app_dir}/"
+
+# Assets: ADD-ONLY (never overwrite the user's own edited/added reference
+# images) -- same policy as the Windows helper's robocopy /XC /XN /XO pass
+# and core.updater's merge, see the Assets section in updater.py.
+rsync -a --ignore-existing --exclude 'item_icons/' "{src_root}/Assets/" "{app_dir}/Assets/"
+
+rm -rf "{tmp_root}"
+
+cd "{app_dir}"
+chmod +x run.sh 2>/dev/null
+nohup ./run.sh >/dev/null 2>&1 &
+"""
+    with open(helper_path, "w", encoding="utf-8") as f:
+        f.write(script)
+    os.chmod(helper_path, 0o755)
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +553,12 @@ del "%~f0"
 # ---------------------------------------------------------------------------
 
 def launch_helper(helper_path: str) -> None:
+    if sys.platform == "darwin":
+        # start_new_session detaches from this process's group the same way
+        # DETACHED_PROCESS does below -- the helper must survive the app
+        # exiting right after this call.
+        subprocess.Popen(["/bin/bash", helper_path], start_new_session=True, close_fds=True)
+        return
     # DETACHED_PROCESS: no console of its own, survives this process exiting
     # (which happens right after this call -- see main.Api.apply_update).
     subprocess.Popen(

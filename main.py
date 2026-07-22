@@ -234,6 +234,10 @@ class Api:
         self.mouse = Mouse()
         self.keyboard = Keyboard()
         self._path_test_stop = None
+        # Apply the persisted Macro Speed delay before anything can click
+        # (see core.pacing + set_setting's live-update hook).
+        from core import pacing
+        pacing.set_action_delay_ms(cfg.load().get("action_delay_ms", 0))
         # Live readout for the Dashboard's status panel -- get_status() merges
         # this over its placeholder defaults; the runner is the only thing
         # that ever writes to it (via the set_status callback below), one
@@ -331,6 +335,17 @@ class Api:
             # anything, it doesn't read source files at runtime. Running
             # from source: the usual source-zip-over-the-install swap.
             if constants.IS_FROZEN:
+                if sys.platform == "darwin":
+                    # The mac build is a .app bundle -- swapping a whole
+                    # bundle in place is a different (unbuilt, untested)
+                    # dance from the single-file exe swap below. Until a
+                    # tester-verified implementation exists, point at the
+                    # zip instead of half-doing it.
+                    msg = ("Self-update isn't supported on the macOS build yet -- download the new "
+                           f"macOS zip from {self._update_info.get('url')} and replace the app.")
+                    self.push_log(f"[Update] {msg}")
+                    self._update_progress = {"phase": "error", "percent": None, "message": msg}
+                    return
                 if not self._update_info.get("release_zip_url"):
                     msg = ("No release zip attached to this release -- can't self-update the build. "
                            f'Grab it manually: {self._update_info.get("url")}')
@@ -440,6 +455,7 @@ class Api:
             "story_scroll_power": data.get("story_scroll_power", 3),
             "story_scroll_nudges": data.get("story_scroll_nudges", 8),
             "debug_screenshots": data.get("debug_screenshots", False),
+            "action_delay_ms": data.get("action_delay_ms", 0),
         }
 
     def get_tasks(self) -> list:
@@ -801,6 +817,12 @@ class Api:
         data = cfg.load()
         data[key] = value
         cfg.save(data)
+        if key == "action_delay_ms":
+            # Applied live -- the runner's Mouse/Keyboard read this at
+            # every action (see core.pacing), so a mid-run change takes
+            # effect on the very next click, no restart/re-Start needed.
+            from core import pacing
+            pacing.set_action_delay_ms(value)
         return {"ok": True}
 
     def get_hotkeys(self) -> dict:
@@ -1536,7 +1558,6 @@ class Api:
             return {"ok": False, "reason": "no_roblox"}
 
         try:
-            from mss.tools import to_png
             was_hidden = not wm.is_window_visible(hwnd)
             if was_hidden:
                 wm.show_window(hwnd)
@@ -1550,11 +1571,27 @@ class Api:
                 import mss
                 with mss.MSS() as sct:
                     shot = sct.grab({"left": left, "top": top, "width": width, "height": height})
-                    rgb = shot.rgb
+                    bgra = shot.bgra
             finally:
                 if was_hidden:
                     wm.hide_window(hwnd)
-            png_bytes = to_png(rgb, (width, height))
+            # Normalize to the reference 1152x756 before anything downstream
+            # sees it: the Place Unit picker reads click positions off this
+            # image's own pixels and the Image Manager cuts reference crops
+            # from it, so a Retina Mac's 2x-density grab (or an off-size
+            # window) MUST be brought back to reference space here or every
+            # position/crop derived from it lands double-scaled. Identity
+            # (and skipped) at the Windows norm.
+            import cv2
+            import numpy as np
+            image = np.frombuffer(bytearray(bgra), np.uint8).reshape(shot.height, shot.width, 4)[:, :, :3]
+            if image.shape[:2] != (config.FIXED_WIN_H, config.FIXED_WIN_W):
+                image = cv2.resize(image, (config.FIXED_WIN_W, config.FIXED_WIN_H), interpolation=cv2.INTER_AREA)
+                width, height = config.FIXED_WIN_W, config.FIXED_WIN_H
+            ok, encoded = cv2.imencode(".png", image)
+            if not ok:
+                return {"ok": False, "reason": "encode_failed"}
+            png_bytes = encoded.tobytes()
         except Exception as exc:
             return {"ok": False, "reason": str(exc)}
 
@@ -1871,6 +1908,19 @@ def _launch_ui():
     # 100% shows a one-time warning telling the user to fix it at the
     # source, same troubleshooting-log spirit as the DPI/focus fixes
     # already in core.window.
+    if sys.platform == "darwin":
+        # The two macOS permissions everything depends on -- surfaced
+        # loudly at startup instead of letting "clicks do nothing" or
+        # "windows won't move" be diagnosed from symptoms. See
+        # core/window_mac.py's module docstring.
+        try:
+            from core import window_mac
+            if not window_mac.ax_trusted():
+                api.push_log("[Macro] macOS Accessibility permission NOT granted -- window arranging and "
+                              "input will not work. Enable this app under System Settings > Privacy & "
+                              "Security > Accessibility (and Input Monitoring), then restart it.")
+        except Exception as exc:
+            api.push_log(f"[Macro] Couldn't check macOS permissions: {exc}")
     scale = wm.get_display_scale_percent()
     api.push_log(f"[Macro] Display scale: {scale}%.")
     if scale != 100:
@@ -2023,6 +2073,31 @@ def _launch_ui():
 
                     roblox_wm.hwnd = hwnd
                     roblox_wm.resize_client_to()
+
+                    if sys.platform == "darwin":
+                        # macOS can't embed another app's window (no
+                        # SetParent -- see core/dock.py's darwin
+                        # GameDocker), so instead of growing the GUI to
+                        # make room for a docked child, the panel stays
+                        # compact at the screen's left edge and Roblox is
+                        # arranged immediately to its right at the exact
+                        # reference size. (One-shot per dock, same as the
+                        # Windows path -- if the game gets dragged away
+                        # mid-session, image search still lands correctly
+                        # via vision's reference-space scaling; it's just
+                        # no longer beside the panel.)
+                        gui_hwnd = gui_wm.find()
+                        if gui_hwnd and not api.stopping.is_set():
+                            api.gui_hwnd = gui_hwnd
+                            api.docker.dock(hwnd, gui_hwnd, x=GUI_WIDTH_COMPACT + 12, y=0)
+                            api.pinned_hwnd = None
+                            api.push_ui("showDocked")
+                            api.push_log("Roblox arranged beside the panel (macOS side-by-side mode).")
+                        else:
+                            api.push_log("Could not find the macro's own window, will retry.")
+                        time.sleep(2)
+                        continue
+
                     # The window may be minimized right now (Start Minimized, or
                     # the user minimized it while waiting). A resize issued on a
                     # minimized window is silently dropped and it restores at the
@@ -2067,7 +2142,16 @@ def _launch_ui():
             time.sleep(2)
 
     def _register_hotkeys(hotkeys: dict):
-        keyboard.unhook_all()
+        # The `keyboard` lib's global hooks need root on macOS -- a plain
+        # user launch raises OSError somewhere in here. Hotkeys just being
+        # unavailable (use the on-screen buttons) beats the app dying, so
+        # the whole registration is best-effort on that platform.
+        try:
+            keyboard.unhook_all()
+        except (OSError, ImportError):
+            api.push_log("[Macro] Global hotkeys unavailable (macOS needs the app run with elevated "
+                          "permissions for keyboard hooks) -- use the on-screen buttons instead.")
+            return
         actions = {
             # Routed through JS so each reuses its existing JS-side logic
             # (switchScreen's hide/show coordination, startMacro's button-
@@ -2117,7 +2201,10 @@ def _launch_ui():
     window.events.shown += on_shown
     window.events.closing += on_closing
     webview.start()
-    keyboard.unhook_all()
+    try:
+        keyboard.unhook_all()
+    except OSError:
+        pass  # macOS without hook permissions -- nothing was ever hooked
 
 
 def test_mouse():

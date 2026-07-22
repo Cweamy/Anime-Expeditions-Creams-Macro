@@ -98,6 +98,16 @@ cd Anime-Expeditions-Creams-Macro
 pip install -r requirements.txt
 ```
 
+### macOS (experimental — testers wanted)
+
+Releases also publish **`Creams-Macro-Anime-Expeditions-macOS.zip`** (a `.app` + the same editable `Assets/` folder), and source runs work via `./run.sh`. The mac port is **untested on real hardware** — it exists for testers. Key differences and setup:
+
+1. **Permissions (required):** System Settings > Privacy & Security — grant the app (or your terminal, for source runs) **Accessibility**, **Input Monitoring**, and **Screen Recording**. Without them, clicks silently do nothing and captures come back black. The app logs a warning at startup if Accessibility is missing.
+2. **Side-by-side, not docked:** macOS can't embed another app's window, so Roblox is auto-arranged *next to* the control panel at the exact reference size instead of inside it.
+3. **Scaling:** all captures are normalized and clicks scaled automatically (Retina 2x included), so the same Assets images work — but expect to add your own crops via the Image Manager where Roblox's mac rendering differs.
+4. **Self-update** isn't wired up for the mac build yet — replace the app with a freshly downloaded zip.
+5. Global hotkeys need elevated permissions on macOS; without them, use the on-screen buttons.
+
 Either way, install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) if you haven't already (needed for stats/reward reading only — everything else works without it).
 
 ## Usage
