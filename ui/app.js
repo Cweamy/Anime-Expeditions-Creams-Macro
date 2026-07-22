@@ -289,7 +289,7 @@ function skipWaiting() {
 }
 
 // ---------------------------------------------------------------------------
-// Screen switching (Dashboard / Creation / Settings)
+// Screen switching (Dashboard / Macro Manager / Settings)
 // ---------------------------------------------------------------------------
 // Switching away from Dashboard hides the docked Roblox window entirely (it's
 // a native child window, not DOM content, so CSS alone can't hide it) so the
@@ -1156,9 +1156,11 @@ function finishTesseractInstall(success) {
 window.tesseractInstallDone = () => finishTesseractInstall(true);
 window.tesseractInstallFailed = () => finishTesseractInstall(false);
 
-// Settings > General > "Open Assets Folder" -- see core.vision's override
-// lookup: a same-named PNG dropped here beats the bundled reference image
-// for that button/text.
+// Settings > General > "Open Assets Folder" (also the Image Manager's
+// "Open Folder" button) -- the loose, user-editable folder every reference
+// image lives in (one folder per searched name, see core/vision.py's
+// template_variant_paths). Edit freely, then Reload Vision Images (or just
+// use the Image Manager, which handles the reload itself).
 async function openAssetsFolder(btn) {
   const original = btn.textContent;
   btn.disabled = true;
@@ -1349,7 +1351,7 @@ async function saveWebhookSettings(silentSave) {
 // Difficulty picker entirely, since in-game they're locked to Hard);
 // Equipment only shows once a Team Loadout is chosen (with no team there's
 // no loadout to include equipment from); Macro Operation runs one of the
-// Creation tab's saved templates during the task's matches.
+// Macro Manager tab's saved templates during the task's matches.
 const TASK_DATA = {
   story: {
     label: 'Story',
@@ -1378,12 +1380,12 @@ const TASK_DATA = {
 let taskCards = [];
 let selectedTaskId = null;
 // Same one-shot "only truly new rows animate" idea as enteringBlockIds on
-// the Creation screen -- renderTaskList() rebuilds every .task-card via
+// the Macro Manager screen -- renderTaskList() rebuilds every .task-card via
 // innerHTML, so without this every card would replay its entrance
 // animation on any queue change (add/remove/reorder/import), not just the
 // one that's actually new.
 let enteringTaskIds = new Set();
-let taskTemplates = [];  // Creation template names, for the Macro Operation picker
+let taskTemplates = [];  // Macro Manager template names, for the Macro Operation picker
 let taskSaveTimer = null;
 
 function newTaskId() {
@@ -1414,7 +1416,7 @@ async function refreshTaskTemplates() {
   try { taskTemplates = await pywebview.api.list_templates(); } catch (e) { taskTemplates = []; }
 }
 
-// Export bundles the queue AND every Creation template the tasks reference
+// Export bundles the queue AND every Macro Manager template the tasks reference
 // (a task's `macro` is just a template name -- exported alone it would point
 // at nothing on someone else's machine). Import restores both, giving all
 // tasks fresh ids and never overwriting a template that already exists
@@ -1666,7 +1668,7 @@ function renderTaskBuilder() {
     </div>`;
   fields.push(field('Play Mode', playSeg));
 
-  // Team Loadout rides with the chosen template (see the Creation tab), so the
+  // Team Loadout rides with the chosen template (see the Macro Manager tab), so the
   // macro picker is the only loadout-related control left on a task.
   const macroSel = `
     <select class="task-select" onchange="setTaskProp('${t.id}', 'macro', this.value)">
@@ -1680,7 +1682,7 @@ function renderTaskBuilder() {
   el.innerHTML = `
     <div class="task-builder-grid">${fields.join('')}</div>
     ${extractHint}
-    <div class="wh-hint" style="margin-top: 8px;">The macro's Team Loadout comes from its template (Creation tab).</div>
+    <div class="wh-hint" style="margin-top: 8px;">The macro's Team Loadout comes from its template (Macro Manager tab).</div>
     <div class="flex items-center gap-2" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
       <button class="task-toolbar-btn add" onclick="cloneTaskCard('${t.id}')">&#10697; Clone Task</button>
       <span class="flex-1"></span>
@@ -1925,7 +1927,7 @@ async function resetChallengeCounts() {
 }
 
 // ---------------------------------------------------------------------------
-// Creation screen: block-based drag-and-drop routine builder
+// Macro Manager screen: block-based drag-and-drop routine builder
 // ---------------------------------------------------------------------------
 const BLOCK_TYPES = {
   place_unit:        { label: 'Place Unit',        group: 'Units',  color: 'var(--lilac)', params: [{ key: 'name', type: 'text', placeholder: 'unit', default: '' }, { key: 'x', type: 'number', placeholder: 'x', default: 0 }, { key: 'y', type: 'number', placeholder: 'y', default: 0 }] },
@@ -1952,6 +1954,13 @@ const BLOCK_TYPES = {
   // toggle: 'on'/'off') -- one variable-shape control instead of two near-
   // identical block types, see renderSettingControls().
   setting_change:     { label: 'Setting',           group: 'Setup',  color: 'var(--slate)', params: [{ key: 'name', type: 'text', placeholder: 'setting name', default: '' }] },
+  // A raw click at a fixed position in the game window (same 1152x756
+  // client coords Place Unit's x/y use) -- for any button/UI element no
+  // dedicated block covers yet. Position set via the same map/Roblox-screen
+  // picker Place Unit uses (see renderClickControls/openPlaceUnitModal --
+  // applyPlaceUnitPosition writes params.x/y for whichever block opened
+  // it, so the picker needed no changes to support this).
+  click:              { label: 'Click',             group: 'Setup',  color: 'var(--rose)',  params: [{ key: 'x', type: 'number', placeholder: 'x', default: 0 }, { key: 'y', type: 'number', placeholder: 'y', default: 0 }] },
 };
 
 // Two phases: Pre Start (walk to your spot, place starter units, flip any
@@ -1961,7 +1970,7 @@ const PHASES = ['prestart', 'battle'];
 const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle' };
 const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat' };
 const PHASE_ALLOWED = {
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'walk_path'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'walk_path', 'click'],
   battle: Object.keys(BLOCK_TYPES),
 };
 
@@ -1971,7 +1980,7 @@ let recordingBlockId = null;
 let savedPaths = [];
 
 // renderPhases() rebuilds the ENTIRE block list via innerHTML on nearly every
-// Creation interaction (toggling Once, clone/remove, drag-drop reorder,
+// Macro Manager interaction (toggling Once, clone/remove, drag-drop reorder,
 // changing a Setting block's kind, etc.) -- if every .block-row played its
 // entrance animation unconditionally, every block would replay it on every
 // one of those interactions, not just the block that actually changed. So
@@ -2008,7 +2017,7 @@ function addBlock(type, phase, atIndex) {
   const def = BLOCK_TYPES[type];
   if (!def) return;
   if (!PHASE_ALLOWED[phase].includes(type)) {
-    addLog(`[Creation] Only Place Unit, Setting, Auto Upgrade Unit, and Walk Path blocks can go in Pre Start -- "${def.label}" belongs in Battle.`);
+    addLog(`[Macro Manager] Only Place Unit, Setting, Auto Upgrade Unit, Walk Path, and Click blocks can go in Pre Start -- "${def.label}" belongs in Battle.`);
     return;
   }
   const params = {};
@@ -2208,12 +2217,12 @@ async function toggleRecordPath(blockId) {
     let stopRes = null;
     try { stopRes = await pywebview.api.stop_path_capture(); } catch (e) {}
     renderPhases();
-    // Back to Creation BEFORE showing the naming dialog: the docked Roblox
+    // Back to Macro Manager BEFORE showing the naming dialog: the docked Roblox
     // window paints over all DOM on the Dashboard, so a dialog there sits
-    // invisibly behind the game. Creation hides Roblox entirely.
+    // invisibly behind the game. Macro Manager hides Roblox entirely.
     switchScreen('creation');
     if (!stopRes || !stopRes.count) {
-      addLog('[Creation] Nothing recorded -- no movement detected.');
+      addLog('[Macro Manager] Nothing recorded -- no movement detected.');
       try { await pywebview.api.discard_pending_path(); } catch (e) {}
       return;
     }
@@ -2225,7 +2234,7 @@ async function toggleRecordPath(blockId) {
   }
   if (recordingBlockId) return;  // already recording
   // The game-slot layout (where the docked Roblox window actually sits) only
-  // exists on the Dashboard screen -- Creation hides Roblox entirely (see
+  // exists on the Dashboard screen -- Macro Manager hides Roblox entirely (see
   // switchScreen()), so recording has to switch there first or there'd be
   // nothing visible to walk in. start_path_recording() then hands Roblox
   // real OS focus so the player's WASD actually reaches the game instead of
@@ -2237,9 +2246,9 @@ async function toggleRecordPath(blockId) {
     if (result.ok) {
       recordingBlockId = blockId;
       document.getElementById('rec-popout').style.display = 'flex';
-      addLog('[Creation] Recording path -- walk with WASD (I/O also recorded, timer starts on your first key), click Stop Recording when done.');
+      addLog('[Macro Manager] Recording path -- walk with WASD (I/O also recorded, timer starts on your first key), click Stop Recording when done.');
     } else {
-      addLog(`[Creation] Couldn't start recording: ${result.reason || 'error'}`);
+      addLog(`[Macro Manager] Couldn't start recording: ${result.reason || 'error'}`);
     }
   } catch (e) {}
   renderPhases();
@@ -2262,9 +2271,9 @@ async function savePathName() {
         if (block.type === 'walk_path') { block.mode = 'custom'; block.pathName = result.name; }
         else block.params.path = result.name;
       }
-      addLog(`[Creation] Saved path "${result.name}".`);
+      addLog(`[Macro Manager] Saved path "${result.name}".`);
     } else {
-      addLog(`[Creation] Couldn't save path: ${result.reason || 'error'}`);
+      addLog(`[Macro Manager] Couldn't save path: ${result.reason || 'error'}`);
     }
   } catch (e) {}
   pendingRecordingTarget = null;
@@ -2275,7 +2284,7 @@ async function discardPathRecording() {
   document.getElementById('path-name-modal').style.display = 'none';
   try { await pywebview.api.discard_pending_path(); } catch (e) {}
   pendingRecordingTarget = null;
-  addLog('[Creation] Recording discarded.');
+  addLog('[Macro Manager] Recording discarded.');
   renderPhases();
 }
 
@@ -2418,6 +2427,20 @@ function renderPlaceUnitControls(b) {
   return idx + name + x + y + hotkey + set + ignoreHighlight;
 }
 
+// Click block: X/Y plus the same Set/position-picker button Place Unit has
+// (openPlaceUnitModal works for any block with x/y params -- see
+// applyPlaceUnitPosition), minus the unit-only extras (name/hotkey/ignore
+// highlight) that make no sense for a bare click.
+function renderClickControls(b) {
+  const field = (label, inner) => `
+    <label class="blk-field"><span class="blk-field-label">${label}</span>${inner}</label>`;
+  const x = field('X', `<input class="block-input" type="number" value="${b.params.x}" oninput="updateBlockParam('${b.id}', 'x', this.value)">`);
+  const y = field('Y', `<input class="block-input" type="number" value="${b.params.y}" oninput="updateBlockParam('${b.id}', 'y', this.value)">`);
+  const hasPos = b.params.x || b.params.y;
+  const set = field('Position', `<button type="button" class="pu-set-btn ${hasPos ? 'has-pos' : ''} tooltip-side" data-tooltip="Pick the spot to click on a map or your Roblox screen" onclick="openPlaceUnitModal('${b.id}')">${hasPos ? 'Set &#10003;' : 'Set'}</button>`);
+  return x + y + set;
+}
+
 // Walk block: dropdown of the same recorded paths the pinned Walk Path row
 // offers -- mid-battle repositioning reuses the exact same recordings --
 // plus its own Record button, which drops the freshly saved path straight
@@ -2521,9 +2544,13 @@ function renderAutoUpgradeControls(b) {
 
 function renderBlockRow(b, phase) {
   const def = BLOCK_TYPES[b.type];
-  const inputs = b.type === 'place_unit' ? '' : def.params.map(p => renderParamInput(b, p)).join('');
+  // place_unit and click render ALL their fields bespoke (labeled X/Y +
+  // the Set picker button) -- the generic anonymous param inputs would
+  // duplicate them.
+  const inputs = (b.type === 'place_unit' || b.type === 'click') ? '' : def.params.map(p => renderParamInput(b, p)).join('');
   const extra = b.type === 'setting_change' ? renderSettingControls(b)
     : b.type === 'place_unit' ? renderPlaceUnitControls(b)
+    : b.type === 'click' ? renderClickControls(b)
     : b.type === 'walk' ? renderWalkControls(b)
     : b.type === 'walk_path' ? renderWalkPathControls(b)
     : b.type === 'upgrade_unit' ? renderUpgradeControls(b)
@@ -2691,7 +2718,7 @@ function renderPlaceUnitMapGrid() {
 async function selectPlaceUnitMap(name) {
   try {
     const result = await pywebview.api.get_map_image(puState.category, name);
-    if (!result.ok) { addLog(`[Creation] Couldn't load map "${name}".`); return; }
+    if (!result.ok) { addLog(`[Macro Manager] Couldn't load map "${name}".`); return; }
     loadPlaceUnitImage(result.data_uri);
     setRecentPlaceUnitMap(puState.category, name);
   } catch (e) {}
@@ -2710,7 +2737,7 @@ async function usePlaceUnitRobloxScreen() {
   } catch (e) {}
   switchScreen('creation');
   if (!result || !result.ok) {
-    addLog(`[Creation] Couldn't capture Roblox screen: ${(result && result.reason) || 'error'}`);
+    addLog(`[Macro Manager] Couldn't capture Roblox screen: ${(result && result.reason) || 'error'}`);
     return;
   }
   loadPlaceUnitImage(result.data_uri);
@@ -2885,7 +2912,428 @@ function applyPlaceUnitPosition() {
 })();
 
 
-// Team Loadout controls in the Creation top bar -- saved as part of the
+// ---------------------------------------------------------------------------
+// Image Manager modal (Settings > General > Image Search)
+// ---------------------------------------------------------------------------
+// Library of every reference image the macro's image search uses (one card
+// per searched name = one folder on disk, see core/vision.py's
+// template_variant_paths), plus capture-and-crop: freeze a screenshot of the
+// docked Roblox window on a canvas, drag a box around a button/text, save it
+// into a name's folder as an extra variant image. The crop itself is cut
+// server-side from the exact captured frame (main.Api.save_image_search_crop)
+// -- the canvas only ever reports image-space coordinates, so zoom/pan can't
+// affect what actually gets saved. Same frozen-screenshot approach as the
+// Place Unit picker: nothing done in this modal can ever reach the live game.
+
+let imState = {
+  data: null,       // list_vision_templates() categories, or null before first load
+  category: 'ui',   // active tab key -- doubles as the category a saved crop goes to
+  image: null, naturalW: 0, naturalH: 0,   // the frozen capture (an <img>, drawn to canvas)
+  zoom: 1, panX: 0, panY: 0,               // canvas view transform (image px -> canvas px)
+  sel: null,        // crop box in IMAGE pixels {x, y, w, h} -- null until a drag happens
+};
+
+async function openImageManager() {
+  document.getElementById('im-modal').style.display = 'flex';
+  backToImageLibrary();
+  // Render immediately from whatever's cached (instant open on a re-visit),
+  // then refresh from disk -- the listing must reflect files the user may
+  // have just added/removed by hand in the Assets folder.
+  if (imState.data) { renderImageManagerTabs(); renderImageLibrary(); }
+  await refreshImageManagerData();
+}
+
+function closeImageManager() {
+  document.getElementById('im-modal').style.display = 'none';
+  imState.image = null;
+  imState.sel = null;
+}
+
+async function refreshImageManagerData() {
+  try {
+    const result = await pywebview.api.list_vision_templates();
+    imState.data = (result && result.ok) ? result.categories : [];
+  } catch (e) {
+    imState.data = [];
+  }
+  if (!imState.data.some(c => c.key === imState.category) && imState.data.length > 0) {
+    imState.category = imState.data[0].key;
+  }
+  renderImageManagerTabs();
+  renderImageLibrary();
+  renderImageNameDatalist();
+}
+
+function renderImageManagerTabs() {
+  const el = document.getElementById('im-category-tabs');
+  el.innerHTML = `<div class="seg-toggle" style="width: auto;">` +
+    (imState.data || []).map(c => `
+      <button type="button" class="seg-btn ${c.key === imState.category ? 'active' : ''}" style="padding: 6px 16px;"
+              onclick="selectImageManagerCategory('${c.key}')">${c.label}</button>
+    `).join('') + `</div>`;
+}
+
+function selectImageManagerCategory(key) {
+  imState.category = key;
+  renderImageManagerTabs();
+  renderImageLibrary();
+  renderImageNameDatalist();
+}
+
+function imActiveCategory() {
+  return (imState.data || []).find(c => c.key === imState.category) || { names: [] };
+}
+
+// The save bar's name suggestions -- every existing name in the active
+// category, so "add a variant to something that already exists" is a pick
+// instead of an exact retype (a typo'd name would silently create a NEW
+// folder the runner never searches).
+function renderImageNameDatalist() {
+  const el = document.getElementById('im-name-list');
+  el.innerHTML = imActiveCategory().names.map(n => {
+    const opt = document.createElement('option');
+    opt.value = n.name;
+    return opt.outerHTML;
+  }).join('');
+}
+
+// Built via DOM calls (not innerHTML + inline onclick) so names with
+// apostrophes ("King's Tomb") never need attribute-quote escaping -- same
+// reasoning as renderPlaceUnitMapGrid.
+function renderImageLibrary() {
+  const el = document.getElementById('im-library');
+  el.innerHTML = '';
+  const filter = (document.getElementById('im-filter').value || '').toLowerCase();
+  const names = imActiveCategory().names.filter(n => n.name.toLowerCase().includes(filter));
+  if (names.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'im-empty';
+    empty.textContent = filter
+      ? 'No names match that filter.'
+      : 'No images in this category yet -- use Capture Roblox to add some, or check the Assets folder exists next to the app.';
+    el.appendChild(empty);
+    return;
+  }
+  for (const n of names) {
+    const card = document.createElement('div');
+    card.className = 'im-card';
+
+    const head = document.createElement('div');
+    head.className = 'im-card-head';
+    const label = document.createElement('span');
+    label.className = 'im-card-name';
+    label.textContent = n.name;
+    label.title = n.name;
+    const count = document.createElement('span');
+    count.className = 'im-card-count';
+    count.textContent = n.images.length;
+    count.title = `${n.images.length} image(s) -- every one gets tried when the macro searches for "${n.name}"`;
+    const add = document.createElement('span');
+    add.className = 'im-card-add';
+    add.textContent = '+';
+    add.title = `Capture your Roblox screen and crop a new variant of "${n.name}"`;
+    add.addEventListener('click', () => startImageCapture(n.name));
+    head.appendChild(label);
+    head.appendChild(count);
+    head.appendChild(add);
+    card.appendChild(head);
+
+    const thumbs = document.createElement('div');
+    thumbs.className = 'im-thumbs';
+    for (const img of n.images) {
+      const wrap = document.createElement('div');
+      wrap.className = 'im-thumb';
+      const pic = document.createElement('img');
+      pic.src = img.data_uri;
+      pic.alt = img.file;
+      pic.title = img.file;
+      const del = document.createElement('span');
+      del.className = 'im-thumb-del';
+      del.textContent = '×';
+      del.title = 'Delete this image (click twice)';
+      del.addEventListener('click', () => deleteTemplateImage(n.name, img.file, del));
+      wrap.appendChild(pic);
+      wrap.appendChild(del);
+      thumbs.appendChild(wrap);
+    }
+    card.appendChild(thumbs);
+    el.appendChild(card);
+  }
+}
+
+// Two-step delete: first click arms the button (turns red), second click
+// within 2.5s actually deletes. Deliberately NOT a native confirm() -- those
+// render behind the docked Roblox window (same reason the path-name modal
+// exists, see index.html) and would look like the app locked up.
+let imDeleteArmed = null;  // { el, timer } of the currently-armed delete, if any
+
+function imDisarmDelete() {
+  if (!imDeleteArmed) return;
+  clearTimeout(imDeleteArmed.timer);
+  imDeleteArmed.el.classList.remove('armed');
+  imDeleteArmed = null;
+}
+
+async function deleteTemplateImage(name, file, el) {
+  if (!imDeleteArmed || imDeleteArmed.el !== el) {
+    imDisarmDelete();
+    el.classList.add('armed');
+    imDeleteArmed = { el, timer: setTimeout(imDisarmDelete, 2500) };
+    return;
+  }
+  imDisarmDelete();
+  try {
+    const result = await pywebview.api.delete_vision_template_image(imState.category, name, file);
+    if (!result.ok) {
+      addLog(`[Images] Couldn't delete ${file}: ${result.reason || 'error'}`);
+      return;
+    }
+  } catch (e) {
+    addLog(`[Images] Couldn't delete ${file}.`);
+    return;
+  }
+  await refreshImageManagerData();
+}
+
+// Same dance as usePlaceUnitRobloxScreen: the game only renders while the
+// Dashboard is showing, so hop there, let it paint a real frame, capture,
+// hop back. The modal stays open throughout (the game just paints over it
+// for a moment). prefillName comes from a card's "+" button -- straight to
+// cropping a new variant of that specific name.
+async function startImageCapture(prefillName) {
+  const returnScreen = currentScreen;
+  switchScreen('dashboard');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  let result = null;
+  try {
+    result = await pywebview.api.capture_image_search_screen();
+  } catch (e) {}
+  switchScreen(returnScreen);
+  if (!result || !result.ok) {
+    addLog(`[Images] Couldn't capture Roblox screen: ${(result && result.reason) || 'error'} -- is Roblox docked?`);
+    return;
+  }
+  if (typeof prefillName === 'string') {
+    document.getElementById('im-save-name').value = prefillName;
+  }
+  const img = new Image();
+  img.onload = () => {
+    imState.image = img;
+    imState.naturalW = img.naturalWidth;
+    imState.naturalH = img.naturalHeight;
+    imState.sel = null;
+    fitImageCanvas();
+    document.getElementById('im-library').style.display = 'none';
+    document.getElementById('im-capture-wrap').style.display = '';
+    document.getElementById('im-crop-readout').textContent = 'No selection';
+    drawImageCanvas();
+  };
+  img.src = result.data_uri;
+}
+
+function backToImageLibrary() {
+  document.getElementById('im-capture-wrap').style.display = 'none';
+  document.getElementById('im-library').style.display = '';
+  imState.image = null;
+  imState.sel = null;
+}
+
+// Contain-fit the capture in the canvas as the starting zoom/pan -- wheel
+// zoom and right-drag pan take over from there (left-drag is the crop
+// selection, unlike the Place Unit canvas where it pans).
+function fitImageCanvas() {
+  const canvas = document.getElementById('im-canvas');
+  const scale = Math.min(canvas.width / imState.naturalW, canvas.height / imState.naturalH);
+  imState.zoom = scale;
+  imState.panX = (canvas.width - imState.naturalW * scale) / 2;
+  imState.panY = (canvas.height - imState.naturalH * scale) / 2;
+}
+
+function drawImageCanvas() {
+  const canvas = document.getElementById('im-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!imState.image) return;
+  ctx.drawImage(imState.image, imState.panX, imState.panY,
+                imState.naturalW * imState.zoom, imState.naturalH * imState.zoom);
+
+  if (imState.sel) {
+    // Dim everything OUTSIDE the selection instead of just outlining it --
+    // reads instantly as "this is what gets saved" even on busy game art.
+    const sx = imState.panX + imState.sel.x * imState.zoom;
+    const sy = imState.panY + imState.sel.y * imState.zoom;
+    const sw = imState.sel.w * imState.zoom;
+    const sh = imState.sel.h * imState.zoom;
+    ctx.fillStyle = 'rgba(8, 10, 18, 0.55)';
+    ctx.fillRect(0, 0, canvas.width, Math.max(0, sy));                                  // above
+    ctx.fillRect(0, sy + sh, canvas.width, Math.max(0, canvas.height - (sy + sh)));     // below
+    ctx.fillRect(0, sy, Math.max(0, sx), sh);                                           // left
+    ctx.fillRect(sx + sw, sy, Math.max(0, canvas.width - (sx + sw)), sh);               // right
+    ctx.strokeStyle = '#7c9dff';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(sx, sy, sw, sh);
+  }
+}
+
+function imUpdateReadout() {
+  const el = document.getElementById('im-crop-readout');
+  el.textContent = imState.sel
+    ? `${imState.sel.w} × ${imState.sel.h}px at ${imState.sel.x}, ${imState.sel.y}`
+    : 'No selection';
+}
+
+// Crop-canvas interactions: LEFT-drag draws the selection box, wheel zooms
+// toward the cursor (crops are often tiny -- a nav button is ~40px tall --
+// so zooming in before dragging is the normal flow, hence the hint text),
+// RIGHT-drag pans (left is taken by selection, unlike the Place Unit
+// canvas). Selection is stored in IMAGE pixels so zooming/panning after
+// drawing it doesn't move what gets saved.
+(function () {
+  const canvas = document.getElementById('im-canvas');
+  if (!canvas) return;
+  let selecting = false, panning = false;
+  let startImgX = 0, startImgY = 0, lastX = 0, lastY = 0;
+
+  function canvasPoint(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      cx: (clientX - rect.left) * (canvas.width / rect.width),
+      cy: (clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  function toImagePoint(clientX, clientY) {
+    const { cx, cy } = canvasPoint(clientX, clientY);
+    return {
+      // Clamped to the image bounds so a drag that wanders off the edge
+      // still produces a valid, fully-inside crop box.
+      x: Math.min(imState.naturalW, Math.max(0, (cx - imState.panX) / imState.zoom)),
+      y: Math.min(imState.naturalH, Math.max(0, (cy - imState.panY) / imState.zoom)),
+    };
+  }
+
+  canvas.addEventListener('wheel', (e) => {
+    if (!imState.image) return;
+    e.preventDefault();
+    const { cx, cy } = canvasPoint(e.clientX, e.clientY);
+    const imgX = (cx - imState.panX) / imState.zoom;
+    const imgY = (cy - imState.panY) / imState.zoom;
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    imState.zoom = Math.min(12, Math.max(0.2, imState.zoom * factor));
+    imState.panX = cx - imgX * imState.zoom;
+    imState.panY = cy - imgY * imState.zoom;
+    drawImageCanvas();
+  }, { passive: false });
+
+  // Right-click pans, so its context menu would fire on every pan-release.
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (!imState.image) return;
+    if (e.button === 2) {
+      panning = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    } else if (e.button === 0) {
+      selecting = true;
+      const p = toImagePoint(e.clientX, e.clientY);
+      startImgX = p.x;
+      startImgY = p.y;
+      imState.sel = { x: Math.round(p.x), y: Math.round(p.y), w: 0, h: 0 };
+      drawImageCanvas();
+      imUpdateReadout();
+    }
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (panning) {
+      const rect = canvas.getBoundingClientRect();
+      imState.panX += (e.clientX - lastX) * (canvas.width / rect.width);
+      imState.panY += (e.clientY - lastY) * (canvas.height / rect.height);
+      lastX = e.clientX;
+      lastY = e.clientY;
+      drawImageCanvas();
+    } else if (selecting) {
+      const p = toImagePoint(e.clientX, e.clientY);
+      imState.sel = {
+        x: Math.round(Math.min(startImgX, p.x)),
+        y: Math.round(Math.min(startImgY, p.y)),
+        w: Math.round(Math.abs(p.x - startImgX)),
+        h: Math.round(Math.abs(p.y - startImgY)),
+      };
+      drawImageCanvas();
+      imUpdateReadout();
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    panning = false;
+    if (selecting) {
+      selecting = false;
+      // A no-drag click clears the selection -- matches the "click empty
+      // space to deselect" instinct and removes a stray 0-size box.
+      if (imState.sel && (imState.sel.w < 2 || imState.sel.h < 2)) imState.sel = null;
+      drawImageCanvas();
+      imUpdateReadout();
+    }
+  });
+})();
+
+async function saveImageCrop() {
+  const btn = document.getElementById('im-save-btn');
+  const name = document.getElementById('im-save-name').value.trim();
+  if (!imState.sel || imState.sel.w < 4 || imState.sel.h < 4) {
+    addLog('[Images] Drag a box around the button/text first (at least 4x4px).');
+    return;
+  }
+  if (!name) {
+    addLog('[Images] Type or pick a name to save the crop under first.');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  try {
+    const result = await pywebview.api.save_image_search_crop(
+      imState.category, name, imState.sel.x, imState.sel.y, imState.sel.w, imState.sel.h);
+    if (!result.ok) {
+      addLog(`[Images] Save failed: ${result.reason || 'error'}`);
+      btn.textContent = 'Failed';
+    } else {
+      btn.textContent = 'Saved!';
+      // Refresh the library data in the background but STAY in capture view
+      // with the screenshot up -- one capture usually yields several crops
+      // (e.g. a whole screen's worth of buttons) in a row.
+      refreshImageManagerData();
+      imState.sel = null;
+      drawImageCanvas();
+      imUpdateReadout();
+    }
+  } catch (e) {
+    addLog('[Images] Save failed.');
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = 'Save Crop'; btn.disabled = false; }, 1400);
+}
+
+// Settings > Debug > "Reload Vision Images" -- drops core.vision's in-memory
+// template cache so images added/replaced by hand in the Assets folder are
+// picked up without an app restart. (The Image Manager's own save/delete
+// already do this automatically.)
+async function reloadVisionTemplates(btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Reloading...';
+  try {
+    await pywebview.api.reload_vision_templates();
+    btn.textContent = 'Reloaded';
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1400);
+}
+
+
+// Team Loadout controls in the Macro Manager top bar -- saved as part of the
 // template (see saveCurrentTemplate). Equipment include/exclude only means
 // anything once an actual team is picked.
 function renderCreationLoadout() {
@@ -2917,8 +3365,8 @@ function renderPhases() {
   el.innerHTML = PHASES.map(phase => {
     const blocks = creationPhases[phase];
     const emptyText = phase === 'prestart'
-      ? 'Drag Place Unit, Setting, Auto Upgrade Unit, or Walk Path blocks here -- only those are possible before the match starts.'
-      : 'Drag blocks here -- upgrades, sells, waits, anything goes mid-battle.';
+      ? 'Drag Place Unit, Setting, Auto Upgrade Unit, Walk Path, or Click blocks here -- only those are possible before the match starts.'
+      : 'Drag blocks here -- upgrades, sells, waits, clicks, anything goes mid-battle.';
     const emptyDiv = `<div class="text-xs text-center" style="color: var(--text-muted); padding: 16px 0;">${emptyText}</div>`;
     // Walk Path used to be a permanent pinned row here, always running
     // before EVERY block in this list no matter where they were dragged --
@@ -3074,7 +3522,7 @@ function moveBlockToPhase(id, phase, toIdx) {
   if (!loc) return;
   const b = creationPhases[loc.phase][loc.idx];
   if (loc.phase !== phase && !PHASE_ALLOWED[phase].includes(b.type)) {
-    addLog(`[Creation] "${BLOCK_TYPES[b.type].label}" can't go in ${PHASE_LABELS[phase]}.`);
+    addLog(`[Macro Manager] "${BLOCK_TYPES[b.type].label}" can't go in ${PHASE_LABELS[phase]}.`);
     return;
   }
   // Same-list reorder where the drop target sits AT OR AFTER the dragged
@@ -3177,7 +3625,7 @@ async function deleteSelectedTemplate() {
 async function exportTemplates() {
   let names = [];
   try { names = await pywebview.api.list_templates(); } catch (e) {}
-  if (names.length === 0) { addLog('[Creation] Nothing to export -- no saved templates yet.'); return; }
+  if (names.length === 0) { addLog('[Macro Manager] Nothing to export -- no saved templates yet.'); return; }
   const templates = {};
   for (const name of names) {
     try { templates[name] = await pywebview.api.load_template(name); } catch (e) {}
@@ -3187,20 +3635,20 @@ async function exportTemplates() {
   };
   let result = null;
   try { result = await pywebview.api.export_tasks_file(payload, 'templates'); } catch (e) {}
-  if (result && result.ok) addLog(`[Creation] Exported ${names.length} template(s) to ${result.path}`);
-  else if (result && result.reason !== 'cancelled') addLog(`[Creation] Export failed: ${result.reason || 'error'}`);
+  if (result && result.ok) addLog(`[Macro Manager] Exported ${names.length} template(s) to ${result.path}`);
+  else if (result && result.reason !== 'cancelled') addLog(`[Macro Manager] Export failed: ${result.reason || 'error'}`);
 }
 
 async function importTemplates() {
   let result = null;
   try { result = await pywebview.api.import_tasks_file(); } catch (e) {}
   if (!result || !result.ok) {
-    if (result && result.reason !== 'cancelled') addLog(`[Creation] Import failed: ${result.reason || 'error'}`);
+    if (result && result.reason !== 'cancelled') addLog(`[Macro Manager] Import failed: ${result.reason || 'error'}`);
     return;
   }
   const data = result.data || {};
   const templates = data.templates && typeof data.templates === 'object' ? data.templates : null;
-  if (!templates) { addLog('[Creation] Import failed: that file is not a template export.'); return; }
+  if (!templates) { addLog('[Macro Manager] Import failed: that file is not a template export.'); return; }
   let existing = [];
   try { existing = await pywebview.api.list_templates(); } catch (e) {}
   let added = 0;
@@ -3209,7 +3657,7 @@ async function importTemplates() {
     try { await pywebview.api.save_template(name, t.blocks); added++; } catch (e) {}
   }
   await refreshTemplateList();
-  addLog(`[Creation] Imported ${added} template(s).`);
+  addLog(`[Macro Manager] Imported ${added} template(s).`);
 }
 
 async function refreshTemplateList() {

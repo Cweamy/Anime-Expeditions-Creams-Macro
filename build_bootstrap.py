@@ -2,8 +2,9 @@
 Build the tiny bootstrapper exe with PyInstaller. It only imports
 `requests` + stdlib (no OpenCV/numpy/pywebview/mss/keyboard), so it comes
 out much smaller than the full app -- small enough to share as a single
-file (e.g. on Discord). On first run it downloads the real exe from
-GitHub Releases and launches it; see bootstrap.py.
+file (e.g. on Discord). On first run it downloads the release zip (the
+real exe + the user-editable Assets/ folder) from GitHub Releases,
+extracts it beside itself, and launches the app; see bootstrap.py.
 
 Requires:
     py -3.12 -m pip install pyinstaller

@@ -4,6 +4,7 @@ Run:  python main.py            (launches the docked macro UI)
       python main.py --test     (CLI diagnostics for mouse/keyboard/window)
 """
 import os
+import re
 import sys
 import time
 import json
@@ -46,6 +47,20 @@ def _debug_dir() -> str:
 # import in this file being deferred into the function that needs it.
 REWARD_SCROLLBAR_PROBE = (710, 428, 4, 2)  # (x, y, width, height)
 REWARD_SCROLLBAR_COLOR = 0x373737
+
+# Image Manager (Settings > General > Image Search) categories: tab key ->
+# (subfolder under Assets/, label shown on the tab). A whitelist, not an
+# os.listdir, on purpose -- only these two folders hold image-SEARCH
+# reference crops (one folder per searched name, see core.vision.
+# template_variant_paths), and the keys double as path components in the
+# save/delete endpoints below, so an unexpected value must never reach a
+# filesystem path. Assets/map (the Place Unit picker's full map art) and
+# Assets/item_icons (reward icon matching) are different systems entirely
+# and deliberately not editable from here.
+IMAGE_MANAGER_CATEGORIES = {
+    "ui": ("ui", "UI Buttons"),
+    "maps": ("maps", "Map Names"),
+}
 
 GUI_TITLE = "Cream's Macro | Anime Expeditions"
 PANEL_WIDTH = 400
@@ -323,6 +338,16 @@ class Api:
                     self._update_progress = {"phase": "error", "percent": None, "message": msg}
                     return
                 new_exe = updater.download_exe_update(self._update_info["exe_url"], self.push_log, on_progress)
+                # Bring in any reference images that are NEW in this release
+                # before restarting -- the swapped exe may search for them.
+                # Add-only (never overwrites the user's own edited/added
+                # images -- see core.updater's Assets section) and
+                # best-effort: a failed Assets fetch logs and moves on
+                # rather than aborting an otherwise-downloaded exe update.
+                if self._update_info.get("assets_zip_url"):
+                    self._update_progress = {"phase": "staging", "percent": 100,
+                                             "message": "Merging new Assets images..."}
+                    updater.merge_assets_update(self._update_info["assets_zip_url"], self.push_log)
                 self._update_progress = {"phase": "staging", "percent": 100, "message": "Preparing update..."}
                 helper_path = updater.stage_exe_update(new_exe)
             else:
@@ -705,14 +730,14 @@ class Api:
         return {"ok": True}
 
     def start_path_recording(self) -> dict:
-        # Creation > Custom Path > "Record": begins polling the player's own
+        # Macro Manager > Custom Path > "Record": begins polling the player's own
         # WASD state (see core.paths) -- the player then walks the route
         # in-game themselves and clicks Stop when they've reached the end.
         # GetAsyncKeyState reads real key state regardless of focus, but the
         # recording is only useful if Roblox is actually the window
         # *processing* those WASD presses as movement -- otherwise the
         # player's character never walks and there's nothing meaningful to
-        # capture. The Creation screen hides the docked game window entirely
+        # capture. The Macro Manager screen hides the docked game window entirely
         # (see hide_game()) and clicking Record leaves the macro's own
         # webview panel focused, same focus gap that broke reward-scroll
         # wheel input before -- so this shows Roblox and hands it real OS
@@ -737,7 +762,7 @@ class Api:
         if not events:
             return {"ok": False, "reason": "no_movement_recorded"}
         saved_name = paths.save_path(name, events)
-        self.push_log(f"[Creation] Recorded path \"{saved_name}\" ({len(events)} key events).")
+        self.push_log(f"[Macro Manager] Recorded path \"{saved_name}\" ({len(events)} key events).")
         return {"ok": True, "name": saved_name}
 
     def cancel_path_recording(self) -> dict:
@@ -762,7 +787,7 @@ class Api:
             return {"ok": False, "reason": "no_movement_recorded"}
         saved_name = paths.save_path(name, events)
         self._pending_path_events = None
-        self.push_log(f"[Creation] Recorded path \"{saved_name}\" ({len(events)} key events).")
+        self.push_log(f"[Macro Manager] Recorded path \"{saved_name}\" ({len(events)} key events).")
         return {"ok": True, "name": saved_name}
 
     def discard_pending_path(self) -> dict:
@@ -808,9 +833,9 @@ class Api:
             self._on_hotkeys_changed(dict(HOTKEY_DEFAULTS))
         return {"ok": True, "hotkeys": dict(HOTKEY_DEFAULTS)}
 
-    # Task screen > Export/Import: shares a task queue (plus the Creation
+    # Task screen > Export/Import: shares a task queue (plus the Macro Manager
     # templates those tasks reference, bundled in by the JS side) as a single
-    # JSON file through native save/open dialogs. Also reused by Creation's
+    # JSON file through native save/open dialogs. Also reused by Macro Manager's
     # template Export/Import (see ui/app.js's exportTemplates) -- the file
     # shape is just whatever payload/dict the caller hands in, so nothing
     # here is actually task-specific except the default filename.
@@ -823,7 +848,7 @@ class Api:
         fname = f"AnimeExpeditions-{filename_prefix}-{_time.strftime('%Y%m%d-%H%M%S')}.json"
         # Defaults to the Templates folder -- Export/Import already deals in
         # Macro Operation templates half the time (a task export bundles
-        # every template its tasks reference; Creation's own Export/Import
+        # every template its tasks reference; Macro Manager's own Export/Import
         # reuses this same dialog for templates alone), so that's the more
         # useful starting point than whatever generic default the OS picks.
         os.makedirs(tpl.TEMPLATES_DIR, exist_ok=True)
@@ -1095,13 +1120,15 @@ class Api:
         return self.runner.start_debug_test(lambda: self.game_hwnd, mode, macro_name)
 
     def open_assets_folder(self) -> dict:
-        # Settings > General > "Open Assets Folder" -- see core.vision's
-        # override lookup (constants.ASSETS_OVERRIDE_DIR): a same-named PNG
-        # dropped in here beats the bundled reference image for that
-        # button/text, no rebuild or reinstall needed. Creates ui/ and
-        # maps/ (empty) if this is the first time anyone's opened it, so
-        # there's somewhere obvious to drop a replacement file into instead
-        # of a folder that doesn't exist yet.
+        # Settings > General > "Open Assets Folder" (also the Image
+        # Manager's "Open Folder" button) -- THE assets location now, not an
+        # override tier: Assets/ ships loose beside the exe (see core.
+        # constants.ASSETS_DIR) precisely so its images can be opened/
+        # replaced/added to directly. One folder per searched name; every
+        # image inside gets tried (core.vision.template_variant_paths).
+        # Creates ui/ and maps/ (empty) if somehow absent, so there's
+        # somewhere obvious to drop files into instead of a folder that
+        # doesn't exist yet.
         try:
             for sub in ("ui", "maps"):
                 os.makedirs(os.path.join(constants.ASSETS_OVERRIDE_DIR, sub), exist_ok=True)
@@ -1109,6 +1136,197 @@ class Api:
         except OSError as exc:
             self.push_log(f"[Settings] Couldn't open the Assets folder: {exc}")
             return {"ok": False, "reason": str(exc)}
+        return {"ok": True}
+
+    # ------------------------------------------------------------------
+    # Image Manager (Settings > General > Image Search) -- browse every
+    # reference image the macro searches for, grouped one-folder-per-name
+    # (see core.vision.template_variant_paths), and add new crops straight
+    # from a live Roblox screenshot without ever leaving the app: Capture ->
+    # drag a box over the button/text -> pick/type a name -> saved into that
+    # name's folder as an extra variant the very next search will try.
+    # ------------------------------------------------------------------
+
+    def _image_manager_root(self, category: str) -> str:
+        """Absolute folder for a category key, or None for anything not in
+        the IMAGE_MANAGER_CATEGORIES whitelist -- category strings come from
+        the JS side and end up in filesystem paths, so unknown values are
+        rejected outright instead of being joined into a path."""
+        entry = IMAGE_MANAGER_CATEGORIES.get(category)
+        if not entry:
+            return None
+        return os.path.join(constants.ASSETS_DIR, entry[0])
+
+    @staticmethod
+    def _safe_image_name(name: str) -> str:
+        """Search names double as folder/file names, so strip anything that
+        isn't alnum/space/dash/underscore/apostrophe (apostrophe allowed --
+        real map names like "King's Tomb" need it; core.templates' stricter
+        _safe_name has no such names to deal with) and any leading/trailing
+        dots so a name can't traverse out of its category folder."""
+        cleaned = re.sub(r"[^A-Za-z0-9 _\-']", "", name or "").strip().strip(".")
+        return cleaned
+
+    @staticmethod
+    def _image_file_entry(path: str) -> dict:
+        """One image file as the JS side renders it: filename + a data URI
+        thumbnail. Reference crops are tiny (a few KB each), so base64ing
+        every one of them into the listing is cheap and saves the UI from
+        needing any http server/file:// access to render them."""
+        import base64
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return {"file": os.path.basename(path), "data_uri": "data:image/png;base64," + b64}
+
+    def list_vision_templates(self) -> dict:
+        # The Image Manager's library view: every search name in every
+        # category with a thumbnail of each of its variant images. Reads the
+        # folder fresh on every call (no cache) -- the whole point of this
+        # screen is showing what's REALLY on disk right now, including files
+        # the user just dropped in by hand.
+        categories = []
+        for key, (sub, label) in IMAGE_MANAGER_CATEGORIES.items():
+            root = os.path.join(constants.ASSETS_DIR, sub)
+            names = []
+            if os.path.isdir(root):
+                for entry in sorted(os.listdir(root), key=str.lower):
+                    full = os.path.join(root, entry)
+                    try:
+                        if os.path.isdir(full):
+                            # Folder-per-name layout: primary crop
+                            # (<name>.png) first, extras alphabetically --
+                            # same try-order core.vision uses, so the UI
+                            # shows them in the order they get matched.
+                            primary = f"{entry}.png".lower()
+                            files = sorted(
+                                (f for f in os.listdir(full) if f.lower().endswith(".png")),
+                                key=lambda f: (f.lower() != primary, f.lower()),
+                            )
+                            if files:
+                                names.append({
+                                    "name": entry,
+                                    "images": [self._image_file_entry(os.path.join(full, f)) for f in files],
+                                })
+                        elif entry.lower().endswith(".png"):
+                            # Loose legacy/hand-dropped file -- still a valid
+                            # single-variant name (see template_variant_paths
+                            # rule 1), shown the same as a one-image folder.
+                            names.append({
+                                "name": entry[:-4],
+                                "images": [self._image_file_entry(full)],
+                                "loose": True,
+                            })
+                    except OSError:
+                        continue  # unreadable entry -- skip it rather than kill the whole listing
+            categories.append({"key": key, "label": label, "names": names})
+        return {"ok": True, "categories": categories}
+
+    def capture_image_search_screen(self) -> dict:
+        # The Capture button: one frozen screenshot of the docked Roblox
+        # window, shown on the crop canvas. Reuses get_roblox_snapshot's
+        # proven raise-grab-restore dance verbatim, and ALSO caches the PNG
+        # bytes server-side -- save_image_search_crop cuts the crop from
+        # this exact cached frame rather than round-tripping the (large)
+        # image back through the JS bridge.
+        result = self.get_roblox_snapshot()
+        if result.get("ok"):
+            import base64
+            self._image_search_png = base64.b64decode(result["data_uri"].split(",", 1)[1])
+        return result
+
+    def save_image_search_crop(self, category: str, name: str, x, y, w, h) -> dict:
+        # Crop the cached capture (see capture_image_search_screen) down to
+        # the dragged box and save it as a variant image of `name`:
+        # Assets/<category>/<name>/<name>.png if the name is brand new,
+        # otherwise <name>_altN.png beside the existing image(s). "_alt" on
+        # purpose, NOT the bare "_2"/"_3" style: numbered names like
+        # nav_start_game_2 are their own distinct search names in the runner
+        # (a different button, not a variant), so a saved variant must never
+        # be confusable with -- or collide with -- one of those.
+        import cv2
+        import numpy as np
+        from core import vision
+
+        root = self._image_manager_root(category)
+        if not root:
+            return {"ok": False, "reason": "bad_category"}
+        name = self._safe_image_name(name)
+        if not name:
+            return {"ok": False, "reason": "bad_name"}
+        png = getattr(self, "_image_search_png", None)
+        if not png:
+            return {"ok": False, "reason": "no_capture"}
+
+        image = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            return {"ok": False, "reason": "decode_failed"}
+        ih, iw = image.shape[:2]
+        # Clamp the box to the frame -- a drag can start/end slightly outside
+        # the canvas image area and JS sends it through as-is.
+        x0, y0 = max(0, int(x)), max(0, int(y))
+        x1, y1 = min(iw, int(x) + int(w)), min(ih, int(y) + int(h))
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            # Anything smaller than 4px a side is a misdrag, not a usable
+            # reference crop -- matching needs actual shape/edge content.
+            return {"ok": False, "reason": "too_small"}
+        crop = image[y0:y1, x0:x1]
+
+        folder = os.path.join(root, name)
+        os.makedirs(folder, exist_ok=True)
+        filename = f"{name}.png"
+        n = 2
+        while os.path.exists(os.path.join(folder, filename)):
+            filename = f"{name}_alt{n}.png"
+            n += 1
+        path = os.path.join(folder, filename)
+        # imencode + plain write instead of cv2.imwrite -- imwrite silently
+        # fails on paths cv2 can't encode (and returns False rather than
+        # raising), while an ordinary open() write of the encoded bytes
+        # works for any path the OS accepts and raises loudly if not.
+        ok, encoded = cv2.imencode(".png", crop)
+        if not ok:
+            return {"ok": False, "reason": "encode_failed"}
+        with open(path, "wb") as f:
+            f.write(encoded.tobytes())
+
+        # Drop vision's in-memory cache so the very next search actually
+        # tries the new image -- without this it wouldn't exist to the
+        # matcher until an app restart (see vision.clear_template_cache).
+        vision.clear_template_cache()
+        self.push_log(f'[Images] Saved {os.path.join("Assets", IMAGE_MANAGER_CATEGORIES[category][0], name, filename)} '
+                      f'({x1 - x0}x{y1 - y0}px) -- image search will try it immediately.')
+        return {"ok": True, "name": name, "entry": self._image_file_entry(path)}
+
+    def delete_vision_template_image(self, category: str, name: str, filename: str) -> dict:
+        # The library view's per-image delete. filename is basename-checked
+        # (no separators/dots-only tricks) since it comes from JS; the empty
+        # folder is removed too so a fully-cleared name disappears from the
+        # library instead of lingering as a zero-image box.
+        from core import vision
+        root = self._image_manager_root(category)
+        if not root:
+            return {"ok": False, "reason": "bad_category"}
+        name = self._safe_image_name(name)
+        if (not name or not filename or os.path.basename(filename) != filename
+                or not filename.lower().endswith(".png")):
+            return {"ok": False, "reason": "bad_name"}
+        path = os.path.join(root, name, filename)
+        if not os.path.isfile(path) and filename == f"{name}.png":
+            # A loose top-level file (legacy layout / hand-dropped) has no
+            # <name>/ folder -- fall back to deleting it directly.
+            path = os.path.join(root, filename)
+        try:
+            os.remove(path)
+        except OSError as exc:
+            return {"ok": False, "reason": str(exc)}
+        try:
+            folder = os.path.join(root, name)
+            if os.path.isdir(folder) and not os.listdir(folder):
+                os.rmdir(folder)
+        except OSError:
+            pass  # non-empty or locked -- fine, it just stays
+        vision.clear_template_cache()
+        self.push_log(f"[Images] Deleted {filename} from {name}.")
         return {"ok": True}
 
     def install_tesseract(self) -> dict:
@@ -1233,7 +1451,7 @@ class Api:
 
     def debug_test_path(self, name: str) -> dict:
         # Settings > Debug > "Test Walking Path": replays a path recorded via
-        # Creation > Custom Path > Record (see core.paths.replay_events)
+        # Macro Manager > Custom Path > Record (see core.paths.replay_events)
         # against the live game, so a recorded route can be sanity-checked on
         # its own instead of only finding out it's wrong mid-run.
         from core import paths
@@ -1300,7 +1518,7 @@ class Api:
         return {"ok": True, "data_uri": uri}
 
     def get_roblox_snapshot(self) -> dict:
-        # Creation > Place Unit > Set > "Use Roblox Screen": a one-shot,
+        # Macro Manager > Place Unit > Set > "Use Roblox Screen": a one-shot,
         # inert screenshot of the docked Roblox window to click positions
         # against instead of a static map reference image. No input is ever
         # sent and focus never changes, so it can never reach the actual game.
@@ -1720,6 +1938,21 @@ def _launch_ui():
 
     threading.Thread(target=_check_for_update_background, daemon=True).start()
 
+    def _ensure_assets_background():
+        # Assets/ ships as a loose folder beside the exe (see core.constants.
+        # ASSETS_DIR), so a bare exe with no Assets next to it (shared solo,
+        # or an old bootstrapper install from before the zip layout) would
+        # have every image search dead on arrival. This restores it from the
+        # release's Assets.zip when missing -- a no-op costing one isdir/
+        # listdir in the normal case, and on a background thread so a slow
+        # download can never hold up startup.
+        try:
+            updater.ensure_assets_present(api.push_log)
+        except Exception as exc:
+            api.push_log(f"[Update] Assets check failed: {exc}")
+
+    threading.Thread(target=_ensure_assets_background, daemon=True).start()
+
     def _dock_watchdog():
         """Runs for the app's whole lifetime, not just once at startup, so it
         also catches Roblox being launched late, or relaunched after a crash
@@ -1822,7 +2055,7 @@ def _launch_ui():
                         api.gui_hwnd = gui_hwnd
                         api.docker.dock(hwnd, gui_hwnd, x=0, y=TITLEBAR_H)
                         # Stay hidden until the JS side explicitly shows it for the Task
-                        # screen (showDocked() does that) — Info/Settings/Creation are the
+                        # screen (showDocked() does that) — Info/Settings/Macro Manager are the
                         # default/other screens now, and Roblox is a native window that
                         # would otherwise render on top of them regardless of DOM state.
                         wm.hide_window(hwnd)

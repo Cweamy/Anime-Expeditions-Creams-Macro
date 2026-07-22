@@ -1221,6 +1221,71 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   cursor: crosshair;
 }
 
+/* ---- Image Manager (Settings > General > Image Search) ----
+   Library view: one card per searched name (a folder on disk), its variant
+   crops laid out as checkered thumbnails inside. Cards auto-flow into
+   however many columns fit -- template counts differ wildly per category
+   (60+ UI names vs 6 maps), so a fixed column count fits neither. */
+.im-library {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;
+  max-height: 480px; overflow-y: auto; padding-right: 4px;
+}
+.im-card {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface);
+  padding: 8px 10px 10px; animation: rise-in 0.2s ease both;
+}
+.im-card-head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 8px; min-width: 0;
+}
+.im-card-name {
+  font-size: 11px; font-weight: 700; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Variant count -- a quick read of which names already have fallbacks and
+   which are still one-image single points of failure. */
+.im-card-count {
+  font-size: 9px; font-weight: 700; color: var(--text-muted); flex-shrink: 0;
+  padding: 1px 6px; border-radius: 999px; background: var(--bg-deep);
+}
+/* Per-card "+" -- jumps straight to capture with this name pre-filled, the
+   main "this button isn't matching on my setup, add MY screen's crop" path. */
+.im-card-add {
+  margin-left: auto; flex-shrink: 0; cursor: pointer;
+  width: 18px; height: 18px; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 13px; line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+.im-card-add:hover { color: var(--brand); background: color-mix(in srgb, var(--brand) 14%, transparent); }
+.im-thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
+.im-thumb { position: relative; }
+/* Checkerboard behind each crop -- reference images are arbitrary sizes and
+   often share the game UI's dark palette, so a plain dark background made
+   their true edges invisible. */
+.im-thumb img {
+  max-width: 120px; max-height: 48px; display: block; border-radius: 6px;
+  border: 1px solid var(--border);
+  background:
+    repeating-conic-gradient(color-mix(in srgb, var(--text-muted) 18%, transparent) 0% 25%, transparent 0% 50%)
+    0 0 / 12px 12px;
+}
+/* Delete only materializes on hover -- and needs a second, armed (red)
+   click to actually fire; see deleteTemplateImage in app.js for why there
+   is deliberately no native confirm() here. */
+.im-thumb-del {
+  position: absolute; top: -5px; right: -5px; width: 16px; height: 16px;
+  display: none; align-items: center; justify-content: center; cursor: pointer;
+  border-radius: 50%; font-size: 10px; line-height: 1; font-weight: 700;
+  color: var(--text-dim); background: var(--bg-deep); border: 1px solid var(--border);
+}
+.im-thumb:hover .im-thumb-del { display: flex; }
+.im-thumb-del:hover { color: var(--rose); border-color: var(--rose); }
+.im-thumb-del.armed { display: flex; color: #fff; background: var(--rose); border-color: var(--rose); }
+.im-empty {
+  grid-column: 1 / -1; text-align: center; font-size: 11px;
+  color: var(--text-muted); padding: 28px 0;
+}
+
 /* Respect the OS-level "reduce motion" preference: keeps state changes
    (colors, borders, focus rings) but collapses every animation/transition
    to effectively instant, so nothing slides, pulses, or bounces for anyone

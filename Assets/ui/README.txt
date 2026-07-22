@@ -4,55 +4,70 @@ button/text being searched for -- not a full screen capture. See
 Assets/README.txt for how this folder relates to the others (item_icons,
 maps, stage_data.json).
 
-Filenames must match the `name` string a runner call passes to
-core.vision.find_image(hwnd, "<name>", ...) EXACTLY -- core.vision.
-template_path just does `f"{name}.png"`, no normalizing of spaces/case.
-Windows' filesystem is case-insensitive, so a casing mismatch still
-resolves fine, but a SPACE where the code has an underscore does not. Every
-file in this folder is lowercase snake_case with no spaces for exactly
-that reason -- keep any new one the same way.
+Folder names must match the `name` string a runner call passes to
+core.vision.find_image(hwnd, "<name>", ...) EXACTLY -- no normalizing of
+spaces/case. Windows' filesystem is case-insensitive, so a casing mismatch
+still resolves fine, but a SPACE where the code has an underscore does
+not. Every name in this folder is lowercase snake_case with no spaces for
+exactly that reason -- keep any new one the same way.
 
-FOLDER LAYOUT
--------------
-Every button that has more than one visual variant on file (nav_start_
-game.png/_2/_3/_4, expedition.png/_2, and so on -- the ones this catalog
-below describes as "tried in order"/"same idea as nav_start_game.png and
-friends") lives grouped together in its own subfolder named after the
-base button (Assets/ui/nav_start_game/nav_start_game.png, .../
-nav_start_game_2.png, ...) instead of all loose in one flat folder.
-Nothing in the code or in this catalog needs to know about that --
-core.vision.template_path still resolves a plain name like
-"nav_start_game_2" on its own, falling back to a shallow search of this
-folder's immediate subfolders if it's not directly here. Everything
-that's still just ONE image (no numbered variant) stays loose at the top
-level as before. Dropping a same-named override (see REPLACING AN IMAGE
-YOURSELF below) still works exactly the same regardless of which
-subfolder the bundled original lives in -- overrides always stay flat.
+FOLDER LAYOUT (one folder per searched name)
+--------------------------------------------
+Every searched name has its OWN subfolder here, named exactly after it:
 
-REPLACING AN IMAGE YOURSELF
-----------------------------
+  Assets/ui/nav_play/nav_play.png
+  Assets/ui/victory/victory.png
+  ...
+
+and every .png inside a name's folder is tried as an interchangeable
+variant of that one name when the macro searches for it (see core.vision.
+template_variant_paths -- <name>.png is tried first, extras after it, and
+the scale sweep only starts once every variant missed at its true size).
+That's the whole point of the layout: if a button renders differently on
+your setup, ADD another crop of it to that folder instead of overwriting
+the shipped one, and the search tries both.
+
+Names that LOOK related are still separate names on purpose:
+exp_extract_continue/ and continue_2/ are different folders because the
+runner means different things by them (the extract checkpoint's decline
+choice vs a follow-up screen's button), same for nav_start_game/ vs
+nav_start_game_confirm/ (ready-up vs a "Start Anyway"-style second
+confirm). An image only ever counts as a variant of the folder it sits in.
+
+A loose Assets/ui/<name>.png (no folder) still resolves too -- handy for a
+quick hand-dropped file -- but new images should go in folders; that's
+where the Image Manager saves them.
+
+ADDING / REPLACING AN IMAGE YOURSELF
+-------------------------------------
 If a button isn't being found/clicked reliably on your setup (a common
 cause: Roblox rendering its UI at a slightly different size -- see
 core.vision.SCALE_FACTORS, which already tries a few scales automatically
-before giving up), you can swap in your own screenshot without touching
-the app at all:
+before giving up), add YOUR screen's crop of it as an extra variant:
 
-1. In the macro, open Settings > General > "Open Assets Folder" -- this
-   opens (creating if needed) a persistent Assets/ui folder next to the
-   exe. This is a SEPARATE location from the one this README lives in
-   (which is bundled inside the app and gets re-extracted fresh every
-   launch for a packaged exe -- editing it directly doesn't stick).
-2. Crop a tight screenshot of just the button/text that isn't matching,
-   the same way the existing reference images are cropped.
-3. Save it there under the EXACT same filename as the one it's replacing
-   (see the catalog below for which name goes with which button).
-4. Restart the macro. core.vision checks this folder FIRST for every
-   template, falling back to the bundled original if nothing's there --
-   so this only ever overrides what you've actually replaced.
+Easiest way -- entirely in-app, no image editor:
+1. In the macro, open Settings > General > Image Manager.
+2. Get Roblox showing the button, press "Capture Roblox", drag a box
+   tightly around just the button/text (scroll to zoom in first -- crops
+   are small), pick the name from the save box (see the catalog below for
+   which name goes with which button), Save Crop.
+3. Done -- the very next search already tries it, no restart needed.
 
-(Running from source instead of the packaged exe? Assets/ui IS that
-persistent folder already -- just edit the file directly, no separate
-override location needed.)
+By hand, if you prefer:
+1. Settings > General > "Open Assets Folder" opens this exact folder next
+   to the exe (it is NOT baked into the app -- releases ship it loose,
+   precisely so you can edit it).
+2. Crop a tight screenshot of just the button/text, background included,
+   and save it as another .png inside that name's folder (any filename).
+3. Settings > General > "Reload Vision Images" (or restart) so the
+   running app picks it up.
+
+Deleting a shipped image you've decided is wrong for your setup is fine
+too -- updates only ever ADD missing files here, they never overwrite or
+resurrect ones you've changed or removed... except a fully deleted
+file/folder, which the next update's add-only merge will restore from the
+release. To permanently replace a shipped crop, overwrite the file's
+contents rather than deleting it.
 
 CATALOG
 -------
@@ -79,11 +94,11 @@ nav_disband.png
   found and clicked, this clears the way first. Missing template just
   skips the check.
 
-story.png
-  Not used by the runner -- Story's screen position is fixed once the
-  gamemode menu is open (see core.runner.STORY_CLICK), so it's just a
-  hardcoded click, no search needed. Left here in case a future screen
-  needs a "find the Story card" search.
+story/
+  The Story gamemode card. Searched first (its folder holds two crops of
+  the same card -- one alone wasn't distinct enough to match reliably,
+  see core.runner._click_gamemode), falling back to the fixed coordinate
+  STORY_CLICK if neither image matches.
 
 raid.png
   Used to find and click Raid on the gamemode menu (Story's neighboring
@@ -135,19 +150,30 @@ warning.png
   Start finishes, the runner waits up to 10s for it to clear before
   searching for Start Game at all.
 
-nav_start_game.png / nav_start_game_2.png / nav_start_game_3.png /
-nav_start_game_4.png
-  The in-match "Start Game" (ready-up) button, tried in this order as
-  different visual variants of the same button seen in practice
-  (core.runner._find_start_game_button) -- so the actual click isn't
-  dependent on just one of them matching. nav_start_game.png alone is also
-  used earlier to check party leadership (only the leader sees it) before
-  Pre Start runs.
+nav_start_game/
+  The in-match "Start Game" (ready-up) button -- its folder holds every
+  visual variant seen in practice (the crops once named _3/_4 live here
+  now), all tried per search (core.runner._find_start_game_button), so the
+  actual click isn't dependent on just one of them matching.
+  nav_start_game alone is also used earlier to check party leadership
+  (only the leader sees it) before Pre Start runs.
+
+nav_start_game_confirm/
+  NOT a variant of the above (it was misleadingly named nav_start_game_2
+  once): a second Start Game/confirm button (e.g. a "Start Anyway" prompt)
+  that can appear alongside a warning -- searched on its own by
+  core.runner._click_start_game_2_if_found to skip the warning wait, and
+  also tried as a start click by _find_start_game_button.
 
 victory.png / defeat.png
   Story/Raid's match-result screen, polled throughout battle
-  (core.runner._wait_for_match_result). Expedition doesn't use these at
-  all -- see exp_continue.png/exp_extract.png below instead.
+  (core.runner._wait_for_match_result). Expedition wins differently (see
+  exp_continue.png/exp_extract.png below) but a FAILED expedition run ends
+  on the same Defeat screen -- defeat.png is checked there too, and a hit
+  makes the task repeat the expedition via Repeat Stage like any other
+  loss (core.runner._check_expedition_wave_result). If Expedition's defeat
+  art ever renders differently on your setup, add a crop of it to the
+  defeat/ folder as another variant.
 
 School Grounds.png / Rose Kingdom.png / Fairy King Forest.png /
 King's Tomb.png / Flower Forest.png
@@ -184,33 +210,37 @@ chal_select.png
 
 exp_continue.png / continue_2.png
   Expedition's wave-continue flow. exp_continue.png shows up once per
-  wave clear -- clicking it, then waiting for continue_2.png and clicking
-  that, moves on to the next wave.
+  wave clear -- clicking it, then waiting for continue_2 (or
+  exp_extract_continue, whichever the game shows) and clicking that,
+  moves on to the next wave.
 
-exp_extract.png / continue.png / continue_2.png / extract.png / extract_confirm.png
+exp_extract.png / exp_extract_continue.png / continue_2.png / extract.png /
+extract_confirm.png
   Expedition's recurring checkpoint choice -- exp_extract.png shows up
   once per checkpoint, offering Extract or Continue side by side. Every
   sighting up to the task's configured "Extract After" count is declined
-  (click continue.png, then wait for continue_2.png/continue.png and click
-  that too, same two-step exp_continue's own flow uses, with a cooldown
-  after so a laggy still-visible banner isn't miscounted as the next
-  sighting); the sighting right after that is accepted (click
-  exp_extract.png itself, wait for extract.png and click that). That opens
-  a SECOND confirmation ("Extraction -- Are you sure you'd like to end
-  this run?", its own separate red Extract/Cancel buttons, a rewards
-  preview) -- extract_confirm.png is that dialog's own Extract button,
-  optional/best-effort like nav_disband.png (missing just skips this step
-  rather than failing). Clicking through both lands on the reward screen --
-  Expedition's equivalent of victory.png. A "Select an upgrade!" level-up
-  reward-card modal (select upgrade card.png) can land on top of any of
-  this, or right after Victory before Repeat/Leave Stage even renders --
-  dismissed with a middle-screen click wherever it might show up.
+  (click exp_extract_continue -- the checkmarked "Continue" CHOICE that
+  screen offers; it was named just "continue" once, renamed because a name
+  that generic invited conflicts -- then wait for continue_2/
+  exp_extract_continue and click that too, same two-step exp_continue's
+  own flow uses, with a cooldown after so a laggy still-visible banner
+  isn't miscounted as the next sighting); the sighting right after that is
+  accepted (click exp_extract.png itself, wait for extract.png and click
+  that). That opens a SECOND confirmation ("Extraction -- Are you sure
+  you'd like to end this run?", its own separate red Extract/Cancel
+  buttons, a rewards preview) -- extract_confirm.png is that dialog's own
+  Extract button, optional/best-effort like nav_disband.png (missing just
+  skips this step rather than failing). Clicking through both lands on the
+  reward screen -- Expedition's equivalent of victory.png. A "Select an
+  upgrade!" level-up reward-card modal (select upgrade card.png) can land
+  on top of any of this, or right after Victory before Repeat/Leave Stage
+  even renders -- dismissed with a middle-screen click wherever it might
+  show up.
 
-click_anywhere_to_close.png / click_anywhere_to_close_2.png
+click_anywhere_to_close/
   Optional, checked every poll tick during battle ONLY on Spirit City Act
-  3 (Raid) -- a boss/cutscene intro popup, clicked if found. Two visual
-  variants seen in practice, tried in order (same idea as
-  nav_start_game.png and friends).
+  3 (Raid) -- a boss/cutscene intro popup, clicked if found. Its folder
+  holds every visual variant seen in practice, all tried per search.
 
 upgradeable.png / not_upgradeable.png
   Used by Battle-phase Upgrade Unit blocks (core.runner._run_upgrade_unit_tick).
@@ -261,13 +291,15 @@ include.png / exclude.png
   Used by Team Loadout application to pick Include or Exclude for
   equipment (whichever the task's template has set) after Confirm.
 
-reconnect.png / reconnect_2.png / reconnect_3.png / retry.png
+reconnect/
   Optional. Roblox's own "Reconnect"/"Retry" prompt, shown when it actually
-  disconnects -- checked every poll during a teleport-in wait, but unlike
-  nav_unitmanager, finding ANY of these is treated as an immediate,
-  definite disconnect (no continuous-visibility wait needed). Triggers a
-  deep-link rejoin (core.runner._attempt_rejoin) -- skipped if any OTHER
-  standalone Roblox window is currently open, since the deep link's own
+  disconnects -- the folder holds every wording/art variant seen in
+  practice (including the old separately-named retry.png), all tried per
+  search. Checked every poll during a teleport-in wait, but unlike
+  nav_unitmanager, finding it is treated as an immediate, definite
+  disconnect (no continuous-visibility wait needed). Triggers a deep-link
+  rejoin (core.runner._attempt_rejoin) -- skipped if any OTHER standalone
+  Roblox window is currently open, since the deep link's own
   single-instance handling would force-close it.
 
 nav_settings.png / nav_search.png / toggle_true.png / toggle_false.png /
@@ -276,7 +308,7 @@ nav_settings_on.png
   open Settings, search a setting by name, and read/click its on/off
   toggle. Used by any Setting block of "toggle" kind (_run_setting_block).
 
-restart_btn.png / restart_btn2.png
+restart_btn/
   UNUSED -- leftovers from an earlier "disable Auto Vote Start + restart
   the game via Settings" flow that's since been removed (most people run
   with Auto Vote Start on deliberately, so the macro no longer fights it;

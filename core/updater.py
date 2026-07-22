@@ -10,14 +10,17 @@ it over the install dir, skipping anything the user owns (settings.json,
 debug/, Paths/, Templates/, regenerated Assets -- same list .gitignore
 excludes).
 
-Running as a built exe (Nuitka, see build_nuitka.py): downloads the new
+Running as a built exe (see build_pyinstaller.py): downloads the new
 release's EXE ASSET and swaps the exe file itself -- robocopying loose .py
 source over a compiled exe's directory wouldn't do anything, the exe
 doesn't read scattered source files at runtime. This mirrors the sibling
 Anime Squadron project's core.updater, which already solved the batch-
 script choreography (wait for the old exe to actually exit, move it aside,
 move the new one into place, relaunch, clean up) -- ported here rather than
-re-solving it blind.
+re-solving it blind. The user-editable Assets/ folder beside the exe is
+NEVER part of the swap -- an exe update leaves it alone except for an
+add-only merge of any reference images that are new in the release (see
+merge_assets_update / the Assets section below).
 
 Either way: main.Api.apply_update stages the update, launches the relaunch
 helper detached, THEN closes the app -- the helper doesn't touch any files
@@ -44,6 +47,12 @@ RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 # gets rate-limited (see its docstring), same fallback the sibling Anime
 # Squadron project's core.updater already needed for the same reason.
 FALLBACK_EXE_NAME = "Creams.Macro.-.Anime.Expeditions.exe"
+# The Assets-only zip release.yml uploads alongside the exe (dashed name on
+# purpose -- no space-to-dot rewriting to second-guess). Downloaded during
+# an exe update to pick up any NEW reference images that release added
+# (see merge_assets_update), and by ensure_assets_present when the app
+# launches with no Assets folder beside the exe at all.
+ASSETS_ZIP_NAME = "Assets.zip"
 # BUNDLE_DIR, not APP_DIR -- VERSION ships as part of the app itself (it's
 # what identifies which release you're running), not user-owned data.
 VERSION_FILE = os.path.join(constants.BUNDLE_DIR, "VERSION")
@@ -126,6 +135,7 @@ def check_for_update(timeout: float = 6.0, log=None) -> dict:
             "url": f"https://github.com/{GITHUB_REPO}/releases/tag/{tag}",
             "zip_url": f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip",
             "exe_url": f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{FALLBACK_EXE_NAME}",
+            "assets_zip_url": f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{ASSETS_ZIP_NAME}",
             "notes": "",
         }
 
@@ -139,6 +149,9 @@ def check_for_update(timeout: float = 6.0, log=None) -> dict:
         (a for a in data.get("assets", [])
          if a.get("name", "").lower().endswith(".exe") and "bootstrapper" not in a.get("name", "").lower()),
         None)
+    assets_zip_asset = next(
+        (a for a in data.get("assets", []) if a.get("name", "").lower() == ASSETS_ZIP_NAME.lower()),
+        None)
     return {
         "available": True,
         "version": tag,
@@ -147,6 +160,8 @@ def check_for_update(timeout: float = 6.0, log=None) -> dict:
         "zip_url": data.get("zipball_url") or f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip",
         "exe_url": exe_asset["browser_download_url"] if exe_asset else
                    f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{FALLBACK_EXE_NAME}",
+        "assets_zip_url": assets_zip_asset["browser_download_url"] if assets_zip_asset else
+                          f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{ASSETS_ZIP_NAME}",
         "notes": (data.get("body") or "").strip(),
     }
 
@@ -207,7 +222,22 @@ rem A couple seconds is enough for the just-closed app to release its file
 rem handles before robocopy starts touching the same files.
 ping -n 3 127.0.0.1 >nul
 
-robocopy "{src_root}" "{app_dir}" /E /XD {xd} /XF {xf} /NFL /NDL /NJH /NJS
+rem Assets is excluded from this main copy ON PURPOSE: its images are
+rem user-editable reference crops (replace/add variants without a rebuild,
+rem see core/vision.py + the Image Manager), so blindly overwriting them
+rem with the release's copies would throw away exactly the kind of local
+rem fix the folder exists to hold.
+robocopy "{src_root}" "{app_dir}" /E /XD "Assets" {xd} /XF {xf} /NFL /NDL /NJH /NJS
+
+rem Assets gets its own ADD-ONLY pass instead: /XC /XN /XO together skip
+rem every file that already exists in the destination (changed, newer, and
+rem older ones -- i.e. all of them), so this only brings in reference
+rem images that are genuinely NEW in this release and never touches ones
+rem already on disk. Trade-off, accepted: a release that FIXES an existing
+rem image won't overwrite a local copy of it -- delete the local file (or
+rem folder) and re-update to take the shipped one. Same policy
+rem merge_assets_update applies for exe installs.
+robocopy "{src_root}\\Assets" "{app_dir}\\Assets" /E /XC /XN /XO /XD "item_icons" /NFL /NDL /NJH /NJS
 
 rmdir /s /q "{tmp_root}" >nul 2>nul
 
@@ -216,6 +246,115 @@ start "" "run.bat"
 """
     with open(helper_path, "w", encoding="utf-8") as f:
         f.write(script)
+
+
+# ---------------------------------------------------------------------------
+# Assets (the user-editable reference-image folder shipped BESIDE the exe,
+# not inside it -- see build_pyinstaller.py / release.yml / core.constants.
+# ASSETS_DIR). Add-only on purpose, everywhere: an update may bring in
+# reference images that are NEW in a release (a new macro step's button
+# crop, a new map's name label), but never overwrites a file already on
+# disk -- those are exactly the user-replaced/user-added variants the loose
+# folder exists to protect. Trade-off, accepted: a release that FIXES an
+# existing image won't propagate over a local copy -- delete the local
+# file/folder and update again to take the shipped one. The source-update
+# path enforces the same policy via robocopy /XC /XN /XO (see
+# _write_source_helper_script).
+# ---------------------------------------------------------------------------
+
+def _extract_assets_zip_addonly(zip_path: str, log) -> int:
+    """Extracts an Assets.zip into constants.ASSETS_DIR, skipping every file
+    that already exists (see the add-only policy note above). Handles the
+    zip's entries whether they're rooted at "Assets/..." (how release.yml's
+    Compress-Archive lays them out) or bare "ui/..." -- and refuses any
+    entry that would escape the Assets folder (absolute paths / ".."), since
+    zip filenames are ultimately untrusted input. Returns how many files
+    were actually written."""
+    added = 0
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            parts = info.filename.replace("\\", "/").split("/")
+            if parts and parts[0].lower() == "assets":
+                parts = parts[1:]
+            if not parts or any(p in ("", ".", "..") for p in parts) or ":" in parts[0]:
+                continue
+            dest = os.path.join(constants.ASSETS_DIR, *parts)
+            if os.path.exists(dest):
+                continue  # user's file (or an unchanged shipped one) -- never overwrite
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with zf.open(info) as src, open(dest, "wb") as out:
+                out.write(src.read())
+            added += 1
+    if added:
+        log(f"[Update] Added {added} new Assets file(s) (existing files left untouched).")
+    return added
+
+
+def merge_assets_update(assets_zip_url: str, log) -> bool:
+    """Downloads a release's Assets.zip and add-only merges it into the
+    local Assets folder -- called during an exe update (main.Api._apply_
+    update_background) so a release that ADDS reference images doesn't
+    leave the freshly-swapped exe searching for files that aren't on disk
+    yet. Never raises: an exe update that can't fetch Assets.zip (rate
+    limit, offline blip mid-update) should still swap the exe rather than
+    abort -- worst case a genuinely-new image is missing and the runner's
+    own TemplateNotFound message says exactly which and where."""
+    tmp_root = tempfile.mkdtemp(prefix="aecm_assets_")
+    zip_path = os.path.join(tmp_root, ASSETS_ZIP_NAME)
+    try:
+        log(f"[Update] Downloading {assets_zip_url}...")
+        resp = requests.get(assets_zip_url, timeout=60, stream=True)
+        resp.raise_for_status()
+        with open(zip_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                f.write(chunk)
+        _extract_assets_zip_addonly(zip_path, log)
+        return True
+    except Exception as exc:
+        log(f"[Update] Assets merge skipped ({exc}) -- existing Assets folder left as-is.")
+        return False
+    finally:
+        try:
+            os.remove(zip_path)
+            os.rmdir(tmp_root)
+        except OSError:
+            pass
+
+
+def ensure_assets_present(log) -> bool:
+    """Startup safety net for a bare exe with NO Assets folder next to it
+    (someone shared just the exe, or an old bootstrapper install predating
+    the exe+Assets zip layout): without Assets/ui every image search is
+    dead on arrival, so try to fetch this exact version's Assets.zip from
+    its GitHub release and lay it down. Checks the ui/ subfolder rather
+    than the bare Assets dir since Settings' "Open Assets Folder" creates
+    empty scaffolding folders -- existing-but-empty needs the download just
+    as much as missing does. No-op when images are already there (the
+    normal case, costs one isdir+listdir); returns False, with the log
+    saying so, when offline/rate-limited -- the app still launches, just
+    with image search unavailable until Assets exists."""
+    ui_dir = os.path.join(constants.ASSETS_DIR, "ui")
+    try:
+        if os.path.isdir(ui_dir) and os.listdir(ui_dir):
+            return True
+    except OSError:
+        pass
+    log("[Update] No Assets folder found beside the app -- downloading it from GitHub...")
+    # This exact version's Assets first (guaranteed to match what the exe
+    # searches for), falling back to latest if that tag's asset is missing
+    # (e.g. a release cut before Assets.zip existed).
+    current = get_current_version()
+    urls = [f"https://github.com/{GITHUB_REPO}/releases/download/v{current}/{ASSETS_ZIP_NAME}",
+            f"https://github.com/{GITHUB_REPO}/releases/latest/download/{ASSETS_ZIP_NAME}"]
+    for url in urls:
+        if merge_assets_update(url, log):
+            log("[Update] Assets folder restored.")
+            return True
+    log("[Update] Couldn't download the Assets folder -- image search won't work until "
+        "Assets/ exists next to the app (re-download the release zip to fix this).")
+    return False
 
 
 # ---------------------------------------------------------------------------

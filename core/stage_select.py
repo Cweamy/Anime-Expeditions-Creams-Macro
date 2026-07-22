@@ -56,13 +56,14 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
         for nudge in range(scroll_nudges + 1):
             if stop_event is not None and stop_event.is_set():
                 return False
-            # Each map can have a second reference crop ("<map name> 2.png",
-            # space before the 2 to match this folder's own naming, not the
-            # underscore _2 convention Assets/ui uses) -- same idea as the
-            # gamemode cards' own _2 variants, tried in order.
+            # Every reference crop for this map (the original AND any
+            # "<map name> 2.png"-style extras) lives in Assets/maps/
+            # <map name>/ and gets tried automatically as a variant of the
+            # one map name (see vision.template_variant_paths) -- no more
+            # separately-searched " 2" name.
             try:
                 match, found_name = vision.find_image_any(
-                    hwnd, (map_name, f"{map_name} 2"), region=NAME_BAND_REGION, threshold=MATCH_THRESHOLD,
+                    hwnd, (map_name,), region=NAME_BAND_REGION, threshold=MATCH_THRESHOLD,
                     template_dir=vision.MAPS_DIR)
             except vision.TemplateNotFound as exc:
                 log(f"[Macro] {exc}")

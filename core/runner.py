@@ -192,29 +192,32 @@ SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT = 20.0  # generous per chunk -- a slow telepor
 # How long teleportstuck.png (optional -- see Assets/ui/README.txt) must be
 # CONTINUOUSLY visible during a teleport-in wait before the game is treated
 # as broken and needing a rejoin, rather than just a slow loading screen.
-# reconnect.png/reconnect_2.png/reconnect_3.png/retry.png (Roblox's own
-# disconnect prompt) are a DEFINITE signal on their own -- no continuous-
-# visibility wait needed, unlike teleportstuck's spinner which can be a
-# false alarm for a moment.
+# Roblox's own disconnect prompt (Assets/ui/reconnect/ -- several visual
+# variants incl. the "Retry" wording, all in that one folder) is a DEFINITE
+# signal on its own -- no continuous-visibility wait needed, unlike
+# teleportstuck's spinner which can be a false alarm for a moment.
 TELEPORT_STUCK_TIMEOUT = 10.0
 TELEPORT_POLL_INTERVAL = 0.3
-RECONNECT_IMAGE_NAMES = ("reconnect", "reconnect_2", "reconnect_3", "retry")
+RECONNECT_IMAGE_NAMES = ("reconnect",)
 
-# Same idea as RECONNECT_IMAGE_NAMES -- these four buttons/cards each got a
-# second visual variant (nav_play_2.png etc.) added alongside the original,
-# so both are tried in turn (see vision.find_image_any/wait_for_image_any)
-# instead of only ever matching the first one and treating the button as
-# "not there" whenever a setup renders the other variant.
-NAV_PLAY_IMAGE_NAMES = ("nav_play", "nav_play_2")
-EXPEDITION_IMAGE_NAMES = ("expedition", "expedition_2")
-CHALLENGE_IMAGE_NAMES = ("challenge", "challenge_2")
-RAID_IMAGE_NAMES = ("raid", "raid_2")
-STORY_IMAGE_NAMES = ("story", "story_2")
-NAV_START_IMAGE_NAMES = ("nav_start", "nav_start_2")
-NAV_DISBAND_IMAGE_NAMES = ("nav_disband", "nav_disband_2")
-# 10 visual variants on file (Assets/ui/priority_upgrade/priority_upgrade.png,
-# _1 through _9) -- tried in order, same idea as every other _2/_3/... set.
-PRIORITY_UPGRADE_IMAGE_NAMES = ("priority_upgrade",) + tuple(f"priority_upgrade_{i}" for i in range(1, 10))
+# These used to be ("name", "name_2") lists of separately-named visual
+# variants -- that whole mechanism now lives in the template folders
+# themselves: every image in Assets/ui/<name>/ is tried as a variant of
+# that one name (see vision.template_variant_paths), so each of these is
+# back to a single searched name and adding another variant is "drop a
+# .png in the folder" (or Settings > General > Image Manager), not a code
+# change. Kept as tuples because every call site feeds them to
+# vision.find_image_any/wait_for_image_any, which take a tuple of names.
+NAV_PLAY_IMAGE_NAMES = ("nav_play",)
+EXPEDITION_IMAGE_NAMES = ("expedition",)
+CHALLENGE_IMAGE_NAMES = ("challenge",)
+RAID_IMAGE_NAMES = ("raid",)
+STORY_IMAGE_NAMES = ("story",)
+NAV_START_IMAGE_NAMES = ("nav_start",)
+NAV_DISBAND_IMAGE_NAMES = ("nav_disband",)
+# 10 visual variants on file, all inside Assets/ui/priority_upgrade/ --
+# every one tried per search, same folder-variant mechanism as above.
+PRIORITY_UPGRADE_IMAGE_NAMES = ("priority_upgrade",)
 
 # Roblox deep link used to rejoin after a detected disconnect -- reopens
 # (or, if the client fully closed, relaunches) straight into this specific
@@ -617,20 +620,19 @@ class MacroRunner:
         # popup (a boss/cutscene intro) mid-battle -- one-shot/best-effort
         # like nav_disband, checked every poll tick while watching for the
         # match result (see watch_close_popup in _wait_for_match_result).
-        # Two visual variants seen in practice (same idea as nav_start_game/
-        # _2/_3/_4), tried in order.
-        for name in ("click_anywhere_to_close", "click_anywhere_to_close_2"):
-            try:
-                match = vision.find_image(hwnd, name)
-            except vision.TemplateNotFound:
-                continue
-            if match is None:
-                continue
-            debug_path = self._debug_save(hwnd, name, match)
-            suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found \"Click anywhere to close\" (score {match['score']:.2f}) -- clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, match)
+        # Its visual variants all live in Assets/ui/click_anywhere_to_close/
+        # and are tried automatically per search (see
+        # vision.template_variant_paths).
+        try:
+            match = vision.find_image(hwnd, "click_anywhere_to_close")
+        except vision.TemplateNotFound:
             return
+        if match is None:
+            return
+        debug_path = self._debug_save(hwnd, "click_anywhere_to_close", match)
+        suffix = f" Debug: {debug_path}" if debug_path else ""
+        self._log(f"[Macro] Found \"Click anywhere to close\" (score {match['score']:.2f}) -- clicking it.{suffix}")
+        vision.click_match(self._mouse, hwnd, match)
 
     def _dismiss_reward_card_if_found(self, hwnd) -> bool:
         """A level-up "Select an upgrade!" reward-card modal can show up at
@@ -1388,8 +1390,8 @@ class MacroRunner:
         # from a real test run where extract_after=2 still extracted on the
         # very first sighting instead of continuing through 2 checkpoints
         # first. So this DOES need real counting: decline (click the
-        # "continue" choice on this same screen) every sighting up to
-        # extract_after, only accept the one right after that.
+        # "exp_extract_continue" choice on this same screen) every sighting
+        # up to extract_after, only accept the one right after that.
         self._expedition_extract_count = 0
         self._expedition_extract_accept_at = max(0, int(task.get("extract_after") or 0)) + 1
         # Spirit City Act 3's boss/cutscene "Click anywhere to close" popup
@@ -1409,12 +1411,12 @@ class MacroRunner:
         if isinstance(blocks, list):
             # Oldest flat-list format -- ui/app.js's loadSelectedTemplate()
             # migrates this into prestart/battle client-side the moment you
-            # open it in Creation, but never re-saves it to disk on its
+            # open it in Macro Manager, but never re-saves it to disk on its
             # own -- until you open + Save it again, this stays stuck.
             # Logged here too (already logged by _run_prestart_blocks for
             # Pre Start) so missing Battle blocks is never a silent no-op.
             self._log(f'[Macro] Template "{macro_name}" is saved in an old format -- '
-                       f'open it in Creation and Save again to run its Battle blocks.')
+                       f'open it in Macro Manager and Save again to run its Battle blocks.')
             return []
         if "battle" in blocks:
             return self._strip_auto_upgrade_for_expedition(blocks.get("battle") or [], task)
@@ -1514,21 +1516,34 @@ class MacroRunner:
         """Expedition doesn't show a Victory popup mid-run. exp_continue is
         every regular wave transition AND the mid-run checkpoint (the
         checkpoint is just another exp_continue, not exp_extract) -- click
-        it, then Continue_2 (or plain Continue, whichever the game actually
-        shows) to move on. exp_extract only shows up once, whenever the
+        it, then continue_2 (or the checkmarked exp_extract_continue,
+        whichever the game actually shows) to move on. exp_extract only
+        shows up once, whenever the
         game itself decides the task's "Extract After" boss/checkpoint has
         been cleared -- there's nothing for the macro to count or decline,
         it just accepts it the moment it's seen (click exp_extract, then
         extract, landing on the reward screen -- the same terminal state
-        Victory is for Story/Raid). Returns "win" once extracted, or None
+        Victory is for Story/Raid).
+
+        A genuinely FAILED run (team/base wiped mid-wave) shows the Defeat
+        result screen -- checked here every tick and returned as "loss", so
+        _handle_match_result records it and, with repeats left on the task,
+        clicks Repeat Stage to immediately re-run the expedition instead of
+        the old behavior (nothing ever matched, the run sat there until
+        MATCH_RESULT_TIMEOUT gave up ~30 min later, then burned a recovery
+        attempt re-entering from the lobby). If Expedition's defeat art
+        ever differs from Story/Raid's on some screen/setup, add a crop of
+        it to Assets/ui/defeat/ as another variant (Settings > General >
+        Image Manager) -- same search name, no code change.
+
+        Returns "win" once extracted, "loss" on a detected defeat, or None
         either while still mid-run (the caller just keeps polling) OR when
-        a click's expected follow-up never showed up. Expedition has no
-        "defeat" image to check the way Story/Raid do -- a missing
-        follow-up here is a macro detection miss, not proof the run was
-        actually lost, so it's deliberately NOT reported as "loss" (which
-        _handle_match_result would record/webhook as a real Defeat). None
-        makes the caller treat it the same as any other setup failure:
-        recover to the lobby and move on, with nothing false recorded."""
+        a click's expected follow-up never showed up -- a missing follow-up
+        is a macro detection miss, not proof the run was actually lost, so
+        it's deliberately NOT reported as "loss" (which would record/
+        webhook a Defeat that never happened). None makes the caller treat
+        it the same as any other setup failure: recover to the lobby and
+        retry, with nothing false recorded."""
         # The SAME "Start Game?" confirmation _play_one_match already
         # clicks once before entering Battle can show up AGAIN mid-run --
         # confirmed from a real stuck report: exp_continue/continue_2
@@ -1567,12 +1582,33 @@ class MacroRunner:
         if self._dismiss_reward_card_if_found(hwnd):
             return None
 
+        # A failed run (team/base wiped) ends on the Defeat result screen
+        # with Repeat/Leave Stage -- same panel Story/Raid loses land on, so
+        # the same "defeat" template finds it. Checked BEFORE the extract/
+        # continue searches: once this screen is up none of those buttons
+        # exist anymore, and returning "loss" is what lets the task's
+        # normal repeat flow (Repeat Stage, see _handle_match_result)
+        # re-run the expedition right away. Best-effort like every other
+        # optional template -- a missing defeat image just skips the check
+        # (and a real failure then falls back to the old slow
+        # timeout-and-recover path).
+        try:
+            defeat_match = vision.find_image(hwnd, "defeat")
+        except vision.TemplateNotFound:
+            defeat_match = None
+        if defeat_match is not None:
+            debug_path = self._debug_save(hwnd, "defeat", defeat_match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f"[Macro] Expedition run failed -- Defeat screen found "
+                       f"(score {defeat_match['score']:.2f}).{suffix}")
+            return "loss"
+
         # exp_extract is a recurring checkpoint choice -- Extract and
         # Continue offered side by side, not a one-shot terminal event (see
         # the counting reasoning in _play_one_match's reset of these two
         # fields). Decline every sighting up to extract_after (click the
-        # "continue" choice THIS screen offers), only accept the sighting
-        # right after that.
+        # "exp_extract_continue" choice THIS screen offers), only accept
+        # the sighting right after that.
         try:
             extract_match = vision.find_image(hwnd, "exp_extract")
         except vision.TemplateNotFound:
@@ -1610,8 +1646,15 @@ class MacroRunner:
                 # because it's stuck re-declining the identical checkpoint).
                 # Retrying the click until it's confirmed gone is what
                 # actually fixes that, not just clicking once and hoping.
-                if not self._click_and_verify_gone(hwnd, stop_event, "continue", EXPEDITION_EXTRACT_CONFIRM_TIMEOUT):
-                    self._log('[Macro] "continue" never showed up after exp_extract -- will retry next poll.')
+                # exp_extract_continue (was named just "continue" -- renamed
+                # since a name that generic invited conflicts with
+                # continue_2 and any future plain-Continue button): the
+                # checkmarked "Continue" CHOICE this extract screen offers
+                # beside Extract, i.e. the decline button.
+                if not self._click_and_verify_gone(hwnd, stop_event, "exp_extract_continue",
+                                                   EXPEDITION_EXTRACT_CONFIRM_TIMEOUT):
+                    self._log('[Macro] "exp_extract_continue" never showed up after exp_extract -- '
+                               'will retry next poll.')
                     return None
                 if not self._click_and_verify_gone(hwnd, stop_event, "continue_2", EXPEDITION_WAVE_TIMEOUT):
                     self._log('[Macro] "continue_2" never showed up after declining exp_extract -- '
@@ -1681,22 +1724,24 @@ class MacroRunner:
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f'[Macro] Found "exp_continue" (score {continue_match["score"]:.2f}) -- clicking it.{suffix}')
             vision.click_match(self._mouse, hwnd, continue_match)
-            # continue_2 is the expected follow-up, but the plain "continue"
-            # button can show up here instead depending on the wave --
-            # checking for either one (same idea as the _2 image variants
-            # elsewhere) instead of only continue_2 avoids a false "never
-            # showed up" stop when the follow-up screen just wasn't the one
-            # specifically expected.
+            # continue_2 is the expected follow-up, but the checkmarked
+            # Continue (exp_extract_continue -- same art the extract
+            # screen's decline choice uses) can show up here instead
+            # depending on the wave -- checking for either one instead of
+            # only continue_2 avoids a false "never showed up" stop when
+            # the follow-up screen just wasn't the one specifically
+            # expected.
             try:
                 follow_match, follow_name = vision.wait_for_image_any(
-                    hwnd, ("continue_2", "continue"), timeout=EXPEDITION_WAVE_TIMEOUT, stop_event=stop_event)
+                    hwnd, ("continue_2", "exp_extract_continue"),
+                    timeout=EXPEDITION_WAVE_TIMEOUT, stop_event=stop_event)
             except vision.TemplateNotFound:
                 follow_match, follow_name = None, None
             if follow_match is None:
                 if stop_event is not None and stop_event.is_set():
                     return None
-                self._log('[Macro] Neither "continue_2" nor "continue" showed up after exp_continue -- '
-                           'will retry next poll.')
+                self._log('[Macro] Neither "continue_2" nor "exp_extract_continue" showed up after '
+                           'exp_continue -- will retry next poll.')
                 return None
             debug_path = self._debug_save(hwnd, follow_name, follow_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -1852,6 +1897,10 @@ class MacroRunner:
                 self._run_setting_block(hwnd, stop_event, block, self._battle_block_index + 1)
                 done = True
                 self._battle_block_state = {}
+            elif btype == "click":
+                self._run_click_block(hwnd, stop_event, block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
             else:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
                            f'("{btype}") -- not runnable in Battle yet.')
@@ -1866,6 +1915,32 @@ class MacroRunner:
             # pick back up here on the next poll tick, rather than blocking
             # the whole loop (and the Victory/Defeat check) on it now.
             return
+
+    def _run_click_block(self, hwnd, stop_event: threading.Event, block: dict, block_num: int,
+                           phase_label: str = "Battle") -> None:
+        """Click block (Macro Manager > Setup > Click): one raw click at the
+        block's fixed (x, y) -- the same 1152x756 window-client coords Place
+        Unit's picker writes, so the Set button's map/Roblox-screen picker
+        works for this block unchanged. For any button/UI element no
+        dedicated block covers -- deliberately no image search or
+        verification: it clicks where told, whatever is (or isn't) there,
+        which is exactly what makes it a useful escape hatch."""
+        label = f"{phase_label} block #{block_num} (Click)"
+        params = block.get("params", {})
+        try:
+            x, y = int(params.get("x") or 0), int(params.get("y") or 0)
+        except (TypeError, ValueError):
+            self._log(f"[Macro] {label}: bad x/y -- skipping.")
+            return
+        if not x and not y:
+            # (0, 0) is the unset default straight from the palette -- a
+            # deliberate top-left-corner click is not a real use case, but a
+            # forgotten Set button absolutely is.
+            self._log(f"[Macro] {label}: no position set -- skipping.")
+            return
+        self._log(f"[Macro] {label}: clicking ({x}, {y}).")
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._mouse.click(left + x, top + y)
 
     def _placed_unit_click_point(self, block: dict, label: str):
         index = block.get("params", {}).get("index")
@@ -2627,6 +2702,12 @@ class MacroRunner:
         if equip_match is not None:
             vision.click_match(self._mouse, hwnd, equip_match)
             self._log(f"[Macro] Equipment: {equipment}.")
+            # Without a settle here, the caller's finally-block H tap (see
+            # _apply_team_loadout) fires on the very next line -- pressing H
+            # to close the panel before this click has actually registered
+            # in-game, so the equipment choice lands inconsistently or not
+            # at all and can leave the panel stuck in a half-closed state.
+            time.sleep(0.5)
         elif not stop_event.is_set():
             self._log(f'[Macro] "{equipment}" option never showed up -- skipping the equipment choice.')
 
@@ -2647,7 +2728,7 @@ class MacroRunner:
         blocks = data.get("blocks") or {}
         if isinstance(blocks, list):
             self._log(f'[Macro] Template "{macro_name}" is saved in an old format -- '
-                       f'open it in Creation and Save again to run its Pre Start blocks.')
+                       f'open it in Macro Manager and Save again to run its Pre Start blocks.')
             return
         prestart_blocks = blocks.get("prestart") if "prestart" in blocks else blocks.get("before")
         prestart_blocks = self._strip_auto_upgrade_for_expedition(prestart_blocks or [], task)
@@ -2717,6 +2798,8 @@ class MacroRunner:
                     self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, i)
                 elif btype == "walk_path":
                     self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {}, block, first_repeat)
+                elif btype == "click":
+                    self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
                 else:
                     self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
                 time.sleep(0.2)  # brief gap between blocks so the game UI can settle
@@ -3456,31 +3539,36 @@ class MacroRunner:
         return False
 
     def _click_start_game_2_if_found(self, hwnd) -> bool:
-        # nav_start_game_2 -- a second Start Game/confirm button that can
-        # show up alongside the warning itself (e.g. a "Start Anyway"
-        # prompt) -- clicking it skips the wait in
+        # nav_start_game_confirm (was "nav_start_game_2" -- renamed because
+        # the _2 suffix made it look like a mere visual variant of
+        # nav_start_game, which it is NOT): a second Start Game/confirm
+        # button that can show up alongside the warning itself (e.g. a
+        # "Start Anyway" prompt) -- clicking it skips the wait in
         # _wait_out_start_game_warning entirely instead of sitting through
         # the full timeout for a warning that's actually already
         # dismissable right now.
         try:
-            skip_match = vision.find_image(hwnd, "nav_start_game_2")
+            skip_match = vision.find_image(hwnd, "nav_start_game_confirm")
         except vision.TemplateNotFound:
             return False
         if skip_match is None:
             return False
-        self._log(f"[Macro] Found nav_start_game_2 (score {skip_match['score']:.2f}) -- "
+        self._log(f"[Macro] Found nav_start_game_confirm (score {skip_match['score']:.2f}) -- "
                    f"clicking it to skip the warning wait.")
         vision.click_match(self._mouse, hwnd, skip_match)
         return True
 
     def _find_start_game_button(self, hwnd, stop_event: threading.Event = None, timeout: float = 0):
-        """Tries nav_start_game, then nav_start_game_2, nav_start_game_3,
-        nav_start_game_4 in order -- different visual variants of the same
-        button seen in practice, so the actual "start the round" click
-        (see _play_one_match) isn't dependent on just one of them matching.
-        Returns (name, match) for whichever was found first, or (None,
-        None) if none of them were -- missing/not-yet-added variants are
-        skipped silently, same as any other optional template.
+        """Tries nav_start_game (whose folder holds every visual variant of
+        the ready-up button seen in practice -- the old separately-named
+        _3/_4 crops live in there now, all tried automatically per search),
+        then nav_start_game_confirm (a DIFFERENT button -- the "Start
+        Anyway"-style second confirm, see _click_start_game_2_if_found) --
+        so the actual "start the round" click (see _play_one_match) isn't
+        dependent on just one image matching. Returns (name, match) for
+        whichever was found first, or (None, None) if none of them were --
+        missing/not-yet-added templates are skipped silently, same as any
+        other optional template.
 
         timeout=0 (the default) is a single instant pass -- used right
         after a click to check it's gone, where waiting around would just
@@ -3491,7 +3579,7 @@ class MacroRunner:
         Pre Start's place_unit clicks run right up until this point."""
         deadline = time.time() + max(0.0, timeout)
         while True:
-            for name in ("nav_start_game", "nav_start_game_2", "nav_start_game_3", "nav_start_game_4"):
+            for name in ("nav_start_game", "nav_start_game_confirm"):
                 try:
                     match = vision.find_image(hwnd, name)
                 except vision.TemplateNotFound:
@@ -4073,10 +4161,11 @@ class MacroRunner:
             return True
 
         # story.png alone used to not be distinct enough to match reliably
-        # (see STORY_CLICK's comment) -- story_2.png is a second reference
-        # crop for the same card (same idea as nav_play/expedition/raid/
-        # challenge's own _2 variants), so image search is worth trying
-        # again here before falling back to the fixed coordinate.
+        # (see STORY_CLICK's comment) -- Assets/ui/story/ holds a second
+        # reference crop of the same card (every image in the folder is
+        # tried per search, see vision.template_variant_paths), so image
+        # search is worth trying again here before falling back to the
+        # fixed coordinate.
         self._log("[Macro] Menu open -- searching for Story...")
         self._set_status(action="Clicking Story...")
         try:

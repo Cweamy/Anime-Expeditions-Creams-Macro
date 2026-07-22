@@ -34,9 +34,11 @@ PATHS_DIR = os.path.join(constants.APP_DIR, "Paths")
 # overrides it (see load_path).
 DEFAULT_PATHS_DIR = os.path.join(constants.BUNDLE_DIR, "Paths", "defaults")
 # The map-name -> path-name mapping to go with DEFAULT_PATHS_DIR above --
-# shipped/bundled for the same reason, read by main.Api.get_default_walk_paths/
-# start_macro and merged with the user's own settings.json overrides (a
-# user's own mapping for the same map wins).
+# read by main.Api.get_default_walk_paths/start_macro and merged with the
+# user's own settings.json overrides (a user's own mapping for the same map
+# wins). Lives in Assets/, which since the exe+Assets zip layout is the
+# loose folder beside the exe (see core.constants.ASSETS_DIR), not inside
+# the bundle.
 SHIPPED_DEFAULT_WALK_PATHS_FILE = os.path.join(constants.ASSETS_DIR, "default_walk_paths.json")
 
 _POLL_INTERVAL = 0.03  # 30ms -- well under human key-tap duration, cheap enough to poll forever

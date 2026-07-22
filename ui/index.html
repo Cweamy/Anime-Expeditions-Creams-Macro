@@ -39,7 +39,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
         </svg>
       </button>
-      <button id="nav-creation" onclick="switchScreen('creation')" class="nav-btn no-drag" data-tooltip="Creation">
+      <button id="nav-creation" onclick="switchScreen('creation')" class="nav-btn no-drag" data-tooltip="Macro Manager">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16M4 12h16"/>
         </svg>
@@ -901,20 +901,45 @@
         </section>
       </div>
 
+      <!-- Everything image-search related in one General card: the Image
+           Manager (browse every reference image the macro searches for --
+           one folder per searched name, any number of variant crops each,
+           see core/vision.py's template_variant_paths -- plus capture-and-
+           crop straight from the live Roblox window: the in-app answer to
+           "the macro can't find X on my screen", no file explorer or image
+           editor needed), the raw Assets folder for hand edits, and the
+           cache reload that makes hand edits take effect without a
+           restart. -->
       <div class="settings-category" data-cat="general" style="margin-top: 20px;">
         <section class="rp-panel">
           <header class="rp-panel-head">
-            <span class="rp-head-tag" style="--rp-tag: var(--slate);">Control</span>
-            <span class="rp-head-title">Custom Images</span>
+            <span class="rp-head-tag" style="--rp-tag: var(--slate);">Vision</span>
+            <span class="rp-head-title">Image Search</span>
             <span class="rp-head-rule"></span>
           </header>
 
-          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+          <div class="setting-row" style="padding: 14px;">
+            <div>
+              <div class="setting-label">Image Manager</div>
+              <div class="setting-desc">Browse every image the macro searches for, and capture new ones from your Roblox screen -- add extra crops to any button the macro can't find on your setup.</div>
+            </div>
+            <button id="btn-image-manager" onclick="openImageManager()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Open</button>
+          </div>
+
+          <div class="setting-row" style="padding: 14px;">
             <div>
               <div class="setting-label">Open Assets Folder</div>
-              <div class="setting-desc">If a button isn't being found reliably on your setup, drop a same-named screenshot here to replace it -- no reinstall needed.</div>
+              <div class="setting-desc">Every image lives here as a plain .png -- one folder per button/text, every image inside gets tried. Add or replace crops by hand, then Reload below.</div>
             </div>
             <button id="btn-open-assets" onclick="openAssetsFolder(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Open</button>
+          </div>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Reload Vision Images</div>
+              <div class="setting-desc">Picks up images you added/replaced in the Assets folder by hand, without restarting. (The Image Manager does this automatically.)</div>
+            </div>
+            <button id="btn-reload-vision" onclick="reloadVisionTemplates(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Reload</button>
           </div>
         </section>
       </div>
@@ -960,7 +985,7 @@
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
             <div>
               <div class="setting-label">Test Walking Path</div>
-              <div class="setting-desc">Replays a saved path (Creation &gt; Custom Path &gt; Record) against the live game.</div>
+              <div class="setting-desc">Replays a saved path (Macro Manager &gt; Walk Path &gt; Record) against the live game.</div>
             </div>
             <div class="flex items-center gap-2 flex-shrink-0">
               <select id="debug-path-select" class="task-select" style="width: 160px;"></select>
@@ -1156,7 +1181,7 @@
   <!-- ============ Save-recorded-path modal ============
        Replaces the native prompt() after Stop Recording: the prompt rendered
        behind the docked Roblox window (a native child HWND paints over
-       everything in its rect). toggleRecordPath switches back to Creation
+       everything in its rect). toggleRecordPath switches back to Macro Manager
        (game hidden there) before showing this, so it is always on top. -->
   <div id="path-name-modal" class="modal-overlay" style="display:none;">
     <div class="modal-panel" style="width: 380px; max-width: 92vw;">
@@ -1179,7 +1204,7 @@
        Floating pill shown while a walk path is being recorded (see
        toggleRecordPath). Recording jumps the UI to the Dashboard so the
        player can see the game -- this keeps a Stop button reachable there
-       instead of making them navigate back to Creation's Walk Path row.
+       instead of making them navigate back to Macro Manager's Walk Path row.
        Pinned bottom-right ON PURPOSE: the docked Roblox child window paints
        over any DOM it overlaps, and the bottom-right corner is the one spot
        that is never inside the game slot. -->
@@ -1190,7 +1215,7 @@
   </div>
 
   <!-- ============ Place Unit map picker modal ============
-       Opened by openPlaceUnitModal() (Creation > Place Unit block > Set).
+       Opened by openPlaceUnitModal() (Macro Manager > Place Unit block > Set).
        Category tabs -> map thumbnail grid -> zoomable/pannable canvas; the
        canvas can also show a frozen Roblox screenshot instead of a map
        image (see usePlaceUnitRobloxScreen) -- either way it's a static
@@ -1219,6 +1244,75 @@
           </div>
           <canvas id="pu-canvas" class="pu-canvas" width="760" height="440"></canvas>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Image Manager modal ============
+       Opened by openImageManager() (Settings > General > Image Search). Two
+       views inside one modal:
+
+       LIBRARY -- every reference image the macro searches for, one card per
+       searched name (a folder on disk, see core/vision.py's
+       template_variant_paths), grouped by category tab (UI Buttons / Map
+       Names), filterable. Each card shows all of that name's variant crops;
+       hovering a crop reveals a delete button (two-step: first click arms
+       it red, second click actually deletes -- no native confirm() popup,
+       which would render behind the docked game window).
+
+       CAPTURE -- a frozen screenshot of the live Roblox window on a
+       zoomable canvas (same one-shot mss grab as the Set Position picker,
+       so nothing done here can ever reach the real game): drag a box
+       around the button/text, pick or type the name it belongs to, Save.
+       The crop is cut server-side from the exact captured frame (see
+       main.Api.save_image_search_crop) and lands in that name's Assets
+       folder as an extra variant image the very next search will try.
+       Stays in capture view after saving on purpose -- one screenshot
+       usually yields several crops in a row. -->
+  <div id="im-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) closeImageManager()">
+    <div class="modal-panel" style="width: min(940px, 96vw);">
+      <div class="modal-head">
+        <span class="modal-title">Image Manager</span>
+        <span class="modal-close" onclick="closeImageManager()">&times;</span>
+      </div>
+      <div class="modal-body">
+
+        <!-- Toolbar: category tabs + name filter + folder/capture actions.
+             Visible in BOTH views -- the active tab is also what a saved
+             crop's category is, so it stays switchable while cropping. -->
+        <div class="flex items-center gap-2 flex-wrap" style="margin-bottom: 10px;">
+          <div id="im-category-tabs" class="flex items-center gap-1"></div>
+          <input id="im-filter" class="block-input" style="width: 150px;" type="text"
+                 placeholder="Filter names..." oninput="renderImageLibrary()">
+          <span class="flex-1"></span>
+          <button class="task-toolbar-btn" onclick="openAssetsFolder(this)" title="Open the Assets folder in File Explorer">Open Folder</button>
+          <button id="im-capture-btn" class="pu-set-btn" onclick="startImageCapture()" title="Screenshot your Roblox window and crop new reference images from it">Capture Roblox</button>
+        </div>
+
+        <!-- LIBRARY view: card grid, filled by renderImageLibrary(). -->
+        <div id="im-library" class="im-library"></div>
+
+        <!-- CAPTURE view: crop canvas + save bar, hidden until a capture. -->
+        <div id="im-capture-wrap" style="display:none;">
+          <div class="flex items-center gap-2" style="margin-bottom: 8px;">
+            <button class="task-toolbar-btn" onclick="backToImageLibrary()">&larr; Library</button>
+            <span class="text-[10px]" style="color: var(--text-muted);">Drag a box around the button/text &middot; scroll to zoom &middot; right-drag to pan &middot; crop tight, background included</span>
+            <span class="flex-1"></span>
+            <span id="im-crop-readout" class="task-chip">No selection</span>
+          </div>
+          <canvas id="im-canvas" class="pu-canvas" width="880" height="430"></canvas>
+          <div class="flex items-center gap-2" style="margin-top: 10px;">
+            <input id="im-save-name" class="block-input" style="flex: 1;" type="text" list="im-name-list"
+                   placeholder="Save as... (pick an existing name to add a variant, or type a new one)">
+            <!-- Existing names of the ACTIVE category -- picking one adds
+                 the crop as an extra variant of that name; anything else
+                 creates a brand-new name/folder. -->
+            <datalist id="im-name-list"></datalist>
+            <button class="task-toolbar-btn" onclick="startImageCapture()" title="Take a fresh screenshot (e.g. after changing screens in Roblox)">Retake</button>
+            <button id="im-save-btn" class="pu-set-btn" onclick="saveImageCrop()">Save Crop</button>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>

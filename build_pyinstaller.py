@@ -43,15 +43,17 @@ HIDDEN_IMPORTS = [
 # Data PyInstaller wouldn't otherwise know to bundle -- extracted to
 # sys._MEIPASS at runtime (see core/constants.py's BUNDLE_DIR, which reads
 # sys._MEIPASS specifically for this).
+#
+# Assets/ is deliberately NOT in this list anymore: releases ship it as a
+# loose folder in a zip beside the exe (see release.yml) so users can open,
+# replace, and add reference images (Assets/ui/<name>/ variant folders --
+# see core/vision.py and the Image Manager in Settings > Debug) without a
+# rebuild. Bundling it too would mean two competing copies -- the ephemeral
+# extracted one and the editable one -- which is exactly the confusion the
+# old ASSETS_OVERRIDE_DIR scheme existed to paper over. core/constants.py's
+# ASSETS_DIR points beside the exe (APP_DIR) accordingly.
 ADD_DATA = [
     ("ui", "ui"),
-    # Assets/ui (nav button crops etc.), Assets/maps (map name-label crops),
-    # Assets/map (Set Position picker's full map images), Assets/
-    # default_walk_paths.json, and (if you've run the fetch tools locally --
-    # see tools/) Assets/item_icons + Assets/stage_data.json all live under
-    # one Assets/ tree, so one include covers everything the macro's image
-    # search and reward/stage-data lookups need at runtime.
-    ("Assets", "Assets"),
     # Known-good default walk paths (see core/paths.py's DEFAULT_PATHS_DIR)
     # -- NOT the rest of Paths/, which is your own personal recordings and
     # never meant to ship.

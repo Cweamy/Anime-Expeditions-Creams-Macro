@@ -4,7 +4,9 @@ core.runner) uses to click things whose position isn't fixed/known in advance
 (a menu that slides in, a button that only exists on certain screens) instead
 of a hardcoded coordinate.
 
-Reference images live in Assets/ui/<name>.png. Matching is done in grayscale,
+Reference images live in Assets/ui/<name>/ -- one FOLDER per searched name,
+holding one or more .png crops that are all tried as interchangeable variants
+of the same button/text (see template_variant_paths). Matching is done in grayscale,
 not color: this game's UI text sits on a gradient fill (its color shifts
 across the glyph) and buttons vary in on-screen brightness with the moment's
 lighting/animation, so a 3-channel color match would be comparing exact pixel
@@ -26,8 +28,9 @@ from . import window as wm
 
 UI_ASSETS_DIR = os.path.join(constants.ASSETS_DIR, "ui")
 # Map name-label crops (core.stage_select) -- kept separate from Assets/ui
-# since these are keyed by map name (one file per map, named to match a
-# Task's `map` field exactly) rather than by fixed UI-element name. Covers
+# since these are keyed by map name (one FOLDER per map, named to match a
+# Task's `map` field exactly, holding that map's variant crops) rather
+# than by fixed UI-element name. Covers
 # every map (Story AND Raid, e.g. "Spirit City"), not just Story ones --
 # was Assets/story_maps until Raid map crops started living here too. Not
 # the same folder as Assets/map/<Category>/ (the Place Unit picker's full
@@ -59,75 +62,125 @@ SCALE_FACTORS = (1.0, 0.95, 1.05, 0.90, 1.10)
 
 
 class TemplateNotFound(Exception):
-    """The reference image (Assets/ui/<name>.png) doesn't exist on disk yet."""
+    """No reference image exists for this name yet -- neither a
+    <template_dir>/<name>/ folder with images in it nor a loose
+    <template_dir>/<name>.png file."""
 
 
 _template_cache = {}
 
 
-def _override_dir(template_dir: str) -> str:
-    """Maps a bundled template dir (under constants.ASSETS_DIR) to its
-    user-override equivalent (under constants.ASSETS_OVERRIDE_DIR) -- e.g.
-    <bundled>/Assets/ui -> <app>/Assets/ui. Returns template_dir itself
-    (no separate override location) if it isn't actually under ASSETS_DIR
-    for some reason, or if the two roots are the same (source/dev runs,
-    see constants.ASSETS_OVERRIDE_DIR)."""
-    if constants.ASSETS_OVERRIDE_DIR == constants.ASSETS_DIR:
-        return template_dir
-    try:
-        rel = os.path.relpath(template_dir, constants.ASSETS_DIR)
-    except ValueError:
-        return template_dir  # different drives on Windows -- can't be relative
-    if rel.startswith(".."):
-        return template_dir
-    return os.path.join(constants.ASSETS_OVERRIDE_DIR, rel)
+def template_variant_paths(name: str, template_dir: str = UI_ASSETS_DIR) -> list:
+    """Every reference image on disk for a searched name, in the order they
+    get tried. One search name maps to a FOLDER of interchangeable images,
+    not a single file -- so when a button renders differently on someone's
+    setup (size drift, a game-update art tweak, a different graphics
+    quality), they can drop ADDITIONAL crops of the same button into that
+    name's folder (via the Image Manager in Settings > General, or by hand)
+    and every one of them gets tried before the search gives up, instead of
+    one blessed .png being the single point of failure.
 
+    Lookup order for name X under template_dir:
+      1. <template_dir>/X.png            -- loose legacy file, kept working
+                                            so an old hand-dropped override
+                                            or fresh capture still resolves.
+      2. <template_dir>/X/*.png          -- the folder-per-name layout.
+                                            X.png (the original/primary
+                                            crop) sorts first, the rest
+                                            alphabetically, so behavior with
+                                            a single image is identical to
+                                            the old flat-file layout.
+      3. <template_dir>/<sub>/X.png      -- shallow search of the immediate
+                                            subfolders. Keeps EXACT filenames
+                                            that live inside a related name's
+                                            folder resolvable as their own
+                                            search name too (e.g.
+                                            "priority_upgrade_1" still
+                                            resolves even though its file
+                                            sits in priority_upgrade/ as one
+                                            of that name's variants) -- a
+                                            back-compat path for old code or
+                                            hand-written searches, not the
+                                            primary layout.
 
-def template_path(name: str, template_dir: str = UI_ASSETS_DIR) -> str:
-    """A user-supplied override (see constants.ASSETS_OVERRIDE_DIR) wins
-    over the bundled reference image with the same name -- replacing a
-    template that isn't matching well on someone's setup is just "drop a
-    same-named .png in the Assets folder next to the exe", no
-    rebuild/reinstall needed.
+    Names stay EXACT -- "continue_2" and "exp_extract_continue" are
+    different search names with different meanings in the runner (a
+    follow-up screen's button vs the extract checkpoint's decline choice),
+    same for "nav_start_game" vs "nav_start_game_confirm" (ready-up vs a
+    "Start Anyway"-style second confirm) -- so each has its own folder; a
+    folder's images are variants of that one name only, never of a
+    similarly-named sibling.
 
-    Related variants of the same button (nav_start_game.png/_2/_3/_4, and
-    similar) live grouped together in their own subfolder of template_dir
-    (Assets/ui/nav_start_game/nav_start_game.png, .../nav_start_game_2.png,
-    ...) instead of all loose in one flat folder -- callers still just ask
-    for the plain name, so if it's not directly in template_dir this falls
-    back to a shallow search of template_dir's immediate subfolders before
-    giving up. Overrides stay flat (dropped straight in the override folder
-    regardless of which subfolder the bundled version lives in)."""
-    override_dir = _override_dir(template_dir)
-    if override_dir != template_dir:
-        override_path = os.path.join(override_dir, f"{name}.png")
-        if os.path.isfile(override_path):
-            return override_path
-    direct_path = os.path.join(template_dir, f"{name}.png")
-    if os.path.isfile(direct_path):
-        return direct_path
-    if os.path.isdir(template_dir):
+    The resolved list is cached (the runner re-resolves the same name every
+    ~0.3s poll of wait_for_image -- hitting the filesystem that often for
+    an unchanged folder would be pure waste), so images added/removed on
+    disk mid-session need clear_template_cache() (the Image Manager and
+    Settings > "Reload Vision Images" both do this) to be picked up.
+    """
+    cache_key = ("variant_paths", template_dir, name)
+    if cache_key in _template_cache:
+        return _template_cache[cache_key]
+
+    paths = []
+    loose = os.path.join(template_dir, f"{name}.png")
+    if os.path.isfile(loose):
+        paths.append(loose)
+
+    folder = os.path.join(template_dir, name)
+    if os.path.isdir(folder):
+        primary = f"{name}.png".lower()
+        entries = sorted(
+            (e for e in os.listdir(folder) if e.lower().endswith(".png")),
+            # The primary crop first, then the extras alphabetically --
+            # keeps the single-image case byte-identical to the old flat
+            # layout, and makes "which one gets tried first" predictable.
+            key=lambda e: (e.lower() != primary, e.lower()),
+        )
+        paths.extend(os.path.join(folder, e) for e in entries)
+
+    if not paths and os.path.isdir(template_dir):
+        # Shallow subfolder fallback -- only reached when the name has no
+        # folder/file of its own, i.e. it's a numbered variant filed inside
+        # a sibling's folder (see the docstring's point 3).
         for entry in os.listdir(template_dir):
             sub = os.path.join(template_dir, entry)
             if os.path.isdir(sub):
                 candidate = os.path.join(sub, f"{name}.png")
                 if os.path.isfile(candidate):
-                    return candidate
-    return direct_path
+                    paths.append(candidate)
+                    break
+
+    _template_cache[cache_key] = paths
+    return paths
+
+
+def template_path(name: str, template_dir: str = UI_ASSETS_DIR) -> str:
+    """The primary on-disk path for a name -- its first existing variant, or
+    (when nothing exists yet) the canonical folder-layout path a new capture
+    for it SHOULD be saved to. Kept for error messages and 'where would this
+    save' callers; actual matching goes through template_variant_paths and
+    tries every variant, not just this one."""
+    paths = template_variant_paths(name, template_dir)
+    if paths:
+        return paths[0]
+    return os.path.join(template_dir, name, f"{name}.png")
 
 
 def clear_template_cache() -> None:
-    """Drops every cached (gray, mask) pair -- call after replacing a
-    reference image on disk mid-session, or the runner keeps matching
-    against the old cached bytes until the app is restarted."""
+    """Drops every cached (gray, mask) pair AND cached folder listing --
+    call after adding/replacing/deleting a reference image on disk
+    mid-session, or the runner keeps matching against the old cached bytes
+    until the app is restarted."""
     _template_cache.clear()
 
 
-def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
-    """Loads + caches <template_dir>/<name>.png as (grayscale, mask). Cached
-    because the runner calls this on every poll of wait_for_image (every
-    ~0.3s) -- re-decoding the same PNG off disk that often would be pure
-    waste.
+def _load_gray_from_path(path: str):
+    """Loads + caches one reference image file as (grayscale, mask). Cached
+    per file path because the runner hits this on every poll of
+    wait_for_image (every ~0.3s) -- re-decoding the same PNG off disk that
+    often would be pure waste. Returns None (cached too) if the file can't
+    be decoded, so one corrupt image in a variant folder just gets skipped
+    instead of failing every search of that name.
 
     mask is always None right now -- masked/"fuzzy" matching (auto-excluding
     a transparent or flattened-black background from scoring) is disabled.
@@ -141,27 +194,50 @@ def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
     doesn't have that failure mode. Revisit real masking later if templates
     with transparent/black backgrounds turn out to be worth the risk again.
     """
-    cache_key = (template_dir, name)
+    cache_key = ("gray", path)
     if cache_key in _template_cache:
         return _template_cache[cache_key]
-    path = template_path(name, template_dir)
-    if not os.path.isfile(path):
-        raise TemplateNotFound(
-            f'No reference image at {path} -- save one there '
-            f'(a cropped screenshot of just that button/text) and try again.'
-        )
     raw = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     if raw is None:
-        raise TemplateNotFound(f"{path} exists but couldn't be read as an image.")
-
+        _template_cache[cache_key] = None
+        return None
     if raw.ndim == 3 and raw.shape[2] == 4:
         gray = cv2.cvtColor(raw[:, :, :3], cv2.COLOR_BGR2GRAY)
     else:
         gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY) if raw.ndim == 3 else raw
-    mask = None
+    entry = (gray, None)
+    _template_cache[cache_key] = entry
+    return entry
 
-    _template_cache[cache_key] = (gray, mask)
-    return gray, mask
+
+def load_template_grays(name: str, template_dir: str = UI_ASSETS_DIR) -> list:
+    """Every loadable variant of a name as a list of (grayscale, mask)
+    pairs, in template_variant_paths order. Raises TemplateNotFound if the
+    name has no reference images at all, or has files but none of them
+    could actually be decoded -- either way there's nothing to search for."""
+    paths = template_variant_paths(name, template_dir)
+    if not paths:
+        raise TemplateNotFound(
+            f'No reference image for "{name}" -- save one to '
+            f'{os.path.join(template_dir, name)} (a cropped screenshot of just '
+            f'that button/text -- Settings > General > Image Manager can capture '
+            f'and crop one for you) and try again.'
+        )
+    loaded = [entry for entry in (_load_gray_from_path(p) for p in paths) if entry is not None]
+    if not loaded:
+        raise TemplateNotFound(
+            f'Reference image(s) for "{name}" exist but none could be read as an image: {paths}'
+        )
+    return loaded
+
+
+def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
+    """The name's primary variant only -- first entry of
+    load_template_grays. For callers that need ONE representative template
+    (e.g. find_bottommost_image's scan uses each variant's own size);
+    anything doing a normal search should let find_in_gray_multiscale try
+    all of them."""
+    return load_template_grays(name, template_dir)[0]
 
 
 def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
@@ -229,41 +305,47 @@ def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold
     return {"x": x, "y": y, "w": tw, "h": th, "cx": x + tw // 2, "cy": y + th // 2, "score": float(max_val)}
 
 
-def _scaled_template(name: str, template_dir: str, scale: float) -> tuple:
-    """The same template as load_template_gray, resized -- cached per
-    (dir, name, scale) so a template that keeps missing at 1x doesn't get
-    re-resized on every single wait_for_image poll (every ~0.3s)."""
+def _scaled_templates(name: str, template_dir: str, scale: float) -> list:
+    """Every variant of a name (see load_template_grays), resized to one
+    scale factor -- cached per (dir, name, scale) so templates that keep
+    missing at 1x don't get re-resized on every single wait_for_image poll
+    (every ~0.3s)."""
     if scale == 1.0:
-        return load_template_gray(name, template_dir)
-    cache_key = (template_dir, name, scale)
+        return load_template_grays(name, template_dir)
+    cache_key = ("scaled", template_dir, name, scale)
     if cache_key in _template_cache:
         return _template_cache[cache_key]
-    gray, mask = load_template_gray(name, template_dir)
-    h, w = gray.shape[:2]
-    new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
-    # INTER_AREA is the recommended choice for shrinking (avoids moire/
-    # aliasing on fine text/edges); INTER_LINEAR for enlarging.
-    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
-    scaled_gray = cv2.resize(gray, (new_w, new_h), interpolation=interp)
-    scaled_mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST) if mask is not None else None
-    entry = (scaled_gray, scaled_mask)
-    _template_cache[cache_key] = entry
-    return entry
+    entries = []
+    for gray, mask in load_template_grays(name, template_dir):
+        h, w = gray.shape[:2]
+        new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
+        # INTER_AREA is the recommended choice for shrinking (avoids moire/
+        # aliasing on fine text/edges); INTER_LINEAR for enlarging.
+        interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+        scaled_gray = cv2.resize(gray, (new_w, new_h), interpolation=interp)
+        scaled_mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST) if mask is not None else None
+        entries.append((scaled_gray, scaled_mask))
+    _template_cache[cache_key] = entries
+    return entries
 
 
 def find_in_gray_multiscale(haystack_gray: np.ndarray, name: str, template_dir: str = UI_ASSETS_DIR,
                              threshold: float = DEFAULT_THRESHOLD) -> dict:
-    """find_in_gray, but tries the reference image at a handful of scale
-    factors around 1x (see SCALE_FACTORS) instead of only its exact
-    captured size -- absorbs a UI that renders slightly bigger/smaller on
-    someone else's setup. 1x is tried first and returned immediately on a
-    hit, so the common (correctly-scaled) case costs nothing extra; the
-    other scales only run when 1x genuinely misses."""
+    """find_in_gray, but tries EVERY variant image in the name's folder (see
+    template_variant_paths) and each of them at a handful of scale factors
+    around 1x (see SCALE_FACTORS) instead of one image at its exact captured
+    size -- absorbs both a UI that renders slightly bigger/smaller on
+    someone else's setup AND a button whose art genuinely varies (which is
+    exactly why a name can have multiple images at all). Scale is the OUTER
+    loop on purpose: all variants get tried at 1x (their true captured
+    size, the overwhelmingly common hit) before any rescaling starts, so
+    the fallback images cost nothing when the primary one matches and the
+    scale sweep only runs when every variant genuinely missed at 1x."""
     for scale in SCALE_FACTORS:
-        gray, mask = _scaled_template(name, template_dir, scale)
-        match = find_in_gray(haystack_gray, gray, threshold, mask)
-        if match is not None:
-            return match
+        for gray, mask in _scaled_templates(name, template_dir, scale):
+            match = find_in_gray(haystack_gray, gray, threshold, mask)
+            if match is not None:
+                return match
     return None
 
 
@@ -316,7 +398,7 @@ def find_image(hwnd: int, name: str, region: tuple = None, threshold: float = DE
     """One-shot: capture + match. Returned x/y/cx/cy are in the SAME space as
     `region` -- region-local if a region was passed, full-window client
     coords otherwise. See click_match to turn that into an actual click."""
-    load_template_gray(name, template_dir)  # validates the file exists before capturing anything
+    load_template_grays(name, template_dir)  # validates at least one image exists before capturing anything
     haystack = capture_game_gray(hwnd, region)
     if haystack is None:
         return None
@@ -344,33 +426,41 @@ def find_bottommost_image(hwnd: int, name: str, region: tuple = None, threshold:
     or a lookalike patch of art. The real message reliably renders in the
     same lower band of the screen, so "lowest" is a more reliable tie-
     breaker here than "highest score" is.
+
+    Tries each of the name's variant images in order (same folder-per-name
+    set find_in_gray_multiscale searches, though at 1x only -- the warning
+    text this exists for has never needed the scale sweep) and returns the
+    first variant's bottommost hit; a later variant is only consulted when
+    the earlier ones found nothing at all.
     """
-    template_gray, mask = load_template_gray(name, template_dir)
+    templates = load_template_grays(name, template_dir)
     haystack = capture_game_gray(hwnd, region)
     if haystack is None:
         return None
-    th, tw = template_gray.shape[:2]
     hh, hw = haystack.shape[:2]
-    if th > hh or tw > hw:
-        return None
-    if mask is not None:
-        result = cv2.matchTemplate(haystack, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
-    else:
-        result = cv2.matchTemplate(haystack, template_gray, cv2.TM_CCOEFF_NORMED)
-    result[~np.isfinite(result)] = -1
+    for template_gray, mask in templates:
+        th, tw = template_gray.shape[:2]
+        if th > hh or tw > hw:
+            continue
+        if mask is not None:
+            result = cv2.matchTemplate(haystack, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
+        else:
+            result = cv2.matchTemplate(haystack, template_gray, cv2.TM_CCOEFF_NORMED)
+        result[~np.isfinite(result)] = -1
 
-    ys, xs = np.where(result >= threshold)
-    if len(ys) == 0:
-        return None
-    bottom_i = int(np.argmax(ys))
-    y, x = int(ys[bottom_i]), int(xs[bottom_i])
-    match = {"x": x, "y": y, "w": tw, "h": th, "cx": x + tw // 2, "cy": y + th // 2, "score": float(result[y, x])}
-    if region is not None:
-        match["x"] += region[0]
-        match["y"] += region[1]
-        match["cx"] += region[0]
-        match["cy"] += region[1]
-    return match
+        ys, xs = np.where(result >= threshold)
+        if len(ys) == 0:
+            continue
+        bottom_i = int(np.argmax(ys))
+        y, x = int(ys[bottom_i]), int(xs[bottom_i])
+        match = {"x": x, "y": y, "w": tw, "h": th, "cx": x + tw // 2, "cy": y + th // 2, "score": float(result[y, x])}
+        if region is not None:
+            match["x"] += region[0]
+            match["y"] += region[1]
+            match["cx"] += region[0]
+            match["cy"] += region[1]
+        return match
+    return None
 
 
 def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
@@ -394,12 +484,13 @@ def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float 
 
 def find_image_any(hwnd: int, names: tuple, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
                     template_dir: str = UI_ASSETS_DIR):
-    """find_image, but for a UI element that renders as one of a few visually
-    distinct variants (e.g. nav_play.png vs nav_play_2.png -- same button,
-    different art on different setups/game updates) -- same idea as the
-    RECONNECT_IMAGE_NAMES / click_anywhere_to_close(_2) variant lists
-    core.runner already tries by hand, just reusable and region/threshold-
-    aware. Tries each name in `names` in order and returns (match, name) for
+    """find_image, but over several DIFFERENTLY-NAMED templates in one call
+    -- for screens where more than one distinct thing counts as a hit (e.g.
+    the wave flow accepting either "continue_2" or "exp_extract_continue"
+    as the follow-up, see core.runner). NOT for visual variants of one
+    button -- those live together in that one name's folder and find_image
+    already tries them all (see template_variant_paths). Tries each name in
+    `names` in order and returns (match, name) for
     the first one actually found on screen -- NOT the first one that merely
     has a reference image on disk. A name with no reference image yet is
     skipped (same as a caller manually looping and catching TemplateNotFound
