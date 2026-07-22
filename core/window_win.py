@@ -206,6 +206,43 @@ def get_display_scale_percent() -> int:
         return 100
 
 
+def disable_mss_captureblt() -> None:
+    """Call once at startup, before any screen capture. mss's Windows
+    backend grabs the screen with BitBlt(SRCCOPY | CAPTUREBLT), and
+    CAPTUREBLT is a known screen-flicker source: every grab forces GDI to
+    compose layered (transparent overlay) windows into the copy, which
+    briefly redraws them on the real screen. One grab is invisible; this
+    app polls a grab every ~0.3s the whole time a macro runs (core.vision's
+    wait_for_image), which turned the per-grab blink into a constant white
+    flashing for a user running NVIDIA's overlay/recorder (whose overlay is
+    exactly such a layered window) on top of the game.
+
+    Zeroing the module-level constant makes every subsequent BitBlt use
+    plain SRCCOPY -- mss's own documented workaround for this. The only
+    thing lost is capturing layered windows' contents, which is a feature
+    here, not a cost: matching wants the game's pixels, never a recording
+    overlay drawn on top of them.
+
+    Handles both mss layouts (>=10.2 moved the constant from mss.windows to
+    mss.windows.gdi) and swallows everything -- a capture that still
+    flickers beats an app that can't start over a patch of someone else's
+    internals.
+    """
+    try:
+        import mss.windows
+        modules = [mss.windows]
+        try:
+            from mss.windows import gdi
+            modules.append(gdi)
+        except ImportError:
+            pass
+        for mod in modules:
+            if getattr(mod, "CAPTUREBLT", None):
+                mod.CAPTUREBLT = 0
+    except Exception:
+        pass
+
+
 def get_screen_size():
     return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 

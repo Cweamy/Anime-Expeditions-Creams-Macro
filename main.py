@@ -28,6 +28,11 @@ from core.runner import MacroRunner
 from core import updater
 
 wm.set_dpi_aware()
+# Kill mss's CAPTUREBLT flag before the first screen grab -- with it set,
+# every ~0.3s vision poll forces recording overlays (NVIDIA ShadowPlay etc.)
+# to redraw, which users see as constant white flashing (see
+# core.window_win.disable_mss_captureblt).
+wm.disable_mss_captureblt()
 
 
 def _debug_dir() -> str:
