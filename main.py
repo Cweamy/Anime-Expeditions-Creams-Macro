@@ -78,6 +78,10 @@ LOG_HISTORY_LIMIT = 500  # caps what a freshly popped-out window gets replayed w
 HOTKEY_DEFAULTS = {
     "toggle_game": "f4", "skip_waiting": "", "macro_start": "f1", "macro_stop": "f2", "macro_pause": "f5",
     "debug_screenshot": "f3",
+    # Toggles the Image Manager from anywhere -- capturing a missing crop
+    # right when a search fails shouldn't need clicking back through
+    # Settings > General first.
+    "image_manager": "f6",
 }
 
 # Stage-detail panel (shown after clicking a stage row on the Select Stage
@@ -2162,6 +2166,7 @@ def _launch_ui():
             "macro_start": lambda: api.push_ui("startMacro"),
             "macro_pause": lambda: api.push_ui("togglePauseMacro"),
             "debug_screenshot": lambda: api.push_ui("saveDebugScreenshot"),
+            "image_manager": lambda: api.push_ui("toggleImageManagerHotkey"),
             # NOT routed through push_ui/JS: stopping has to win over
             # everything else regardless of what the UI thread is doing
             # (mid screen-switch animation, waiting on an evaluate_js round

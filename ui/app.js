@@ -744,6 +744,7 @@ async function loadSettingsUI() {
     updateKeybindDisplay('macro_stop', hk.macro_stop || '');
     updateKeybindDisplay('macro_pause', hk.macro_pause || '');
     updateKeybindDisplay('debug_screenshot', hk.debug_screenshot || '');
+    updateKeybindDisplay('image_manager', hk.image_manager || '');
     updateDashboardHotkeys(hk);
   } catch (e) {}
   try {
@@ -2946,6 +2947,21 @@ let imState = {
   zoom: 1, panX: 0, panY: 0,               // canvas view transform (image px -> canvas px)
   sel: null,        // crop box in IMAGE pixels {x, y, w, h} -- null until a drag happens
 };
+
+// Hotkey entry point (Settings > Hotkeys > Image Manager, default F6,
+// called via push_ui from the Python-side hook): TOGGLES the modal from
+// anywhere. Opening from the Dashboard hops to Settings first -- the
+// docked Roblox window is a native child that paints over all DOM, so the
+// modal would open invisibly behind it there.
+function toggleImageManagerHotkey() {
+  const modal = document.getElementById('im-modal');
+  if (modal && modal.style.display === 'flex') {
+    closeImageManager();
+    return;
+  }
+  if (currentScreen === 'dashboard') switchScreen('settings');
+  openImageManager();
+}
 
 async function openImageManager() {
   document.getElementById('im-modal').style.display = 'flex';
