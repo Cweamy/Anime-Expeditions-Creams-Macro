@@ -1,0 +1,61 @@
+name: Discord Release Post
+
+# Manual re-post of a release's changelog to the update-log Discord channel
+# -- for when the Release workflow's own Discord step failed AFTER the
+# release itself was already published (exactly what happened on v0.3.0:
+# the old bash+jq step 400'd on the first changelog with non-ASCII in it,
+# see post_release_log.py). Re-running the failed Release job can't fix
+# that case: a tag-triggered run executes the workflow file AS OF THE TAG'S
+# COMMIT, so it would just re-run the same broken step. This one runs from
+# main, so it always uses the current script.
+#
+# Usage: Actions > Discord Release Post > Run workflow > enter the tag
+# (e.g. v0.3.0), or `gh workflow run discord-release-post.yml -f tag=v0.3.0`.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to announce (e.g. v0.3.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install requests
+        run: pip install requests
+
+      # Same tag-message extraction as release.yml's changelog step (see
+      # its comment for why the API, not local git, is the reliable source
+      # for annotated-tag messages in Actions).
+      - name: Get changelog from the tag message
+        id: changelog
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          REF_JSON=$(gh api "repos/${{ github.repository }}/git/refs/tags/$TAG")
+          OBJ_SHA=$(echo "$REF_JSON" | jq -r '.object.sha')
+          OBJ_TYPE=$(echo "$REF_JSON" | jq -r '.object.type')
+          if [ "$OBJ_TYPE" = "tag" ]; then
+            BODY=$(gh api "repos/${{ github.repository }}/git/tags/$OBJ_SHA" --jq '.message')
+          else
+            BODY=$(gh api "repos/${{ github.repository }}/commits/$OBJ_SHA" --jq '.commit.message')
+          fi
+          echo "body<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Post changelog to Discord
+        env:
+          DISCORD_UPDATE_LOGS_WEBHOOK: ${{ secrets.DISCORD_UPDATE_LOGS_WEBHOOK }}
+          BODY: ${{ steps.changelog.outputs.body }}
+          TAG_NAME: ${{ inputs.tag }}
+          RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ inputs.tag }}
+        run: python .github/scripts/post_release_log.py

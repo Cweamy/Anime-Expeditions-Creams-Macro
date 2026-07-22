@@ -128,32 +128,16 @@ jobs:
             dist/Creams Macro - Anime Expeditions.exe
             dist/Creams Macro - Anime Expeditions Bootstrapper.exe
 
+      # Python script, not inline bash+jq -- the jq version sent Discord
+      # invalid JSON (HTTP 400, code 50109) on the real runner the first
+      # time a changelog contained non-ASCII characters (v0.3.0's em
+      # dashes), despite the same logic validating fine locally: the exact
+      # failure mode .github/scripts/post_git_log.py already documents and
+      # solved for the git-log channel. See post_release_log.py.
       - name: Post changelog to Discord
-        shell: bash
         env:
           DISCORD_UPDATE_LOGS_WEBHOOK: ${{ secrets.DISCORD_UPDATE_LOGS_WEBHOOK }}
           BODY: ${{ steps.changelog.outputs.body }}
+          TAG_NAME: ${{ github.ref_name }}
           RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
-        run: |
-          if [ -z "$DISCORD_UPDATE_LOGS_WEBHOOK" ]; then exit 0; fi
-          # Discord embed descriptions cap at 4096 chars -- trim rather
-          # than let an unusually long changelog fail the whole post.
-          TRIMMED=$(printf '%s' "$BODY" | head -c 3800)
-          PAYLOAD=$(jq -n \
-            --arg title "Cream's Macro ${{ github.ref_name }} is out" \
-            --arg desc "$TRIMMED" \
-            --arg url "$RELEASE_URL" \
-            '{embeds: [{title: $title, description: $desc, url: $url, color: 5793266}]}')
-          # -s alone swallows the response body entirely -- a rejected
-          # payload (bad JSON, wrong/deleted webhook, ...) still exits 0
-          # and looks like success in the Actions log with no way to tell
-          # why nothing showed up in Discord. -w appends the HTTP status so
-          # a non-2xx actually fails the step with the response visible.
-          HTTP_STATUS=$(curl -s -o /tmp/discord_response.txt -w "%{http_code}" \
-            -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_UPDATE_LOGS_WEBHOOK")
-          echo "Discord responded with HTTP $HTTP_STATUS"
-          cat /tmp/discord_response.txt
-          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
-            echo "::error::Discord webhook post failed (HTTP $HTTP_STATUS)"
-            exit 1
-          fi
+        run: python .github/scripts/post_release_log.py
