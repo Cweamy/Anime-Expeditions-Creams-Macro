@@ -75,10 +75,25 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
                 return True
             if nudge < scroll_nudges:
                 mouse.move_to(*to_screen(SCROLL_CENTER))
+                # An absolute move_to() jump alone doesn't reliably register
+                # as real cursor-over-the-carousel hover on every machine --
+                # the reward-list scroll (runner._collect_battle_rewards)
+                # already nudge()s before its own scroll() for the same
+                # reason (see Mouse.nudge's docstring). Without it, the
+                # wheel event can fire before Roblox has decided the mouse
+                # is actually over the scrollable area, so it's silently
+                # dropped -- reported as "the scroll does nothing, cursor
+                # just sits there" but only on some machines, since most
+                # happen to get a real hover-move in from the OS anyway
+                # before the jump-then-scroll gap closes.
+                mouse.nudge()
+                time.sleep(0.03)
                 mouse.scroll(scroll_step)
                 time.sleep(SETTLE_DELAY)
         log("[Macro] Not found in this pass -- scrolling back to the start.")
         mouse.move_to(*to_screen(SCROLL_CENTER))
+        mouse.nudge()
+        time.sleep(0.03)
         for _ in range(SCROLL_RESET_NOTCHES):
             mouse.scroll(-scroll_step)
         time.sleep(SETTLE_DELAY)

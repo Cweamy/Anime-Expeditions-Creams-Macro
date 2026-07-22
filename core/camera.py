@@ -33,17 +33,28 @@ def run_camera_setup(mouse, keyboard, hwnd, hold_ms: float = 2000) -> None:
     time.sleep(0.05)
 
     mouse.down("right")
-    time.sleep(0.08)
-    # Far more total downward travel than any camera needs to pin fully
-    # down -- past the floor the extra deltas are no-ops, so overshooting is
-    # free and saves needing to know the exact sensitivity/pitch-range.
-    for _ in range(40):
-        mouse.nudge(0, 80)
-        time.sleep(0.012)
-    time.sleep(0.08)
-    mouse.up("right")
+    try:
+        time.sleep(0.08)
+        # Far more total downward travel than any camera needs to pin fully
+        # down -- past the floor the extra deltas are no-ops, so overshooting
+        # is free and saves needing to know the exact sensitivity/pitch-range.
+        for _ in range(40):
+            mouse.nudge(0, 80)
+            time.sleep(0.012)
+        time.sleep(0.08)
+    finally:
+        # If a nudge() ever raises mid-drag, an unguarded mouse.up("right")
+        # below it would never run and leave the right button physically
+        # held down for the rest of the run -- every later mouse move would
+        # then read to Roblox as an active camera-rotate drag instead of a
+        # normal, unlocked cursor move (the same "holding right click keeps
+        # the mouse from locking" symptom this function exists to produce
+        # correctly). Releasing in finally guarantees it's never left stuck.
+        mouse.up("right")
     time.sleep(0.15)
 
     keyboard.key_down(ord("O"))
-    time.sleep(max(0.0, hold_ms) / 1000)
-    keyboard.key_up(ord("O"))
+    try:
+        time.sleep(max(0.0, hold_ms) / 1000)
+    finally:
+        keyboard.key_up(ord("O"))

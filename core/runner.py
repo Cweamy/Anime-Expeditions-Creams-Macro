@@ -1090,11 +1090,23 @@ class MacroRunner:
                 continue
 
             task_failed = False
+            # True on the genuine first repeat, AND on any later repeat that
+            # just went through a full fresh _run_task_setup re-entry
+            # (matchmaking's own repeat re-entry, or resuming after a
+            # Challenge interleave below) -- either way that's a real fresh
+            # entry into the stage, needing Team Loadout and the Walk Path
+            # block to run again exactly like the actual first repeat does,
+            # not "repeat_index == 1" alone (which used to wrongly skip both
+            # on every repeat past the first even when _run_task_setup had
+            # just fully re-run, confirmed from a real report: Walk Path
+            # silently skipped resuming a task after a Challenge interleave).
+            fresh_entry = True
             for repeat_index in range(1, repeat_total + 1):
                 self._set_status(current_repeat=f"{repeat_index} / {repeat_total}")
                 battle_started = time.time()
                 result = self._play_one_match(hwnd, stop_event, task, default_walk_paths,
-                                                first_repeat=(repeat_index == 1), webhook=webhook)
+                                                first_repeat=fresh_entry, webhook=webhook)
+                fresh_entry = False
                 if result is None:
                     if stop_event.is_set():
                         return False
@@ -1143,6 +1155,7 @@ class MacroRunner:
                             return False
                         task_failed = True
                         break
+                    fresh_entry = True
                     continue
 
                 if not is_last_repeat:
@@ -1158,6 +1171,7 @@ class MacroRunner:
                                 return False
                             task_failed = True
                             break
+                        fresh_entry = True
                     elif not self._wait_teleport_in(hwnd, stop_event, webhook, task):
                         if stop_event.is_set():
                             return False
@@ -2521,6 +2535,25 @@ class MacroRunner:
             if not stop_event.is_set():
                 self._log('[Macro] Team panel never opened (no "team" match) -- skipping.')
             return
+        try:
+            self._apply_team_loadout_panel(hwnd, stop_event, team_match, team_num, equipment)
+        finally:
+            # Every early-return inside the panel flow (scroll landing wrong,
+            # Confirm/equipment images never showing up, a checkpoint stop)
+            # used to skip this and leave the H panel sitting open -- which
+            # then blocked the NEXT Pre Start's camera setup: right-click
+            # doesn't lock/hide the cursor while a UI panel like this has
+            # focus, so the camera drag's relative nudges moved the real,
+            # unlocked cursor instead of rotating the camera, reported as
+            # "holding right click on a UI, mouse just moves instead of
+            # locking". Closing here unconditionally, however this call
+            # exits, means a broken loadout never leaves that trap for the
+            # match that follows it.
+            self._keyboard.tap(ord("H"))
+            self._log("[Macro] Closed the Team Loadout panel.")
+
+    def _apply_team_loadout_panel(self, hwnd, stop_event: threading.Event, team_match, team_num: int,
+                                    equipment: str) -> None:
         vision.click_match(self._mouse, hwnd, team_match)
         # The Loadout list animates in right after this click -- without a
         # settle, the very next click (the Loadout row itself) can land
@@ -2549,6 +2582,18 @@ class MacroRunner:
             row_y = TEAM_LOADOUT_SLOT_7_Y
         elif team_num == 8:
             row_y = TEAM_LOADOUT_SLOT_8_Y
+        elif team_num > 3:
+            # 4-6 scrolled into the SAME row slots 1-3 sit in pre-scroll (see
+            # the drag comment above) -- team_num must be rebased against
+            # row 1 the way 1-3 already are (team_num - 1), not counted as
+            # if the list never moved. Using (team_num - 1) unscrolled here
+            # undercounted the shift by exactly the 3 rows the drag just
+            # revealed, landing the click 3 * TEAM_LOADOUT_ROW_HEIGHT (378px)
+            # below the real row -- past the panel and onto the game view
+            # behind it, which is what turned into "the click/scroll goes
+            # way too far, outside Roblox" for teams 5-6 (4 was off too, by
+            # the same bug, just closer to a row that still did something).
+            row_y = TEAM_LOADOUT_CLICK_1[1] + (team_num - 4) * TEAM_LOADOUT_ROW_HEIGHT
         else:
             row_y = TEAM_LOADOUT_CLICK_1[1] + (team_num - 1) * TEAM_LOADOUT_ROW_HEIGHT
         self._mouse.click(left + TEAM_LOADOUT_CLICK_1[0], top + row_y)
@@ -2584,11 +2629,6 @@ class MacroRunner:
             self._log(f"[Macro] Equipment: {equipment}.")
         elif not stop_event.is_set():
             self._log(f'[Macro] "{equipment}" option never showed up -- skipping the equipment choice.')
-        if self._checkpoint(stop_event):
-            return
-
-        self._keyboard.tap(ord("H"))
-        self._log("[Macro] Closed the Team Loadout panel.")
 
     def _run_prestart_blocks(self, hwnd, stop_event: threading.Event, task: dict, first_repeat: bool = True,
                                default_walk_paths: dict = None) -> None:
@@ -2925,8 +2965,6 @@ class MacroRunner:
             self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) ({reason}).')
             if unit_ordinal is not None:
                 self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
-            if (cur_x, cur_y) != (orig_x, orig_y):
-                self._save_corrected_position(macro_name, index, cur_x, cur_y, name)
             return
 
         # Verify: look for unit_exist FIRST, before clicking anything -- it
@@ -2968,8 +3006,6 @@ class MacroRunner:
                    f'(score {exists_match["score"]:.2f}).')
         if unit_ordinal is not None:
             self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
-        if (cur_x, cur_y) != (orig_x, orig_y):
-            self._save_corrected_position(macro_name, index, cur_x, cur_y, name)
 
     def _reset_unit_info_panel(self, hwnd) -> None:
         # Closes whatever info panel double-clicking a placed unit opened
@@ -2981,30 +3017,6 @@ class MacroRunner:
         time.sleep(0.1)
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
-
-    def _save_corrected_position(self, macro_name: str, block_index: int, x: int, y: int, unit_name: str) -> None:
-        # Writes a nudged-but-verified position back into the saved template
-        # file, keyed by its position in the Pre Start list -- so a future
-        # run (or another task using the same Macro Operation) starts from a
-        # spot already known to work instead of repeating the same nudge
-        # search from scratch every single time. block_index is 1-based, the
-        # same numbering _run_prestart_blocks logs with.
-        from . import templates as tpl
-        data = tpl.load_template(macro_name)
-        blocks = data.get("blocks") or {}
-        if isinstance(blocks, list):
-            return  # legacy shape -- not worth patching, the template needs re-saving anyway
-        prestart_blocks = blocks.get("prestart") if "prestart" in blocks else blocks.get("before")
-        if not prestart_blocks or block_index > len(prestart_blocks):
-            return
-        target = prestart_blocks[block_index - 1]
-        if target.get("type") != "place_unit":
-            return  # the template changed shape since this run started reading it -- don't guess
-        target.setdefault("params", {})
-        target["params"]["x"] = x
-        target["params"]["y"] = y
-        tpl.save_template(macro_name, blocks)
-        self._log(f'[Macro] Saved corrected position for "{unit_name}" back into template "{macro_name}".')
 
     # Windows/Meta-style keys are blocked from the Setting block's custom
     # hotkey box -- letting a macro send these could minimize the game,
