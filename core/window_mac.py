@@ -304,6 +304,10 @@ def set_dpi_aware() -> None:
     pass  # macOS handles scaling per-window; Retina is a capture-side concern (core.vision)
 
 
+def disable_mss_captureblt() -> None:
+    pass  # CAPTUREBLT is a Windows GDI flag; mss's mac backend has no equivalent flicker
+
+
 def get_display_scale_percent() -> int:
     # Always 100: coordinates here are logical points end to end, so the
     # Windows-specific "display scale breaks fixed coordinates" warning
