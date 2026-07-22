@@ -31,9 +31,10 @@ APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 GITHUB_REPO = "Cweamy/Anime-Expeditions-Creams-Macro"
 RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-# Must match release.yml's packaged zip name exactly (dashes on purpose --
-# GitHub rewrites spaces in asset filenames to dots, dashes stay put).
-ZIP_ASSET_NAME = "Creams-Macro-Anime-Expeditions.zip"
+# Must match release.yml's packaged Windows zip name exactly (dashes on
+# purpose -- GitHub rewrites spaces in asset filenames to dots, dashes
+# stay put). The bootstrapper is Windows-only, so always the -Windows zip.
+ZIP_ASSET_NAME = "Creams-Macro-Anime-Expeditions-Windows.zip"
 LOCAL_EXE = os.path.join(APP_DIR, "Creams Macro - Anime Expeditions.exe")
 LOCAL_ZIP = os.path.join(APP_DIR, ".bootstrap_download.zip")
 VERSION_FILE = os.path.join(APP_DIR, ".bootstrap_version")

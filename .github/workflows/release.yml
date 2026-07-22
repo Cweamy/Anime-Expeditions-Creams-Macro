@@ -3,9 +3,9 @@ name: Release
 # Triggered by pushing a version tag (vX.Y.Z, matching VERSION at the repo
 # root -- see the release checklist in README.md). Builds the app exe with
 # PyInstaller (see build_pyinstaller.py), packages it together with the
-# user-editable Assets/ folder into the ONE download zip (see the
-# packaging step below for why Assets ships loose instead of bundled, and
-# why the zip is the only uploaded asset), and publishes it on a GitHub
+# user-editable Assets/ folder into the per-platform download zips (see
+# the packaging steps below for why Assets ships loose instead of bundled,
+# and why the zips are the only uploaded assets), publishing to a GitHub
 # Release for that tag.
 #
 # PyInstaller, not Nuitka: Nuitka's C-compile step took 15-20+ minutes per
@@ -62,7 +62,7 @@ jobs:
       # core/vision.py's template_variant_paths and the Image Manager in
       # Settings > General) without rebuilding anything.
       #
-      # This ONE zip is the release's only uploaded asset, on purpose --
+      # The per-platform zips are the release's only uploaded assets, on purpose --
       # v0.3.0 also shipped the bare exe, an Assets.zip, and the
       # bootstrapper, and four downloads plus GitHub's two automatic source
       # archives made the asset list a wall where picking the wrong file
@@ -83,7 +83,7 @@ jobs:
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item "dist/Creams Macro - Anime Expeditions.exe" package/
           Copy-Item Assets package/Assets -Recurse
-          Compress-Archive -Path package/* -DestinationPath "dist/Creams-Macro-Anime-Expeditions.zip"
+          Compress-Archive -Path package/* -DestinationPath "dist/Creams-Macro-Anime-Expeditions-Windows.zip"
 
       - name: Get changelog from the tag message
         # A curated summary, not GitHub's raw commit-list changelog --
@@ -115,13 +115,22 @@ jobs:
           echo "$BODY" >> "$GITHUB_OUTPUT"
           echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
 
+      # The bare exe rides along as a COMPATIBILITY asset, not a download
+      # anyone should pick by hand: every install older than the zip-based
+      # updater (<= v0.3.0) self-updates by downloading the release's bare
+      # .exe and swapping it in place -- dropping that asset stranded all
+      # of them on a 404 ("[Update] Failed to prepare update: 404 ... for
+      # Creams.Macro.-.Anime.Expeditions.exe", seen live). Shipping it
+      # keeps the upgrade chain unbroken: their old updater swaps in this
+      # exe, whose own updater then uses the zips from the next release on.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           body: ${{ steps.changelog.outputs.body }}
           files: |
-            dist/Creams-Macro-Anime-Expeditions.zip
+            dist/Creams-Macro-Anime-Expeditions-Windows.zip
+            dist/Creams Macro - Anime Expeditions.exe
 
       # Python script, not inline bash+jq -- the jq version sent Discord
       # invalid JSON (HTTP 400, code 50109) on the real runner the first

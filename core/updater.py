@@ -54,12 +54,15 @@ RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 # this one file to keep the release's asset list from being a wall of
 # downloads where picking the wrong one is easy.
 #
-# Per-platform: the macOS build is its own zip (a .app bundle + Assets --
-# see release.yml's macos job), and everything here that names the asset
-# (update download, ensure_assets_present's constructed URLs) should
-# resolve to the RUNNING platform's zip automatically.
+# Per-platform: each OS's build is its own explicitly-suffixed zip
+# (-Windows / -macOS, so neither reads as "the default" on the release
+# page), and everything here that names the asset (update download,
+# ensure_assets_present's constructed URLs) resolves to the RUNNING
+# platform's zip automatically. The Windows zip briefly shipped unsuffixed
+# (v0.3.0-v0.4.0 as published) -- renamed for symmetry once the mac zip
+# joined it.
 RELEASE_ZIP_NAME = ("Creams-Macro-Anime-Expeditions-macOS.zip" if sys.platform == "darwin"
-                     else "Creams-Macro-Anime-Expeditions.zip")
+                     else "Creams-Macro-Anime-Expeditions-Windows.zip")
 # BUNDLE_DIR, not APP_DIR -- VERSION ships as part of the app itself (it's
 # what identifies which release you're running), not user-owned data.
 VERSION_FILE = os.path.join(constants.BUNDLE_DIR, "VERSION")
@@ -145,9 +148,18 @@ def check_for_update(timeout: float = 6.0, log=None) -> dict:
             "notes": "",
         }
 
-    release_zip_asset = next(
-        (a for a in data.get("assets", []) if a.get("name", "").lower() == RELEASE_ZIP_NAME.lower()),
-        None)
+    # Flexible asset matching, learned the hard way: exact-name matching
+    # plus a constructed fallback URL means ANY rename of the zip strands
+    # every already-shipped updater on a 404 (exactly what happened when
+    # the bare-exe asset was dropped, and again when the Windows zip
+    # gained its -Windows suffix). Match by platform suffix first, then
+    # the legacy unsuffixed name, and only then fall back to the
+    # constructed URL for the current canonical name.
+    assets = data.get("assets", [])
+    suffix = "-macos.zip" if sys.platform == "darwin" else "-windows.zip"
+    release_zip_asset = (
+        next((a for a in assets if a.get("name", "").lower().endswith(suffix)), None)
+        or next((a for a in assets if a.get("name", "").lower() == "creams-macro-anime-expeditions.zip"), None))
     return {
         "available": True,
         "version": tag,

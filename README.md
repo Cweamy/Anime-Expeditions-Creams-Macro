@@ -24,7 +24,7 @@
     <img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT">
   </a>
   <a href="#requirements">
-    <img src="https://img.shields.io/badge/platform-Windows-0078D6.svg?style=flat-square" alt="Platform: Windows">
+    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20beta-0078D6.svg?style=flat-square" alt="Platform: Windows | macOS beta">
   </a>
 </p>
 
@@ -65,7 +65,7 @@
 
 ## Requirements
 
-- **Windows 10/11** (this macro drives native Win32 windows directly — it does not run on macOS/Linux)
+- **Windows 10/11** (primary platform) — or **macOS** via the experimental testing build, see [macOS](#macos-experimental--testers-wanted)
 - **[Roblox](https://www.roblox.com/)** with Anime Expeditions
 - **Python 3.10+**
 - **[Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)** (preinstalled on most Win10/11 systems)
@@ -79,10 +79,10 @@ No `git clone`, no Python needed.
 
 1. Open the [**Releases page**](https://github.com/Cweamy/Anime-Expeditions-Creams-Macro/releases/latest)
 2. The newest release is shown at the top
-3. Under **Assets**, download **`Creams-Macro-Anime-Expeditions.zip`**
+3. Under **Assets**, download **`Creams-Macro-Anime-Expeditions-Windows.zip`** (or the `-macOS` zip on a Mac)
 4. Extract it anywhere — you get the app `.exe` with an `Assets/` folder next to it — and run the exe
 
-The `Assets/` folder is every image the macro searches for on screen, kept **outside** the exe on purpose: one folder per button/text, and you can open, replace, or add extra crops freely (Settings > Debug > **Image Manager** captures and crops them for you, straight from your Roblox screen). Updates never overwrite images you've changed or added.
+The `Assets/` folder is every image the macro searches for on screen, kept **outside** the exe on purpose: one folder per button/text, and you can open, replace, or add extra crops freely (Settings > General > **Image Manager** captures and crops them for you, straight from your Roblox screen). Updates never overwrite images you've changed or added.
 
 (The old bootstrapper exe is no longer uploaded to releases — the zip is the one download. If you already have a bootstrapper from before, it keeps working: it fetches this same zip. Need a fresh one to share around? Build it locally with `build_bootstrap.py`.)
 
@@ -164,7 +164,7 @@ build_bootstrap.py # builds bootstrap.py into its own small exe
 
 Issues and PRs are welcome. Every push/PR runs a CI sanity check (Python + JS syntax); there's no automated test suite yet, so please describe how you tested a change manually in your PR.
 
-To cut a release: bump `VERSION`, commit, then tag with an **annotated** tag whose message is a short, human-readable changelog: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. That message becomes both the GitHub Release body and what gets posted to Discord (see below) — a lightweight tag (no `-a`/`-m`) falls back to just the tagged commit's own message, which is usually not what you want announced. Pushing the tag triggers the release workflow, which builds the app exe with PyInstaller (see `build_pyinstaller.py`), packages it together with the user-editable `Assets/` folder into `Creams-Macro-Anime-Expeditions.zip` — the release's **only** uploaded asset, which new installs, the auto-updater, and any bootstrapper copies all read from — and publishes a GitHub Release.
+To cut a release: bump `VERSION`, commit, then tag with an **annotated** tag whose message is a short, human-readable changelog: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. That message becomes both the GitHub Release body and what gets posted to Discord (see below) — a lightweight tag (no `-a`/`-m`) falls back to just the tagged commit's own message, which is usually not what you want announced. Pushing the tag triggers the release workflow, which builds the app exe with PyInstaller (see `build_pyinstaller.py`), packages it together with the user-editable `Assets/` folder into `Creams-Macro-Anime-Expeditions-Windows.zip` (a macOS job builds the `-macOS` twin) — the per-platform zips are the only uploaded assets, which new installs, the auto-updater, and any bootstrapper copies all read from — and publishes a GitHub Release.
 
 Every push to `main` posts a one-line summary to a Discord "git log" channel; every tagged release posts its changelog to a separate Discord "update log" channel. Both are wired via `DISCORD_GIT_LOGS_WEBHOOK`/`DISCORD_UPDATE_LOGS_WEBHOOK` repo secrets (Settings > Secrets and variables > Actions) — unset in a fork, so both steps just no-op instead of failing.
 
