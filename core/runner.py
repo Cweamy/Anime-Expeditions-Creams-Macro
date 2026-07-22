@@ -355,7 +355,20 @@ class MacroRunner:
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
-        self._set_status = set_status or (lambda **kw: None)
+        # Wrapped to remember the most recent action text locally: the
+        # stop path (_checkpoint) reports "Stopped. (was: <action>)" so a
+        # user stopping a visibly-hung run gets told what it was stuck on
+        # -- the runner never sees main.Api's own status dict, so it keeps
+        # its own copy of just the action string.
+        _raw_set_status = set_status or (lambda **kw: None)
+        self._last_action = ""
+
+        def _tracking_set_status(**kw):
+            if "action" in kw:
+                self._last_action = kw["action"]
+            _raw_set_status(**kw)
+
+        self._set_status = _tracking_set_status
         # (result: "win"|"loss", map_name, duration_str, stats_dict, items_list) ->
         # persists to run history / win-loss counters (see main.Api._record_match_result).
         self._record_result = record_result or (lambda *a, **kw: None)
@@ -369,6 +382,7 @@ class MacroRunner:
         self._stop_event = None
         self._pause_event = threading.Event()
         self._paused_logged = False
+        self._stop_logged = False  # one "Stopped." per stop -- see _checkpoint
         self._debug_screenshots = False
         self._current_hwnd = None       # set at the top of _run -- lets _checkpoint reach Leave Stage on stop
         self._hwnd_getter = None        # set at the top of _run -- lets _attempt_rejoin find a re-docked hwnd
@@ -420,6 +434,7 @@ class MacroRunner:
         self._stop_event = threading.Event()
         self._pause_event.clear()
         self._paused_logged = False
+        self._stop_logged = False
         self._debug_screenshots = bool(debug_screenshots)
         self._current_hwnd = None
         self._left_stage_this_run = False
@@ -453,6 +468,7 @@ class MacroRunner:
         self._stop_event = threading.Event()
         self._pause_event.clear()
         self._paused_logged = False
+        self._stop_logged = False
         self._debug_screenshots = bool(debug_screenshots)
         self._current_hwnd = None
         self._left_stage_this_run = True  # nothing to Leave Stage from -- there's no real match here
@@ -551,7 +567,23 @@ class MacroRunner:
             self._paused_logged = False
         if stop_event.is_set():
             self._try_leave_stage()
-            self._log("[Macro] Stopped.")
+            # Say WHAT was in flight when the stop landed, not just
+            # "Stopped." -- someone stopping a run that's visibly hung
+            # (e.g. sitting on "Waiting for gamemode menu...") is exactly
+            # the person who needs to know which step/image it was stuck
+            # on, and the timeout message that would have named it never
+            # gets to fire once they stop first. The action text is
+            # whatever _set_status last showed on the Dashboard. Logged
+            # once per stop (_stop_logged): every layer of the run calls
+            # _checkpoint on the way out, which used to print a bare
+            # "Stopped." per layer.
+            if not self._stop_logged:
+                self._stop_logged = True
+                was = self._last_action
+                if was and was not in ("Idle", "Paused"):
+                    self._log(f"[Macro] Stopped. (was: {was})")
+                else:
+                    self._log("[Macro] Stopped.")
             self._set_status(action="Idle")
             return True
         return False
@@ -3189,8 +3221,9 @@ class MacroRunner:
         # during the loading/teleport transition), so waiting for it is the
         # confirmation the teleport actually finished.
         timeout = TELEPORT_IN_TIMEOUT if timeout is None else timeout
-        self._log("[Macro] Waiting to teleport in-game...")
-        self._set_status(action="Waiting to teleport in-game...")
+        self._log(f'[Macro] Waiting to teleport in-game (watching for "nav_unitmanager", up to '
+                   f'{timeout:.0f}s)...')
+        self._set_status(action='Waiting to teleport in-game ("nav_unitmanager")...')
         result = self._wait_for_teleport_or_stuck(hwnd, stop_event, timeout)
         if result == "ok":
             self._log("[Macro] Teleported in-game.")
@@ -3426,8 +3459,9 @@ class MacroRunner:
             if self._checkpoint(stop_event):
                 return False
 
-            self._log("[Macro] Waiting to teleport in-game...")
-            self._set_status(action="Waiting to teleport in-game...")
+            self._log(f'[Macro] Waiting to teleport in-game (watching for "nav_unitmanager", up to '
+                       f'{SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT:.0f}s)...')
+            self._set_status(action='Waiting to teleport in-game ("nav_unitmanager")...')
             result = self._wait_for_teleport_or_stuck(hwnd, stop_event, SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT)
             if result == "ok":
                 self._log("[Macro] Teleported in-game.")
@@ -3828,8 +3862,9 @@ class MacroRunner:
             coords["matchmaking_region_x"], coords["matchmaking_region_y"],
             coords["matchmaking_region_w"], coords["matchmaking_region_h"],
         )
-        self._log("[Macro] Waiting for Enter Matchmaking...")
-        self._set_status(action="Waiting for Enter Matchmaking...")
+        self._log(f'[Macro] Waiting for Enter Matchmaking (searching "{image_name}", up to '
+                   f'{MATCHMAKING_WAIT_TIMEOUT:.0f}s)...')
+        self._set_status(action=f'Waiting for Enter Matchmaking ("{image_name}")...')
         try:
             match = vision.wait_for_image(
                 hwnd, image_name, region=region,
@@ -4076,10 +4111,11 @@ class MacroRunner:
         if wait_for_menu:
             match = None
             for attempt in range(1, PLAY_CLICK_RETRY_ATTEMPTS + 1):
-                self._log("[Macro] Waiting for the gamemode menu to open..." if attempt == 1 else
-                           f"[Macro] Still on the lobby -- re-clicking Play (attempt {attempt}/"
-                           f"{PLAY_CLICK_RETRY_ATTEMPTS})...")
-                self._set_status(action="Waiting for gamemode menu...")
+                self._log(f'[Macro] Waiting for the gamemode menu to open (searching "nav_back", up to '
+                           f'{STORY_SCREEN_TIMEOUT:.0f}s)...' if attempt == 1 else
+                           f'[Macro] "nav_back" not found within {STORY_SCREEN_TIMEOUT:.0f}s -- still on '
+                           f'the lobby, re-clicking Play (attempt {attempt}/{PLAY_CLICK_RETRY_ATTEMPTS})...')
+                self._set_status(action='Waiting for gamemode menu ("nav_back")...')
                 try:
                     match = vision.wait_for_image(
                         hwnd, "nav_back", timeout=STORY_SCREEN_TIMEOUT, stop_event=stop_event)
