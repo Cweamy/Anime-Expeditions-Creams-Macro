@@ -2300,15 +2300,35 @@ class Api:
         self.push_log(f"[Stats] Clear Time {clear_time} | Yen {yen} | Kills {kills} | Damage {damage}")
         return {"ok": True, "stats": stats}
 
+    def detach_game_safely(self) -> None:
+        """Un-parent Roblox from our window so destroying the GUI can't
+        cascade WM_DESTROY into it (Windows kills child windows with their
+        parent -- a still-parented Roblox goes down too, and a half-torn-
+        down game leaks). Idempotent and swallow-everything: run from every
+        exit path (close button, Alt+F4, AND an atexit backstop for crashes/
+        force-exits), so calling it twice or on an already-detached game is
+        harmless. Sets stopping FIRST so the dock watchdog stops trying to
+        re-parent while this runs."""
+        self.stopping.set()
+        hwnd = self.game_hwnd
+        if not hwnd:
+            return
+        try:
+            if not self.docker.undock(hwnd):
+                self.logger.log("Warning: could not confirm Roblox was detached before closing.")
+            else:
+                # undock's SetParent(0) is verified inside, but give the
+                # reparent a beat to fully commit before the window dies.
+                time.sleep(0.1)
+        except Exception as exc:
+            self.logger.log(f"Detach-on-close failed: {exc}")
+
     def close_window(self):
         # Quitting the macro must only ever detach Roblox, never take it down
         # with it: Windows destroys child windows when their parent closes,
         # so Roblox has to be un-parented *before* this window is destroyed.
-        self.stopping.set()
+        self.detach_game_safely()
         self.persist_all_time()
-        if self.game_hwnd:
-            if not self.docker.undock(self.game_hwnd):
-                self.logger.log("Warning: could not confirm Roblox was detached before closing.")
         if self._window:
             self._window.destroy()
 
@@ -2591,6 +2611,13 @@ def _launch_ui():
                                 time.sleep(2)
                                 continue
                         api.gui_hwnd = gui_hwnd
+                        # Final stopping re-check: several sleeps have passed
+                        # since the one guarding this branch, and a dock()
+                        # committed AFTER close set stopping would re-parent
+                        # Roblox right before the window dies -- recreating
+                        # the cascade the whole close path exists to prevent.
+                        if api.stopping.is_set():
+                            return
                         api.docker.dock(hwnd, gui_hwnd, x=0, y=TITLEBAR_H)
                         # Stay hidden until the JS side explicitly shows it for the Task
                         # screen (showDocked() does that) — Info/Settings/Macro Manager are the
@@ -2678,16 +2705,23 @@ def _launch_ui():
     def on_closing():
         # Fallback for close paths other than our custom titlebar button
         # (e.g. Alt+F4): close_window() already handles the normal case.
-        api.stopping.set()
+        api.detach_game_safely()
         api.persist_all_time()
-        if api.game_hwnd:
-            if not api.docker.undock(api.game_hwnd):
-                api.push_log("Warning: could not confirm Roblox was detached before closing.")
         return True
+
+    # Last-resort backstop: if the app exits any OTHER way -- an unhandled
+    # exception during teardown, or webview.start() returning without the
+    # graceful path having run -- atexit still detaches Roblox before the
+    # process (and its child windows) go away. Cheap and idempotent.
+    import atexit
+    atexit.register(api.detach_game_safely)
 
     window.events.shown += on_shown
     window.events.closing += on_closing
     webview.start()
+    # webview.start() returns once the window is gone -- detach here too, in
+    # case the window died without firing our handlers.
+    api.detach_game_safely()
     try:
         keyboard.unhook_all()
     except OSError:
