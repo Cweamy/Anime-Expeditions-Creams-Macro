@@ -47,7 +47,10 @@ except Exception:  # pragma: no cover -- older pyobjc layouts; AX features degra
 
 from . import config
 
-ROBLOX_PROCESS_NAME = "robloxplayer"  # matched case-insensitively against the owning app's name
+ROBLOX_PROCESS_NAME = "roblox"  # matched case-insensitively against the owning app's name -- macOS
+# registers the app with the window server (kCGWindowOwnerName) as "Roblox", NOT the executable's
+# name "RobloxPlayer" (confirmed via lsappinfo against a real running instance), so the owner-name
+# match must be the shorter string or it never matches at all.
 
 # macOS window bounds (kCGWindowBounds) are the OUTER frame including the
 # title bar; the game's client/content area -- what every fixed coordinate
@@ -311,6 +314,32 @@ def get_display_scale_percent() -> int:
 def get_screen_size():
     bounds = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID())
     return int(bounds.size.width), int(bounds.size.height)
+
+
+def get_visible_frame():
+    """Usable screen area as (x, y, width, height) in TOP-LEFT origin points --
+    i.e. get_screen_size() minus the menu bar and the Dock.
+
+    Everything else in this module (and in window_win) speaks top-left origin,
+    but Cocoa's visibleFrame is bottom-left, so the y is flipped here rather
+    than at each call site. Used by main's macOS side-by-side arranger: parking
+    the panel at a raw (0, 0) would tuck its top under the menu bar and its
+    bottom under the Dock, which is precisely the unusable-window complaint the
+    arrangement exists to avoid. Falls back to the full display bounds if
+    AppKit doesn't answer -- a slightly-too-tall panel beats no layout at all."""
+    try:
+        from AppKit import NSScreen
+        screen = NSScreen.mainScreen()
+        full, visible = screen.frame(), screen.visibleFrame()
+        # Cocoa y grows upward from the bottom: the gap above the visible
+        # frame is what the menu bar occupies, and that is our top edge.
+        top = full.size.height - (visible.origin.y + visible.size.height)
+        return (int(visible.origin.x), int(top),
+                int(visible.size.width), int(visible.size.height))
+    except Exception as exc:
+        _log(f"visibleFrame lookup raised: {exc} -- falling back to full display bounds")
+        width, height = get_screen_size()
+        return 0, 0, width, height
 
 
 def set_window_icon(window_id: int, ico_path: str) -> bool:

@@ -1298,3 +1298,69 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ===========================================================================
+   macOS side-by-side layout
+   ---------------------------------------------------------------------------
+   On Windows the Roblox window is reparented INSIDE this one, so the Dashboard
+   reserves a literal 1152x756 hole for it (#game-slot) with the control panel
+   as a 400px column beside it. macOS cannot reparent another app's window at
+   all (see core/dock.py), so the game is arranged as its own window NEXT TO
+   this one -- which leaves that hole as pure dead space in a window that is
+   itself only ~500px wide.
+
+   So on mac the Dashboard reflows to a single column: the game slot is laid
+   out away entirely, the status panels take the top (natural height, scrolling
+   if they outgrow it) and the Process Log is pinned below them. `order` does
+   the swap because the DOM puts the log column first (it is the game's
+   sibling), which would otherwise put the log ABOVE the status panels.
+
+   Gated on :root[data-platform="mac"], set once from Api.get_platform() in
+   app.js's pywebviewready handler -- Windows never matches any of this. */
+:root[data-platform="mac"] #main-layout {
+  flex-direction: column;
+}
+
+/* The hole itself. Roblox is not in this window on mac, so nothing renders
+   here -- it is 756px of blank. */
+:root[data-platform="mac"] #game-slot {
+  display: none;
+}
+
+/* Left column in the DOM = [game slot, Process Log]. With the slot gone it is
+   just the log, pinned to the bottom at a FIXED height rather than flexing.
+
+   Fixed on purpose: on Windows this column is 1152px wide and shares its
+   height with the game, so letting it flex was free. Here it is the only
+   thing competing with the control panels for a 930px-tall window, and
+   flexing gave it ~600px to render three lines of text while pushing the
+   Start/Pause/Stop buttons off behind a scrollbar. 200px shows ~9 lines;
+   anything longer belongs in the pop-out window.
+
+   Every declaration that fights an inline style needs !important: the widths
+   and the right column's flex-shrink live in `style=` attributes on the
+   elements themselves (index.html:143/173), and an author !important rule is
+   the only thing that outranks those. */
+:root[data-platform="mac"] #main-layout > div:first-child {
+  width: 100% !important;
+  order: 2;
+  flex: 0 0 200px !important;
+  min-height: 0;
+}
+
+/* Right column in the DOM = the status/scoreboard/controls/history panels.
+   Full width, first, and takes every pixel the log doesn't -- it already
+   carries overflow-y-auto, so on a short display it scrolls internally
+   instead of shoving the log off the bottom. */
+:root[data-platform="mac"] #main-layout > div:last-child {
+  width: 100% !important;
+  order: 1;
+  flex: 1 1 auto !important;
+  min-height: 0;
+}
+
+/* The log strip is sized for the full 1152px game width on Windows; in a
+   ~500px column it needs to be able to shrink instead of forcing overflow. */
+:root[data-platform="mac"] #log-list {
+  min-height: 120px;
+}

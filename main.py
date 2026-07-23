@@ -27,6 +27,14 @@ from core.logger import Logger
 from core.runner import MacroRunner
 from core import updater
 
+# Imported at module scope (not inside the darwin branches that use it) so the
+# macOS-only geometry helpers below can be plain module functions. window_mac
+# pulls in Quartz/AppKit, which don't exist on Windows -- hence the guard.
+if sys.platform == "darwin":
+    from core import window_mac
+else:  # pragma: no cover -- Windows/Linux never reach the mac layout paths
+    window_mac = None
+
 wm.set_dpi_aware()
 
 
@@ -70,6 +78,17 @@ GUI_WIDTH_FULL = config.FIXED_WIN_W + PANEL_WIDTH
 GUI_WIDTH_COMPACT = PANEL_WIDTH
 GUI_HEIGHT_FULL = TITLEBAR_H + config.FIXED_WIN_H + LOGS_H
 GUI_HEIGHT_COMPACT = TITLEBAR_H + 280
+
+# ── macOS side-by-side geometry ─────────────────────────────────────────────
+# On Windows the game is a child window INSIDE ours, so one window size covers
+# both (GUI_*_FULL above). macOS can't embed another app's window at all (see
+# core/dock.py), so panel and game are two top-level windows sharing the
+# screen, and the panel's size is whatever the game doesn't need -- which is a
+# different number on every Mac, hence computed at runtime from the visible
+# frame rather than baked in as a constant.
+MAC_GAP = 12  # visual breathing room between the panel and the game window
+MAC_PANEL_MIN_W = PANEL_WIDTH  # narrower than the Windows panel column and it stops being usable
+MAC_PANEL_MAX_W = 560  # past this the single-column dashboard just looks stretched
 UI_INDEX = os.path.join(constants.UI_DIR, "index.html")
 LOGS_WINDOW_HTML = os.path.join(constants.UI_DIR, "logs_window.html")
 LOGO_ICO = os.path.join(constants.BUNDLE_DIR, "logo.ico")
@@ -210,6 +229,30 @@ def _get_build_info() -> str:
         return "release build"
 
 
+def _mac_panel_layout() -> dict:
+    """Where the panel and the Roblox window go on macOS, in top-left origin
+    points. Only meaningful on darwin -- see the MAC_* constants above.
+
+    The panel takes the left strip and the game sits to its right at the
+    reference size, both inside the *visible* frame so neither hides under the
+    menu bar or the Dock. "expanded" width is the whole visible width: the
+    non-Dashboard screens (Task, Macro Manager, Challenge, Settings) are
+    multi-column layouts with nothing to look at beside them, so they get the
+    full screen instead of a strip -- see Api.set_panel_expanded.
+
+    On a display too narrow for both, panel width floors at MAC_PANEL_MIN_W and
+    the game simply overflows the right edge; the startup check in _launch_ui
+    already warns about that case rather than silently arranging off-screen."""
+    x, y, width, height = window_mac.get_visible_frame()
+    panel_w = max(MAC_PANEL_MIN_W, min(MAC_PANEL_MAX_W, width - config.FIXED_WIN_W - MAC_GAP))
+    return {
+        "x": x, "y": y,
+        "panel_w": panel_w, "panel_h": height,
+        "expanded_w": width,
+        "game_x": x + panel_w + MAC_GAP, "game_y": y,
+    }
+
+
 class Api:
     """Exposed to the frontend as `pywebview.api.*`: the JS <-> Python bridge.
     Grows as the task/placement/upgrade systems get built; for now it just
@@ -230,6 +273,13 @@ class Api:
         # instantly re-attaching after an explicit Un-Attach.
         self.pinned_hwnd = None
         self.dock_suspended = False
+        # macOS side-by-side layout state (see set_panel_expanded): the panel
+        # only starts trading width against the game once it has actually been
+        # arranged, and the lock keeps the screen-switch resizes from
+        # interleaving with the dock watchdog's own re-arrange.
+        self._mac_panel_ready = False
+        self._mac_panel_width = None  # last applied width, so repeat calls are free
+        self._mac_geometry_lock = threading.Lock()
         self.stopping = threading.Event()
         self.logger = Logger()
         self.session_start = time.time()
@@ -1033,6 +1083,105 @@ class Api:
         if self.game_hwnd and wm.is_window(self.game_hwnd):
             wm.hide_window(self.game_hwnd)
 
+    def get_platform(self) -> dict:
+        """Lets the frontend branch on the one difference it genuinely can't
+        infer: on macOS the game is NOT inside our window, so the Dashboard's
+        1152x756 game slot is dead space that has to be laid out away rather
+        than reserved (see :root[data-platform="mac"] in ui/style.css)."""
+        return {"platform": sys.platform, "mac": sys.platform == "darwin"}
+
+    def set_panel_expanded(self, expanded: bool) -> None:
+        """macOS only: trade panel width against the game being visible.
+
+        The Dashboard is the only screen that has anything to look at beside
+        it, so it keeps the narrow strip with Roblox alongside; every other
+        screen is a multi-column editor that was designed against a 1552px
+        window and is genuinely unusable in a ~500px strip, so it takes the
+        whole visible frame instead. Covering Roblox costs nothing while it's
+        covered: mac captures read the window's own backing store even when
+        it's behind something (see core/window_mac.capture_window_rgb), and
+        the runner activates/raises Roblox before it clicks anyway.
+
+        No-op until the panel has actually been laid out once (_mac_panel_ready
+        -- set by the dock arranger or skip_waiting); before that the window is
+        still the small waiting-screen box and must stay that way.
+
+        Never expands WHILE THE MACRO IS RUNNING. Expanding covers Roblox, and
+        not everything that reads the game can see through that: core/vision.py
+        is immune (it reads the window's own backing store on mac -- see
+        _use_window_capture there), but core/ocr.py's capture_region is a plain
+        screen grab of a screen-space rect, so wave/reward/stats OCR would read
+        the panel's own pixels instead of the game. Staying collapsed mid-run
+        costs a cramped Settings screen; expanding costs silently wrong OCR."""
+        if sys.platform != "darwin" or not self._window or not self._mac_panel_ready:
+            return
+        if expanded and self.runner.is_running():
+            return
+        if not expanded and not self.docker.docked:
+            # Nothing arranged beside us to make room for (Roblox not open, or
+            # the user pressed Skip) -- narrowing to the strip would just leave
+            # the panel squeezed against empty desktop. The dock arranger
+            # collapses it for real once a game window actually shows up.
+            return
+        with self._mac_geometry_lock:
+            layout = _mac_panel_layout()
+            width = layout["expanded_w"] if expanded else layout["panel_w"]
+            # Idempotent: switchScreen fires this on every navigation (and F4
+            # can auto-repeat), and a move+resize round trip costs ~300ms.
+            # Compared with tolerance because the cache holds the MEASURED
+            # width; None means "unknown, re-apply".
+            if self._mac_panel_width is not None and abs(width - self._mac_panel_width) <= 2:
+                return
+            self._apply_panel_geometry(layout["x"], layout["y"], width, layout["panel_h"])
+
+    def _apply_panel_geometry(self, x: int, y: int, width: int, height: int) -> None:
+        """Move+resize our own window on macOS, and verify it took.
+
+        Order matters: pywebview's Cocoa resize() anchors NORTH|WEST, so the
+        move has to land first or the resize would grow from wherever the
+        window happened to be. resize() also defers onto the AppKit main thread
+        (AppHelper.callAfter) while this runs on the JS-bridge/watchdog thread,
+        hence the settle sleep before reading the result back.
+
+        There is deliberately no AX fallback like the Windows path's
+        MoveWindow: the window is created resizable=False, and the
+        Accessibility API honours that style mask -- setting kAXSizeAttribute
+        on it fails with kAXErrorFailure (-25200), verified on a real Mac.
+        setFrame_display_ (what pywebview calls) is not restricted that way,
+        so it is the only mechanism that works here.
+
+        Records what the window ACTUALLY ended up at in _mac_panel_width, not
+        what was asked for: that field is the short-circuit for repeat calls,
+        so caching the requested width after a resize that silently did nothing
+        would wedge the panel at the wrong size forever (every later call would
+        match the cache and return early). On failure it is cleared to None,
+        which just means the next call retries instead of trusting a lie.
+
+        Only WIDTH is verified. window_mac.get_window_rect_screen subtracts a
+        hardcoded 28pt title bar that this frameless window does not have, so
+        the measured height is always 28 short and could never match."""
+        measured = None
+        try:
+            self._window.move(x, y)
+            time.sleep(0.05)
+            self._window.resize(width, height)
+            time.sleep(0.25)
+            gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
+            if gui_hwnd:
+                left, _, right, _ = wm.get_window_rect_screen(gui_hwnd)
+                measured = right - left
+                if abs(measured - width) > 2:
+                    # One retry: a resize issued while the window is mid-
+                    # animation (or minimized) can be dropped entirely.
+                    self._window.resize(width, height)
+                    time.sleep(0.25)
+                    left, _, right, _ = wm.get_window_rect_screen(gui_hwnd)
+                    measured = right - left
+        except Exception as exc:
+            self.push_log(f"[Macro] Couldn't resize the panel: {exc}")
+            measured = None
+        self._mac_panel_width = measured if measured and measured > 0 else None
+
     def skip_waiting(self):
         # Lets the panel be used (config, etc.) before Roblox is even open.
         # The window has to actually resize to full size here, not just in
@@ -1040,6 +1189,21 @@ class Api:
         # window (see index.html's #main-layout comment -- it's 1552px
         # wide and assumes it never gets shown without that resize having
         # actually happened first).
+        if sys.platform == "darwin" and self._window:
+            # macOS never uses the 1552px two-column size: there is no game
+            # inside the window to leave room for. Skipping straight past
+            # docking still needs the panel laid out though, or the UI stays
+            # trapped in the compact waiting-screen box. Start expanded --
+            # there's no game arranged yet to sit beside.
+            self._window.restore()
+            time.sleep(0.2)
+            layout = _mac_panel_layout()
+            with self._mac_geometry_lock:
+                self._apply_panel_geometry(
+                    layout["x"], layout["y"], layout["expanded_w"], layout["panel_h"])
+                self._mac_panel_ready = True
+            self.push_log("Skipped waiting for Roblox.")
+            return
         if self._window:
             # A resize issued on a minimized window -- or, it turns out,
             # under some DPI-scaling states -- can be silently dropped,
@@ -1936,6 +2100,20 @@ def _launch_ui():
     roblox_wm = WindowManager(config.ROBLOX_WINDOW_TITLE)  # only used for its resize/client-rect helpers below
 
     screen_w, screen_h = wm.get_screen_size()
+    if sys.platform == "darwin":
+        # Side-by-side arrangement (see core/dock.py's darwin GameDocker) needs the panel width
+        # plus the full fixed game size in logical points. Smaller/lower-scaled MacBook displays
+        # (e.g. a 13" panel left at its default 1280x800 scaled resolution) don't have that much
+        # logical width even though the physical panel is plenty big -- Roblox ends up parked
+        # partly or fully off-screen with no error, which just looks like "the game is too big".
+        needed_w = GUI_WIDTH_COMPACT + 12 + config.FIXED_WIN_W
+        if screen_w < needed_w or screen_h < config.FIXED_WIN_H:
+            api.push_log(
+                f"[Macro] Your display's logical resolution ({screen_w}x{screen_h}pt) is smaller than "
+                f"what side-by-side docking needs ({needed_w}x{config.FIXED_WIN_H}pt) -- Roblox will be "
+                f"placed partly or fully off-screen. Fix: System Settings > Displays > select a scaled "
+                f"resolution with \"More Space\" (a higher point resolution, not necessarily higher "
+                f"physical res) so it's at least that wide.")
     start_w, start_h = GUI_WIDTH_COMPACT, GUI_HEIGHT_COMPACT
     start_x = (screen_w - start_w) // 2
     start_y = (screen_h - start_h) // 2
@@ -2090,13 +2268,26 @@ def _launch_ui():
                         # mid-session, image search still lands correctly
                         # via vision's reference-space scaling; it's just
                         # no longer beside the panel.)
+                        # Both windows are placed from one layout (see
+                        # _mac_panel_layout): the panel is created centered and
+                        # compact, so it has to be moved AND grown to the left
+                        # strip here -- leaving it centered is what put it
+                        # floating over the middle of the game, and leaving it
+                        # compact is what made the real UI unreachable.
+                        layout = _mac_panel_layout()
                         gui_hwnd = gui_wm.find()
                         if gui_hwnd and not api.stopping.is_set():
                             api.gui_hwnd = gui_hwnd
-                            api.docker.dock(hwnd, gui_hwnd, x=GUI_WIDTH_COMPACT + 12, y=0)
+                            with api._mac_geometry_lock:
+                                api._apply_panel_geometry(
+                                    layout["x"], layout["y"], layout["panel_w"], layout["panel_h"])
+                                api._mac_panel_ready = True
+                            api.docker.dock(hwnd, gui_hwnd, x=layout["game_x"], y=layout["game_y"])
                             api.pinned_hwnd = None
                             api.push_ui("showDocked")
-                            api.push_log("Roblox arranged beside the panel (macOS side-by-side mode).")
+                            api.push_log(
+                                f'Roblox arranged beside the panel (macOS side-by-side mode): panel '
+                                f'{layout["panel_w"]}x{layout["panel_h"]}, game at x={layout["game_x"]}.')
                         else:
                             api.push_log("Could not find the macro's own window, will retry.")
                         time.sleep(2)

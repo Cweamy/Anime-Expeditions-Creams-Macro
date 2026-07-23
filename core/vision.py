@@ -17,6 +17,7 @@ and contrast per-window anyway (TM_CCOEFF_NORMED), so grayscale doesn't lose
 matching power here, it just drops the noisy channel.
 """
 import os
+import sys
 import threading
 import time
 
@@ -288,7 +289,18 @@ def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
 # genuinely dead (the window capture of the same moment had real pixels),
 # every later capture goes straight to the window path instead of paying
 # for both on every poll.
-_use_window_capture = False
+#
+# macOS starts on the window path outright. CGWindowListCreateImage reads the
+# window's own backing store even when something is in front of it, which a
+# screen grab fundamentally cannot do -- and on mac Roblox is a separate
+# top-level window that anything (including the macro's own panel on the
+# non-Dashboard screens, see Api.set_panel_expanded) can sit on top of. The
+# all-black tiebreaker below would never catch that: an occluded grab returns
+# the *covering window's* pixels, which are not black, so every template match
+# would quietly run against whatever is overlapping the game instead of failing
+# loudly. Windows keeps the lazy detection -- there the game is a child window
+# inside ours and can't be occluded by a foreign window in the first place.
+_use_window_capture = sys.platform == "darwin"
 
 
 def _capture_window_gray(hwnd: int, region: tuple = None):

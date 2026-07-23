@@ -319,6 +319,25 @@ let currentScreen = 'dashboard';
 let lastNonDashboardScreen = 'creation';
 const SCREENS = ['dashboard', 'task', 'creation', 'challenge', 'settings'];
 
+// Only macOS cares: there the game sits BESIDE this window instead of inside
+// it, which changes both the Dashboard's layout and how much screen this
+// window should take.
+//
+// Detected SYNCHRONOUSLY here, at parse time, rather than only from
+// Api.get_platform() in the pywebviewready handler -- Python can call
+// showDocked() through evaluate_js the moment docking succeeds, which reveals
+// #main-layout, and that can land before any awaited bridge round-trip has
+// resolved. Setting the attribute late would paint the Windows layout (with
+// its 1152px game hole) first and then visibly reflow. pywebviewready still
+// re-asserts this from Python afterwards, which is authoritative.
+let IS_MAC = /Mac|Macintosh|Mac OS X/i.test(
+  (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '');
+if (IS_MAC) document.documentElement.dataset.platform = 'mac';
+
+// Previous poll's macro-running state, so refreshStatus can act on the
+// running -> stopped EDGE rather than every tick (see refreshStatus).
+let wasMacroRunning = false;
+
 function switchScreen(name) {
   const changed = currentScreen !== name;
   currentScreen = name;
@@ -357,6 +376,14 @@ function switchScreen(name) {
       // own dismiss handler is what restores show_game() once it closes.
       if (name === 'dashboard' && !isBlockingOverlayOpen()) pywebview.api.show_game();
       else if (name !== 'dashboard') pywebview.api.hide_game();
+
+      // macOS: hide_game() above is a no-op there (you cannot hide another
+      // app's window), so "give this screen the room" has to be expressed as
+      // window size instead. The Dashboard keeps the narrow strip so Roblox
+      // stays visible alongside it; every other screen is a multi-column
+      // editor built for a 1552px window, so it takes the full visible frame.
+      // No-op until the panel has been arranged once -- see set_panel_expanded.
+      if (IS_MAC) pywebview.api.set_panel_expanded(name !== 'dashboard');
     }
   } catch (e) {}
 
@@ -428,6 +455,18 @@ async function refreshStatus() {
   try {
     const macro = await pywebview.api.is_macro_running();
     setMacroButtons(!!macro.running, !!macro.paused);
+
+    // macOS: set_panel_expanded refuses to widen the panel while the macro is
+    // running (widening covers Roblox, and core/ocr.py's reward/wave reads are
+    // plain screen grabs that would then read our own pixels). So a run that
+    // starts while the user sits on Settings leaves them stuck at the narrow
+    // width even after it finishes -- nothing else would ask again until the
+    // next navigation. Re-ask on the running -> stopped edge only, so this
+    // stays off the hot path of a 1.5s poll.
+    if (IS_MAC && wasMacroRunning && !macro.running && currentScreen !== 'dashboard') {
+      pywebview.api.set_panel_expanded(true);
+    }
+    wasMacroRunning = !!macro.running;
   } catch (e) {}
 }
 
@@ -3831,6 +3870,16 @@ function migrateWalkBlock(b) {
 // Init
 // ---------------------------------------------------------------------------
 window.addEventListener('pywebviewready', async () => {
+  // Re-assert the platform from Python, which is authoritative -- the
+  // synchronous navigator sniff at the top of this file is what actually beats
+  // the first paint, this just corrects it if the user agent ever lies.
+  try {
+    const env = await pywebview.api.get_platform();
+    IS_MAC = !!(env && env.mac);
+    if (IS_MAC) document.documentElement.dataset.platform = 'mac';
+    else delete document.documentElement.dataset.platform;
+  } catch (e) {}
+
   try {
     const version = await pywebview.api.get_version();
     document.getElementById('ver-badge').textContent = `v${version}`;

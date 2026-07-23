@@ -100,13 +100,15 @@ pip install -r requirements.txt
 
 ### macOS (experimental — testers wanted)
 
-Releases also publish **`Creams-Macro-Anime-Expeditions-macOS.zip`** (a `.app` + the same editable `Assets/` folder), and source runs work via `./run.sh`. The mac port is **untested on real hardware** — it exists for testers. Key differences and setup:
+Releases also publish **`Creams-Macro-Anime-Expeditions-macOS.zip`** (a `.app` + the same editable `Assets/` folder), and source runs work via `./run.sh`. Key differences and setup:
 
 1. **Permissions (required):** System Settings > Privacy & Security — grant the app (or your terminal, for source runs) **Accessibility**, **Input Monitoring**, and **Screen Recording**. Without them, clicks silently do nothing and captures come back black. The app logs a warning at startup if Accessibility is missing.
-2. **Side-by-side, not docked:** macOS can't embed another app's window, so Roblox is auto-arranged *next to* the control panel at the exact reference size instead of inside it.
-3. **Scaling:** all captures are normalized and clicks scaled automatically (Retina 2x included), so the same Assets images work — but expect to add your own crops via the Image Manager where Roblox's mac rendering differs.
-4. **Self-update** isn't wired up for the mac build yet — replace the app with a freshly downloaded zip.
-5. Global hotkeys need elevated permissions on macOS; without them, use the on-screen buttons.
+2. **Side-by-side, not docked:** macOS can't embed another app's window, so Roblox is auto-arranged *next to* the control panel at the exact reference size instead of inside it. The panel sizes itself to whatever width the game doesn't need and to the full height of the screen's *visible* area (menu bar and Dock excluded), so nothing ends up under either.
+3. **Screen space:** side-by-side needs about **1564 logical points of width** (400 panel + 1152 game). If your display is set to fewer — a 13" MacBook left at its default scaled resolution is 1440 or even 1280 wide — Roblox lands partly off-screen; the app logs exactly this at startup. Fix it in System Settings > Displays by picking a resolution toward **"More Space"** (this is about *logical* points, not the physical panel, so a Retina display stays sharp).
+4. **The Dashboard drops the game slot.** On Windows the Dashboard reserves a 1152×756 hole for the embedded game; on mac there is nothing to put in it, so the Dashboard reflows to a single column — status, scoreboard, controls, run history, then the log — and the window widens to the full screen on the Task / Macro Manager / Challenge / Settings screens, which are multi-column and need the room. It stays narrow on the Dashboard so Roblox is visible beside it, and **never widens mid-run** (covering the game would break the reward/wave OCR, which reads the screen rather than the window).
+5. **Scaling:** all captures are normalized and clicks scaled automatically (Retina 2x included), so the same Assets images work — but expect to add your own crops via the Image Manager where Roblox's mac rendering differs. Image matching reads Roblox's own window contents rather than the screen, so another window sitting over the game doesn't break detection.
+6. **Self-update** isn't wired up for the mac build yet — replace the app with a freshly downloaded zip.
+7. Global hotkeys need elevated permissions on macOS; without them, use the on-screen buttons.
 
 Either way, install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) if you haven't already (needed for stats/reward reading only — everything else works without it).
 
