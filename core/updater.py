@@ -332,6 +332,41 @@ def _extract_assets_zip_addonly(zip_path: str, log) -> int:
     return added
 
 
+def _get_release_zip_with_fallback(release_zip_url: str, log):
+    """requests.get(stream=True) for a release zip, retrying across every
+    name the zip has ever shipped under when the given URL 404s.
+
+    The zip's filename has changed once already (unsuffixed ->
+    -Windows/-macOS in v0.4.1), and each rename strands every install
+    whose updater asks for the old name by exact constructed URL -- the
+    exact 404 the v0.4.1 release itself was cut to patch over, then seen
+    again live from a v0.4.0 install against v0.5.0. Flexible asset-list
+    matching (check_for_update) already handles renames when the API
+    answers; this covers the OTHER path, where a rate-limited API left
+    only a constructed URL to try. Trying the short list of known names
+    beats shipping every release with duplicate compatibility assets.
+
+    Returns the streaming response. Raises like requests.get/raise_for_
+    status would if every candidate fails (the LAST candidate's error, or
+    the first non-404 error immediately -- a rate-limit/network failure on
+    the real name shouldn't get retried into confusion on legacy names)."""
+    base, _, name = release_zip_url.rpartition("/")
+    candidates = [release_zip_url]
+    for legacy in (RELEASE_ZIP_NAME, "Creams-Macro-Anime-Expeditions.zip"):
+        alt = f"{base}/{legacy}"
+        if alt not in candidates:
+            candidates.append(alt)
+    for i, url in enumerate(candidates):
+        log(f"[Update] Downloading {url}...")
+        resp = requests.get(url, timeout=120, stream=True)
+        if resp.status_code == 404 and i < len(candidates) - 1:
+            log("[Update] Not found under that name -- trying the release zip's other known name.")
+            continue
+        resp.raise_for_status()
+        return resp
+    resp.raise_for_status()  # unreachable in practice; keeps the contract obvious
+
+
 def merge_assets_update(release_zip_url: str, log) -> bool:
     """Downloads a release zip and add-only merges its Assets/ entries into
     the local Assets folder, ignoring the exe it also carries -- the
@@ -341,9 +376,7 @@ def merge_assets_update(release_zip_url: str, log) -> bool:
     tmp_root = tempfile.mkdtemp(prefix="aecm_assets_")
     zip_path = os.path.join(tmp_root, RELEASE_ZIP_NAME)
     try:
-        log(f"[Update] Downloading {release_zip_url}...")
-        resp = requests.get(release_zip_url, timeout=120, stream=True)
-        resp.raise_for_status()
+        resp = _get_release_zip_with_fallback(release_zip_url, log)
         with open(zip_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=1 << 16):
                 f.write(chunk)
@@ -430,9 +463,7 @@ def download_release_update(release_zip_url: str, log, on_progress=None) -> str:
     tmp_root = tempfile.mkdtemp(prefix="aecm_update_")
     zip_path = os.path.join(tmp_root, RELEASE_ZIP_NAME)
     try:
-        log(f"[Update] Downloading {release_zip_url}...")
-        resp = requests.get(release_zip_url, stream=True, timeout=120)
-        resp.raise_for_status()
+        resp = _get_release_zip_with_fallback(release_zip_url, log)
         total = int(resp.headers.get("content-length") or 0)
         downloaded = 0
         with open(zip_path, "wb") as f:
