@@ -54,17 +54,40 @@ def cursor_pos():
     return pt.x, pt.y
 
 
+# Keys whose scancode collides with a numpad key unless the EXTENDEDKEY
+# flag marks them as the "extended" variant: without it, VK_LEFT's scan
+# (0x4B) IS numpad-4 to anything reading raw scancodes -- confirmed live
+# with Camera Setup 3's Left-arrow hold doing nothing in Roblox. A real
+# keyboard driver sets the E0 prefix for these; SendInput needs the flag
+# to say the same thing.
+_EXTENDED_VKS = {
+    0x21, 0x22, 0x23, 0x24,  # PgUp, PgDn, End, Home
+    0x25, 0x26, 0x27, 0x28,  # Left, Up, Right, Down arrows
+    0x2D, 0x2E,              # Insert, Delete
+    0x6F,                    # Numpad divide
+    0x90,                    # NumLock
+    0xA3, 0xA5,              # Right Ctrl, Right Alt
+}
+
+
+def _key_flags(vk: int) -> int:
+    flags = si.KEYEVENTF_SCANCODE
+    if vk in _EXTENDED_VKS:
+        flags |= si.KEYEVENTF_EXTENDEDKEY
+    return flags
+
+
 def key_down(vk: int) -> None:
     # Scan codes, not VK codes, for the actual event -- matches what a real
     # keyboard driver reports, picked up more reliably by games.
     scan = si.vk_to_scan(vk)
-    si.send_keyboard_input(si.KeyBdInput(wVk=0, wScan=scan, dwFlags=si.KEYEVENTF_SCANCODE, time=0, dwExtraInfo=0))
+    si.send_keyboard_input(si.KeyBdInput(wVk=0, wScan=scan, dwFlags=_key_flags(vk), time=0, dwExtraInfo=0))
 
 
 def key_up(vk: int) -> None:
     scan = si.vk_to_scan(vk)
     si.send_keyboard_input(si.KeyBdInput(
-        wVk=0, wScan=scan, dwFlags=si.KEYEVENTF_SCANCODE | si.KEYEVENTF_KEYUP, time=0, dwExtraInfo=0))
+        wVk=0, wScan=scan, dwFlags=_key_flags(vk) | si.KEYEVENTF_KEYUP, time=0, dwExtraInfo=0))
 
 
 def is_key_down(vk: int) -> bool:
