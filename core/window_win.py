@@ -564,40 +564,33 @@ def bring_to_top(hwnd: int) -> None:
     user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
 
 
-def set_window_cutout(hwnd: int, hole) -> None:
-    """Cuts a rectangular HOLE in a window (or restores it solid with
-    hole=None): SetWindowRgn removes the hole area from the window
-    entirely, so those pixels show whatever window sits BEHIND, and clicks
-    there land on it too -- the overlay-with-a-cutout technique the cutout
-    dock mode is built on (see core/dock.py). hole is (x, y, w, h) in
-    window-relative device pixels; our GUI window is frameless at 100%
-    scale, so its DOM coordinates map 1:1."""
-    RGN_DIFF = 4
-    if hole is None:
-        user32.SetWindowRgn(hwnd, None, True)
-        return
-    rect = wintypes.RECT()
-    user32.GetWindowRect(hwnd, ctypes.byref(rect))
-    full = gdi32.CreateRectRgn(0, 0, rect.right - rect.left, rect.bottom - rect.top)
-    hx, hy, hw, hh = (int(v) for v in hole)
-    cut = gdi32.CreateRectRgn(hx, hy, hx + hw, hy + hh)
-    gdi32.CombineRgn(full, full, cut, RGN_DIFF)
-    gdi32.DeleteObject(cut)
-    # The system takes ownership of `full` from here -- no DeleteObject.
-    user32.SetWindowRgn(hwnd, full, True)
+def place_topmost(hwnd: int, x: int, y: int, w: int, h: int) -> None:
+    """Position + promote into the TOPMOST band in one call, no activation
+    -- cutout mode's 'show': the game floats over the GUI's game slot.
+    c_void_p wrapper for the same 64-bit pseudo-handle reason as
+    set_always_on_top."""
+    user32.SetWindowPos(hwnd, ctypes.c_void_p(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE)
 
 
-def position_below(hwnd: int, ref_hwnd: int, x: int, y: int, w: int, h: int) -> None:
-    """Places hwnd at the given screen rect at a z position in one call,
-    without activating anything: ref_hwnd is a window to slot directly
-    below, or 0 (HWND_TOP) for the top of the normal band -- the cutout
-    dock uses the latter, with the GUI riding the TOPMOST band above it,
-    since a cross-process insert-after can silently no-op."""
-    user32.SetWindowPos(hwnd, ref_hwnd, x, y, w, h, SWP_NOACTIVATE)
+def send_to_bottom(hwnd: int) -> None:
+    """Drop out of the topmost band AND to the bottom of the z-order --
+    cutout mode's 'hide': everything (the GUI included) covers the game,
+    which keeps rendering for window-content captures."""
+    user32.SetWindowPos(hwnd, ctypes.c_void_p(HWND_NOTOPMOST), 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+    HWND_BOTTOM = 1
+    user32.SetWindowPos(hwnd, ctypes.c_void_p(HWND_BOTTOM), 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 
 
 def set_always_on_top(hwnd: int, on: bool = True) -> None:
-    flag = HWND_TOPMOST if on else HWND_NOTOPMOST
+    # The pseudo-handles are NEGATIVE (-1/-2), and ctypes without argtypes
+    # passes a bare Python -1 as a 32-bit int into the 64-bit
+    # hWndInsertAfter slot -- it arrives as 0xFFFFFFFF, an invalid handle,
+    # and SetWindowPos just returns 0. Wrapping in c_void_p produces the
+    # proper pointer-sized -1. (Latent since this helper was written;
+    # cutout mode is its first real caller.)
+    flag = ctypes.c_void_p(HWND_TOPMOST if on else HWND_NOTOPMOST)
     user32.SetWindowPos(hwnd, flag, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
 
 

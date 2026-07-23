@@ -346,14 +346,6 @@ def get_visible_frame():
         return 0, 0, width, height
 
 
-def set_window_cutout(window_id: int, hole) -> None:
-    pass  # Windows-only technique (SetWindowRgn); mac uses side-by-side arranging instead
-
-
-def position_below(window_id: int, ref_id: int, x: int, y: int, w: int, h: int) -> None:
-    pass  # cutout-mode companion -- see above
-
-
 def set_window_icon(window_id: int, ico_path: str) -> bool:
     return False  # pywebview's Cocoa backend owns the app icon on mac
 

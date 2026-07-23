@@ -293,6 +293,7 @@ class Api:
         # whenever the hole is closed), hence force_window_capture.
         self.game_cutout = sys.platform != "darwin" and bool(cfg.load().get("game_cutout", False))
         self.docker.cutout = self.game_cutout
+        self._cutout_game_visible = False  # show_game/hide_game drive this; watchdog re-glues only while visible
         if self.game_cutout:
             from core import vision
             vision.force_window_capture()
@@ -1101,23 +1102,26 @@ class Api:
     def show_game(self):
         # Only touches visibility, not docking state: the Roblox window stays
         # parented/borderless the whole time, so this is just a toggle.
-        # Cutout mode expresses visibility as the HOLE instead: open it over
-        # the game slot (the game is already glued behind it) rather than
-        # un-hiding a window that was never hidden.
+        # Cutout mode expresses visibility as LAYERING instead: the game
+        # floats topmost exactly over the game slot (see core/dock.py's
+        # cutout notes for why a literal region hole can't work over
+        # WebView2), and "hidden" is parked at the bottom of the z-order.
         if self.game_cutout:
-            if self.gui_hwnd and self.docker.docked:
-                wm.set_window_cutout(self.gui_hwnd, (0, TITLEBAR_H, config.FIXED_WIN_W, config.FIXED_WIN_H))
+            self._cutout_game_visible = True
+            if self.docker.docked and self.game_hwnd and wm.is_window(self.game_hwnd) and self.gui_hwnd:
+                self.docker.dock(self.game_hwnd, self.gui_hwnd, x=0, y=TITLEBAR_H)
             return
         if self.game_hwnd and wm.is_window(self.game_hwnd):
             wm.show_window(self.game_hwnd)
 
     def hide_game(self):
-        # Cutout mode: close the hole -- the solid GUI occludes the game
-        # (which keeps rendering behind it; captures read the window's own
-        # contents in this mode, so detection doesn't care).
+        # Cutout mode: demote to the bottom of the z-order -- everything
+        # (this GUI included) covers the game, which keeps rendering for
+        # the window-content captures this mode forces.
         if self.game_cutout:
-            if self.gui_hwnd:
-                wm.set_window_cutout(self.gui_hwnd, None)
+            self._cutout_game_visible = False
+            if self.game_hwnd and wm.is_window(self.game_hwnd):
+                wm.send_to_bottom(self.game_hwnd)
             return
         if self.game_hwnd and wm.is_window(self.game_hwnd):
             wm.hide_window(self.game_hwnd)
@@ -2583,9 +2587,11 @@ def _launch_ui():
                         # default/other screens now, and Roblox is a native window that
                         # would otherwise render on top of them regardless of DOM state.
                         # Cutout mode never hides the window (captures read its
-                        # contents) -- "hidden" there is simply the hole staying
-                        # closed until show_game opens it.
-                        if not api.docker.cutout:
+                        # contents) -- "hidden" there is parked at the bottom of
+                        # the z-order until show_game promotes it.
+                        if api.docker.cutout:
+                            wm.send_to_bottom(hwnd)
+                        else:
                             wm.hide_window(hwnd)
                         api.pinned_hwnd = None  # dock succeeded -- back to normal auto-tracking of this hwnd
                         api.push_ui("showDocked")
@@ -2595,11 +2601,14 @@ def _launch_ui():
             except Exception as exc:
                 api.push_log(f"Dock watchdog error: {exc}")
 
-            # Cutout mode's glue: re-assert the game's position (tracks the
-            # GUI if it was dragged) and its just-below-the-GUI z-slot (heals
-            # after a click through the hole raised the game) every tick.
+            # Cutout mode's glue: while the game is meant to be visible,
+            # re-assert its over-the-slot position every tick (tracks a
+            # dragged GUI, heals lost topmost). Skipped while hidden --
+            # re-promoting the game over the Settings screen every 2s would
+            # BE the bug.
             try:
                 if (sys.platform != "darwin" and api.docker.cutout and api.docker.docked
+                        and api._cutout_game_visible
                         and api.game_hwnd and wm.is_window(api.game_hwnd)
                         and api.gui_hwnd and wm.is_window(api.gui_hwnd)):
                     api.docker.dock(api.game_hwnd, api.gui_hwnd, x=0, y=TITLEBAR_H)
