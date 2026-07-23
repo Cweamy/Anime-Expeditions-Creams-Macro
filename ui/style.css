@@ -58,6 +58,51 @@
   --teal: #16a087; --amber: #b8842e; --slate: #6b7290; --lilac: #8f5fcc; --rose: #c0435a;
 }
 :root[data-theme-base="light"]:not([data-theme-accent]) { --brand: #5b7cf0; }
+
+/* Liquid Glass: frosted translucent panels over the (recreated) desktop.
+   The wallpaper itself is drawn by body::before -- sized to the screen and
+   offset by the window's position (CSS vars fed by app.js's
+   syncGlassBackdrop/updateGlassOffset), so it lines up 1:1 with the real
+   desktop behind the window -- and the panels blur it with backdrop-filter.
+   html/body keep an OPAQUE base underneath: WebView2 composites the page
+   onto a white host surface, so any translucency at the page root washes
+   everything out (the exact reason real window transparency was a dead
+   end -- see main.py's NOTE). */
+:root[data-theme-base="glass"] {
+  --bg-deep: #0b0d15;
+  --bg-card: rgba(17, 20, 32, 0.58);
+  --bg-surface: rgba(28, 32, 50, 0.55);
+  --border: rgba(255, 255, 255, 0.10);
+  --text: #eef0fa; --text-dim: #a8acbf; --text-muted: #6e7288;
+}
+/* The wallpaper lives on body's OWN background (a z-index:-1 ::before
+   never surfaced under the root stacking context here -- verified live):
+   layer 1 is a dark veil so text stays readable on bright desktops,
+   layer 2 the wallpaper itself, sized to the screen and offset by the
+   window position so it lines up 1:1 with the desktop behind the window.
+   Gradient fallback covers solid-color desktops and macOS. */
+:root[data-theme-base="glass"] body {
+  background:
+    linear-gradient(rgba(8, 10, 18, 0.52), rgba(8, 10, 18, 0.52)),
+    var(--glass-wallpaper, linear-gradient(135deg, #23345f, #43307a 45%, #1c4a56));
+  background-position: 0 0, var(--glass-ox, 0px) var(--glass-oy, 0px);
+  background-size: auto, var(--glass-screen-w, 100vw) var(--glass-screen-h, 100vh);
+  background-repeat: no-repeat;
+}
+/* The frost itself -- panels, titlebar, modals and the Macro Manager's
+   shells blur whatever sits behind them (the wallpaper layer). */
+:root[data-theme-base="glass"] .rp-panel,
+:root[data-theme-base="glass"] #titlebar,
+:root[data-theme-base="glass"] .modal-panel,
+:root[data-theme-base="glass"] .phase-panel {
+  backdrop-filter: blur(26px) saturate(1.35);
+  -webkit-backdrop-filter: blur(26px) saturate(1.35);
+}
+/* Specular top edge -- the small touch that reads as "glass". */
+:root[data-theme-base="glass"] .rp-panel,
+:root[data-theme-base="glass"] .modal-panel {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
 html, body { height: 100%; margin: 0; background: var(--bg-deep); overflow: hidden; }
 body { user-select: none; -webkit-user-select: none; font-family: 'Inter', system-ui, sans-serif; font-weight: 500; color: var(--text); }
 h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }

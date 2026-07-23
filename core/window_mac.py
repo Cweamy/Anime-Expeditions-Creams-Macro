@@ -346,6 +346,13 @@ def get_visible_frame():
         return 0, 0, width, height
 
 
+def get_wallpaper_path() -> str:
+    """Liquid Glass backdrop source. NSWorkspace could supply the real
+    wallpaper on mac; until a tester verifies that, the theme just uses
+    its built-in gradient fallback there."""
+    return ""
+
+
 def set_window_icon(window_id: int, ico_path: str) -> bool:
     return False  # pywebview's Cocoa backend owns the app icon on mac
 

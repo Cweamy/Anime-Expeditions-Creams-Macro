@@ -712,6 +712,8 @@ const THEME_BASES = {
   black:   { label: 'Black', bg: '#0a0a0a', border: '#262626' },
   slate:   { label: 'Slate', bg: '#1a1b1e', border: '#313338' },
   light:   { label: 'Light', bg: '#ffffff', border: '#d8dbe4' },
+  // Frosted panels over the (recreated) desktop -- see syncGlassBackdrop.
+  glass:   { label: 'Liquid Glass', bg: 'linear-gradient(135deg, rgba(110,166,255,0.45), rgba(181,140,224,0.45))', border: 'rgba(255,255,255,0.25)' },
 };
 const THEME_ACCENTS = {
   default: '#7c9dff', ocean: '#58a6ff', emerald: '#3fbf8f', sakura: '#e87a9e',
@@ -725,7 +727,47 @@ function applyThemeBase(name, announce) {
   if (activeThemeBase === 'default') delete document.documentElement.dataset.themeBase;
   else document.documentElement.dataset.themeBase = activeThemeBase;
   renderThemePicker();
+  syncGlassBackdrop();
   if (announce) addLog(`[Theme] Background: ${THEME_BASES[activeThemeBase].label}`);
+}
+
+// ---- Liquid Glass backdrop ------------------------------------------------
+// Real per-pixel window transparency is impossible over WebView2 (the
+// backend NOTE has the full autopsy), so glass recreates the desktop under
+// the UI instead: the actual wallpaper file, sized to the screen and offset
+// by the window's screen position so it lines up 1:1 with the desktop
+// behind the window -- then the panels frost it with a real backdrop blur.
+// A slow poll keeps it aligned while the window is dragged; on a static
+// wallpaper the illusion is exact.
+let glassOffsetPoll = null;
+
+async function syncGlassBackdrop() {
+  const rootS = document.documentElement.style;
+  if (activeThemeBase !== 'glass') {
+    if (glassOffsetPoll) { clearInterval(glassOffsetPoll); glassOffsetPoll = null; }
+    return;
+  }
+  try {
+    const info = await pywebview.api.get_glass_backdrop();
+    if (info && info.ok) {
+      rootS.setProperty('--glass-wallpaper', `url("${info.file_url}")`);
+      rootS.setProperty('--glass-screen-w', info.screen_w + 'px');
+      rootS.setProperty('--glass-screen-h', info.screen_h + 'px');
+    }
+  } catch (e) {}
+  await updateGlassOffset();
+  if (!glassOffsetPoll) glassOffsetPoll = setInterval(updateGlassOffset, 700);
+}
+
+async function updateGlassOffset() {
+  try {
+    const pos = await pywebview.api.get_window_position();
+    if (pos && pos.ok) {
+      const rootS = document.documentElement.style;
+      rootS.setProperty('--glass-ox', -pos.x + 'px');
+      rootS.setProperty('--glass-oy', -pos.y + 'px');
+    }
+  } catch (e) {}
 }
 
 function applyThemeAccent(name, announce) {
