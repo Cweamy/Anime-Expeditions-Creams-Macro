@@ -746,6 +746,34 @@
         </section>
       </div>
 
+      <!-- One-button environment verification + one-file bug reports --
+           see main.Api.run_health_check / export_failure_report. -->
+      <div class="settings-category" data-cat="debug" style="margin-top: 20px;">
+        <section class="rp-panel">
+          <header class="rp-panel-head">
+            <span class="rp-head-tag" style="--rp-tag: var(--teal);">Support</span>
+            <span class="rp-head-title">Diagnostics</span>
+            <span class="rp-head-rule"></span>
+          </header>
+
+          <div class="setting-row" style="padding: 14px;">
+            <div>
+              <div class="setting-label">Health Check</div>
+              <div class="setting-desc">Verifies capture, input, permissions, display scale, reference images and OCR in one pass -- results land in the Process Log.</div>
+            </div>
+            <button id="btn-health-check" onclick="runHealthCheck(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--teal); border-color: var(--border);">Run</button>
+          </div>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Export Failure Report</div>
+              <div class="setting-desc">Bundles the latest debug screenshots, log tail, settings (webhook redacted) and a health check into one zip you can share when something breaks.</div>
+            </div>
+            <button id="btn-failure-report" onclick="exportFailureReport(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Export</button>
+          </div>
+        </section>
+      </div>
+
       <!-- Runs one tick of the Expedition nav_start_game/exp_continue/
            exp_extract check against Roblox as it is right now, no active
            macro run needed -- so tuning that flow doesn't mean restarting

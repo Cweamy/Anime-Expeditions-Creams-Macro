@@ -1181,6 +1181,37 @@ async function runCameraSetup2(btn) {
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, Math.max(3200, holdMs + 1200));
 }
 
+// Settings > Debug > "Health Check" -- backend runs every environment probe
+// and logs each result; the button just reflects the overall verdict.
+async function runHealthCheck(btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+  try {
+    const result = await pywebview.api.run_health_check();
+    btn.textContent = result.ok ? 'All good' : 'Issues found';
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2600);
+}
+
+// Settings > Debug > "Export Failure Report" -- one zip with everything a
+// bug report needs (screenshots, log tail, redacted settings, health check).
+async function exportFailureReport(btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Bundling...';
+  try {
+    const result = await pywebview.api.export_failure_report();
+    btn.textContent = result.ok ? 'Saved' : (result.reason === 'cancelled' ? original : 'Failed');
+    if (result.ok) addLog(`[Debug] Failure report ready to share: ${result.path}`);
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2600);
+}
+
 // Settings > Debug > "Expedition Camera Zoom" -- how long O is held during
 // Expedition's Pre Start camera setup. Saved through the generic
 // set_setting; the runner reads it at the next Start.

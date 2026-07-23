@@ -1688,6 +1688,166 @@ class Api:
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True}
 
+    # Reference names the macro genuinely cannot run without -- the health
+    # check flags these missing rather than every optional nicety.
+    HEALTH_CRITICAL_IMAGES = ("nav_play", "nav_start_game", "victory", "defeat", "leave_stage", "exp_continue")
+
+    def run_health_check(self) -> dict:
+        """Settings > Debug > "Health Check" (also offered by the first-run
+        welcome): verifies the handful of environmental things that cause
+        the vast majority of "it just doesn't work" reports, end to end --
+        window found, captures return real pixels, simulated input actually
+        moves the cursor, elevation/display-scale mismatches, critical
+        reference images present, Tesseract available. Each result is
+        logged AND returned so the UI can render a summary. Checks that
+        need Roblox report "skipped" (ok=True) when it isn't attached --
+        a half-run check that names what it couldn't test beats refusing
+        to run at all."""
+        checks = []
+
+        def add(name, ok, detail=""):
+            checks.append({"name": name, "ok": bool(ok), "detail": detail})
+            mark = "OK  " if ok else "FAIL"
+            self.push_log(f"[Health] {mark} {name}" + (f" -- {detail}" if detail else ""))
+
+        hwnd = self.game_hwnd
+        roblox_ok = bool(hwnd and wm.is_window(hwnd))
+        add("Roblox window attached", roblox_ok,
+            "" if roblox_ok else "Open Roblox and let the macro dock it (the Waiting screen does this).")
+
+        if roblox_ok:
+            try:
+                from core import vision
+                gray = vision.capture_game_gray(hwnd)
+                cap_ok = gray is not None and bool(gray.any())
+            except Exception as exc:
+                cap_ok, gray = False, None
+                self.push_log(f"[Health] capture raised: {exc}")
+            add("Screen capture returns pixels", cap_ok,
+                "" if cap_ok else "Captures come back black. Make sure the game is visible on the "
+                                  "Dashboard; BitBlt-dead GPU setups switch to window capture after "
+                                  "one black frame -- run this again.")
+        else:
+            add("Screen capture returns pixels", True, "skipped -- no Roblox window to capture")
+
+        # Does simulated input reach the OS at all? A relative nudge that
+        # doesn't move the real cursor means SendInput/CGEvent is being
+        # dropped wholesale (permissions on mac, injection blocked on
+        # Windows) -- the exact "finds the button, clicks, nothing happens"
+        # class of report.
+        try:
+            x0, y0 = self.mouse.position()
+            self.mouse.nudge(5, 5)
+            time.sleep(0.05)
+            x1, y1 = self.mouse.position()
+            self.mouse.nudge(-5, -5)  # put the cursor back where it was
+            input_ok = (x1, y1) != (x0, y0)
+        except Exception as exc:
+            input_ok = False
+            self.push_log(f"[Health] input probe raised: {exc}")
+        add("Simulated input moves the cursor", input_ok,
+            "" if input_ok else ("Grant Accessibility permission (System Settings > Privacy & Security) "
+                                 "and restart the app." if sys.platform == "darwin" else
+                                 "Something is blocking SendInput -- security software, or an "
+                                 "elevation mismatch (see the next check)."))
+
+        if roblox_ok and sys.platform != "darwin":
+            mismatch = wm.is_process_elevated(hwnd) and not wm.is_self_elevated()
+            add("Elevation matches Roblox", not mismatch,
+                "" if not mismatch else "Roblox runs as Administrator but this macro doesn't -- Windows "
+                                        "silently drops clicks/keys upward. Relaunch the macro as "
+                                        "Administrator too.")
+        else:
+            add("Elevation matches Roblox", True, "skipped" if not roblox_ok else "not applicable on macOS")
+
+        scale = wm.get_display_scale_percent()
+        add("Display scale", scale == 100,
+            "" if scale == 100 else f"Windows display scale is {scale}% -- fixed coordinates assume 100%. "
+                                    f"Settings > Display > Scale, set 100% (or expect placement drift).")
+
+        from core import vision
+        missing = []
+        for name in self.HEALTH_CRITICAL_IMAGES:
+            try:
+                if not vision.template_variant_paths(name):
+                    missing.append(name)
+            except Exception:
+                missing.append(name)
+        add("Critical reference images present", not missing,
+            "" if not missing else f"Missing: {', '.join(missing)} -- is the Assets folder next to the "
+                                   f"app? Re-extract the release zip keeping its folder structure.")
+
+        try:
+            from core import ocr
+            ocr.get_pytesseract()
+            tess_ok = True
+        except Exception:
+            tess_ok = False
+        add("Tesseract OCR engine", tess_ok,
+            "" if tess_ok else "Only stats/reward reading and Wait-for-Wave need it -- everything else "
+                               "works without. Install via Settings > General, or brew on macOS.")
+
+        overall = all(c["ok"] for c in checks)
+        self.push_log(f"[Health] {'All checks passed.' if overall else 'Some checks need attention -- see above.'}")
+        return {"ok": overall, "checks": checks}
+
+    def export_failure_report(self) -> dict:
+        """Settings > Debug > "Export Failure Report": bundles everything a
+        bug report needs into one shareable zip -- the newest debug
+        screenshots, the log tail, settings (webhook URL redacted -- it's a
+        credential), version/platform, and a fresh health-check run -- so
+        "it's broken" reports can arrive as one file instead of a
+        photo-of-a-screen and twenty questions."""
+        import json
+        import zipfile as zf_mod
+        import platform
+        import webview
+        if not self._window:
+            return {"ok": False, "reason": "no_window"}
+        fname = f"AnimeExpeditions-report-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+        result = self._window.create_file_dialog(
+            webview.SAVE_DIALOG, directory=os.path.expanduser("~"), save_filename=fname,
+            file_types=("Zip files (*.zip)",))
+        if not result:
+            return {"ok": False, "reason": "cancelled"}
+        path = result[0] if isinstance(result, (list, tuple)) else result
+
+        health = self.run_health_check()  # logs as it goes; captured into the bundle below
+        try:
+            with zf_mod.ZipFile(path, "w", zf_mod.ZIP_DEFLATED) as bundle:
+                # Newest debug captures -- the frames are what make reports
+                # diagnosable (bands/positions get measured off them).
+                debug_dir = os.path.join(constants.APP_DIR, "debug")
+                if os.path.isdir(debug_dir):
+                    shots = sorted((os.path.join(debug_dir, n) for n in os.listdir(debug_dir)
+                                     if n.lower().endswith(".png")),
+                                    key=os.path.getmtime, reverse=True)[:12]
+                    for shot in shots:
+                        bundle.write(shot, f"debug/{os.path.basename(shot)}")
+
+                log_path = os.path.join(constants.APP_DIR, "debug.log")
+                if os.path.isfile(log_path):
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                        tail = f.readlines()[-600:]
+                    bundle.writestr("log_tail.txt", "".join(tail))
+
+                data = cfg.load()
+                if data.get("webhook_url"):
+                    data["webhook_url"] = "<redacted>"
+                bundle.writestr("settings.json", json.dumps(data, indent=2))
+
+                bundle.writestr("info.json", json.dumps({
+                    "version": updater.get_current_version(),
+                    "platform": platform.platform(),
+                    "python": sys.version,
+                    "frozen": constants.IS_FROZEN,
+                    "health_check": health,
+                }, indent=2))
+        except OSError as exc:
+            return {"ok": False, "reason": str(exc)}
+        self.push_log(f"[Debug] Failure report saved: {path}")
+        return {"ok": True, "path": path}
+
     def debug_test_path(self, name: str) -> dict:
         # Settings > Debug > "Test Walking Path": replays a path recorded via
         # Macro Manager > Custom Path > Record (see core.paths.replay_events)
