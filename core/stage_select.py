@@ -28,6 +28,23 @@ SETTLE_DELAY = 0.35               # lets the carousel's scroll animation actuall
 MAX_PASSES = 3
 
 
+def _hover_wiggle(mouse) -> None:
+    """Makes the carousel actually own the cursor before the wheel fires.
+
+    An absolute move_to() jump doesn't reliably read as a real
+    cursor-over-the-carousel hover on every machine, and even the single
+    1px nudge() that used to follow it wasn't always enough -- reported
+    (and reproduced) as the cursor just sitting at the scroll spot while
+    every wheel event gets silently dropped. A short multi-step wiggle
+    (net displacement zero, so the aim point is unchanged) plus a longer
+    settle gives Roblox unambiguous relative motion to register the hover
+    from before the first scroll notch arrives."""
+    for dx, dy in ((3, 2), (-2, 1), (-1, -3)):
+        mouse.nudge(dx, dy)
+        time.sleep(0.02)
+    time.sleep(0.1)
+
+
 def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_power: int = DEFAULT_SCROLL_POWER,
                         scroll_nudges: int = SCROLL_NUDGES_PER_PASS, debug_screenshots: bool = False) -> bool:
     """Scans the Story map carousel for map_name (image-matched against
@@ -76,25 +93,12 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
                 return True
             if nudge < scroll_nudges:
                 mouse.move_to(*to_screen(SCROLL_CENTER))
-                # An absolute move_to() jump alone doesn't reliably register
-                # as real cursor-over-the-carousel hover on every machine --
-                # the reward-list scroll (runner._collect_battle_rewards)
-                # already nudge()s before its own scroll() for the same
-                # reason (see Mouse.nudge's docstring). Without it, the
-                # wheel event can fire before Roblox has decided the mouse
-                # is actually over the scrollable area, so it's silently
-                # dropped -- reported as "the scroll does nothing, cursor
-                # just sits there" but only on some machines, since most
-                # happen to get a real hover-move in from the OS anyway
-                # before the jump-then-scroll gap closes.
-                mouse.nudge()
-                time.sleep(0.03)
+                _hover_wiggle(mouse)
                 mouse.scroll(scroll_step)
                 time.sleep(SETTLE_DELAY)
         log("[Macro] Not found in this pass -- scrolling back to the start.")
         mouse.move_to(*to_screen(SCROLL_CENTER))
-        mouse.nudge()
-        time.sleep(0.03)
+        _hover_wiggle(mouse)
         for _ in range(SCROLL_RESET_NOTCHES):
             mouse.scroll(-scroll_step)
         time.sleep(SETTLE_DELAY)
