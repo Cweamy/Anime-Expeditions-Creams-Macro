@@ -1762,16 +1762,32 @@ class Api:
                                     f"Settings > Display > Scale, set 100% (or expect placement drift).")
 
         from core import vision
-        missing = []
-        for name in self.HEALTH_CRITICAL_IMAGES:
-            try:
-                if not vision.template_variant_paths(name):
+        # The whole Assets folder being absent is its own diagnosis, not
+        # just "N images missing": it's the signature of downloading the
+        # bare exe from the release page instead of the zip (the exe is a
+        # compatibility asset for old auto-updaters, not a download for
+        # people). Flagged with an action the UI turns into an "open the
+        # release page" button so the fix is one click away.
+        assets_missing = not os.path.isdir(constants.ASSETS_DIR) or not os.listdir(constants.ASSETS_DIR)
+        if assets_missing:
+            checks.append({"name": "Assets folder present", "ok": False,
+                            "detail": "No Assets folder next to the app -- you likely downloaded just the "
+                                      ".exe from GitHub. Download the full -Windows.zip from the latest "
+                                      "release instead and extract it whole (app + Assets together).",
+                            "action": "open_releases"})
+            self.push_log("[Health] FAIL Assets folder present -- download the release ZIP (not the bare "
+                           "exe) from GitHub and extract it whole.")
+        else:
+            missing = []
+            for name in self.HEALTH_CRITICAL_IMAGES:
+                try:
+                    if not vision.template_variant_paths(name):
+                        missing.append(name)
+                except Exception:
                     missing.append(name)
-            except Exception:
-                missing.append(name)
-        add("Critical reference images present", not missing,
-            "" if not missing else f"Missing: {', '.join(missing)} -- is the Assets folder next to the "
-                                   f"app? Re-extract the release zip keeping its folder structure.")
+            add("Critical reference images present", not missing,
+                "" if not missing else f"Missing: {', '.join(missing)} -- re-extract the release zip "
+                                       f"keeping its folder structure, or re-add crops via the Image Manager.")
 
         try:
             from core import ocr
@@ -1786,6 +1802,13 @@ class Api:
         overall = all(c["ok"] for c in checks)
         self.push_log(f"[Health] {'All checks passed.' if overall else 'Some checks need attention -- see above.'}")
         return {"ok": overall, "checks": checks}
+
+    def open_releases_page(self) -> dict:
+        # Health check's "Assets folder missing" fix-it button: the GitHub
+        # latest-release page, where the full zip lives.
+        import webbrowser
+        webbrowser.open(updater.RELEASES_PAGE_URL)
+        return {"ok": True}
 
     def export_failure_report(self) -> dict:
         """Settings > Debug > "Export Failure Report": bundles everything a

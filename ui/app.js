@@ -1230,7 +1230,12 @@ async function runHealthCheck(btn) {
       out.innerHTML = (result.checks || []).map(c => {
         const mark = c.ok ? '<span style="color: var(--teal);">&#10003;</span>' : '<span style="color: var(--rose);">&#10007;</span>';
         const detail = c.detail ? ` <span style="color: var(--text-muted);">-- ${c.detail}</span>` : '';
-        return `<div>${mark} <span style="color: var(--text-dim);">${c.name}</span>${detail}</div>`;
+        // A check can carry a fix-it action the backend named -- render it
+        // as a real button so the fix is one click, not a URL to retype.
+        const action = c.action === 'open_releases'
+          ? ` <button type="button" class="block-mod-btn" style="margin-left: 6px;" onclick="pywebview.api.open_releases_page()">Open latest release</button>`
+          : '';
+        return `<div>${mark} <span style="color: var(--text-dim);">${c.name}</span>${detail}${action}</div>`;
       }).join('');
       out.style.display = '';
     }
