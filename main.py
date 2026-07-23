@@ -533,6 +533,7 @@ class Api:
             "debug_screenshots": data.get("debug_screenshots", False),
             "action_delay_ms": data.get("action_delay_ms", 0),
             "expedition_color_buttons": data.get("expedition_color_buttons", True),
+            "expedition_camera_o_ms": data.get("expedition_camera_o_ms", 100),
         }
 
     def get_tasks(self) -> list:
@@ -779,7 +780,8 @@ class Api:
         return self.runner.start(
             lambda: self.game_hwnd, self.get_tasks, scroll_power, coords, scroll_nudges, debug_screenshots,
             default_walk_paths, reward_region, stats_region, webhook_settings,
-            expedition_color_buttons=data.get("expedition_color_buttons", True))
+            expedition_color_buttons=data.get("expedition_color_buttons", True),
+            expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100))
 
     def stop_macro(self) -> dict:
         return self.runner.stop()

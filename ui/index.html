@@ -1015,7 +1015,7 @@
             </div>
           </div>
 
-          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+          <div class="setting-row" style="padding: 14px;">
             <div>
               <div class="setting-label">Camera Setup 3</div>
               <div class="setting-desc">Experimental: right-click drag down, release, then hold the Left arrow key for the time below.</div>
@@ -1025,6 +1025,15 @@
                      class="block-input" style="width: 70px;" placeholder="ms">
               <button id="btn-camera-setup-3" onclick="runCameraSetup3(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Run</button>
             </div>
+          </div>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Expedition Camera Zoom</div>
+              <div class="setting-desc">How long O is held during Expedition's Pre Start camera setup (the small zoom step after the rotate). Applies from the next Start.</div>
+            </div>
+            <input type="number" id="setting-expedition-o-ms" min="0" max="3000" step="50"
+                   class="block-input" style="width: 90px; flex-shrink: 0;" onchange="saveExpeditionOZoom(this)">
           </div>
         </section>
       </div>

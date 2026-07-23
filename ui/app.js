@@ -778,6 +778,8 @@ async function loadSettingsUI() {
     const expColorEl = document.getElementById('toggle-expedition-color');
     // Default ON -- the key is simply absent until the user first flips it.
     if (expColorEl) expColorEl.classList.toggle('on', s.expedition_color_buttons !== false);
+    const expOEl = document.getElementById('setting-expedition-o-ms');
+    if (expOEl) expOEl.value = s.expedition_camera_o_ms ?? 100;
     if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {
       // First load since the base/accent split -- migrate the old value
       // once, then persist the split so this branch never runs again.
@@ -1177,6 +1179,16 @@ async function runCameraSetup2(btn) {
     btn.textContent = 'Failed';
   }
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, Math.max(3200, holdMs + 1200));
+}
+
+// Settings > Debug > "Expedition Camera Zoom" -- how long O is held during
+// Expedition's Pre Start camera setup. Saved through the generic
+// set_setting; the runner reads it at the next Start.
+async function saveExpeditionOZoom(el) {
+  const ms = Math.max(0, Math.min(3000, parseInt(el.value, 10) || 0));
+  el.value = ms;
+  try { await pywebview.api.set_setting('expedition_camera_o_ms', ms); } catch (e) {}
+  addLog(`[Settings] Expedition camera zoom hold set to ${ms}ms.`);
 }
 
 // Settings > Debug > "Camera Setup 3" -- experimental: right-click drag

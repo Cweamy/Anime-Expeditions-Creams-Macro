@@ -442,9 +442,11 @@ class MacroRunner:
         self._skip_first_task_setup = False
         # Expedition checkpoint engine choice (see the EXP_COLOR_* block) +
         # the sighting debounce clock it uses; the real values arrive via
-        # start()/_run, these are just never-ran-yet defaults.
+        # start()/_run, these are just never-ran-yet defaults. Same for the
+        # Expedition camera's O-zoom hold (Settings > Debug).
         self._expedition_color_buttons = True
         self._exp_last_sighting_at = 0.0
+        self._expedition_camera_o_ms = 100.0
         # Wrapped to remember the most recent action text locally: the
         # stop path (_checkpoint) reports "Stopped. (was: <action>)" so a
         # user stopping a visibly-hung run gets told what it was stuck on
@@ -519,7 +521,7 @@ class MacroRunner:
     def start(self, hwnd_getter, get_tasks, scroll_power: int = None, coords: dict = None,
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
               reward_region: dict = None, stats_region: dict = None, webhook: dict = None,
-              expedition_color_buttons: bool = True) -> dict:
+              expedition_color_buttons: bool = True, expedition_camera_o_ms: float = 100) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -528,6 +530,10 @@ class MacroRunner:
         self._stop_logged = False
         self._debug_screenshots = bool(debug_screenshots)
         self._expedition_color_buttons = bool(expedition_color_buttons)
+        try:
+            self._expedition_camera_o_ms = max(0.0, float(expedition_camera_o_ms))
+        except (TypeError, ValueError):
+            self._expedition_camera_o_ms = 100.0
         self._current_hwnd = None
         self._left_stage_this_run = False
         self._thread = threading.Thread(
@@ -2901,14 +2907,16 @@ class MacroRunner:
         # Expedition gets its own sequence: the standard drag-down + O
         # zoom-hold doesn't frame Expedition maps right, so it uses the
         # drag-down + Left-arrow rotate instead (the same sequence Settings
-        # > Debug > Camera Setup 3 tests) -- 730ms rotate, then a 100ms O
-        # tap for a small zoom step.
+        # > Debug > Camera Setup 3 tests) -- 730ms rotate, then a short O
+        # tap for a small zoom step (duration user-tunable: Settings >
+        # Debug > "Expedition Camera Zoom", 100ms default).
         if first_repeat:
             self._log("[Macro] Pre Start: setting up the camera...")
             self._set_status(action="Setting up camera...")
             try:
                 if task.get("mode") == "expedition":
-                    camera.run_camera_drag_hold(self._mouse, self._keyboard, hwnd, hold_ms=730, o_tap_ms=100)
+                    camera.run_camera_drag_hold(self._mouse, self._keyboard, hwnd, hold_ms=730,
+                                                 o_tap_ms=self._expedition_camera_o_ms)
                 else:
                     camera.run_camera_setup(self._mouse, self._keyboard, hwnd)
                 self._log("[Macro] Camera setup done.")
