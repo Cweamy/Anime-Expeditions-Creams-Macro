@@ -12,11 +12,15 @@ import time
 from . import vision
 from . import window as wm
 
-# Spans the whole card row's name-label strip at once (measured off the
-# Story screen, debug/debug_screenshot.png) -- whichever of the 3 visible
-# cards holds the target map, its label falls somewhere in this one wide
-# band, so there's no need to track each card's x position separately.
-NAME_BAND_REGION = (0, 463, 1152, 30)
+# Map-name labels are searched over the FULL window, same as every other
+# UI search -- there used to be a thin fixed "name band" region here as a
+# speed optimization, but real matched frames in debug/ show the label row
+# rendering at two different heights ~115px apart (carousel state
+# dependent), and the 30px band could only ever see one of them -- it even
+# clipped the taller label crops entirely (matchTemplate needs template <=
+# haystack), which read as "map search just doesn't work". Full-window
+# costs a few extra ms per check and can't be blindsided by the row
+# moving again.
 
 MATCH_THRESHOLD = 0.78
 
@@ -80,7 +84,7 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
             # separately-searched " 2" name.
             try:
                 match, found_name = vision.find_image_any(
-                    hwnd, (map_name,), region=NAME_BAND_REGION, threshold=MATCH_THRESHOLD,
+                    hwnd, (map_name,), threshold=MATCH_THRESHOLD,
                     template_dir=vision.MAPS_DIR)
             except vision.TemplateNotFound as exc:
                 log(f"[Macro] {exc}")

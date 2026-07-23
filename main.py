@@ -776,19 +776,6 @@ class Api:
             default_walk_paths, reward_region, stats_region, webhook_settings,
             expedition_color_buttons=data.get("expedition_color_buttons", True))
 
-    def debug_story_map_region(self) -> dict:
-        # Settings > Debug > "Story Map Region": saves exactly the band
-        # core.stage_select searches for map name labels, so it can be
-        # visually checked/tuned (and cross-referenced against a reference
-        # crop in Assets/maps/) without needing a match to trigger a
-        # debug screenshot first.
-        from core import stage_select, vision
-        hwnd = self.game_hwnd
-        if not hwnd or not wm.is_window(hwnd):
-            return {"ok": False, "reason": "no_roblox"}
-        path = vision.save_region_debug(hwnd, "story_map_band", stage_select.NAME_BAND_REGION)
-        return {"ok": True, "path": path}
-
     def stop_macro(self) -> dict:
         return self.runner.stop()
 

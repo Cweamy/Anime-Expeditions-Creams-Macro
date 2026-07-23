@@ -842,14 +842,10 @@
             <button onclick="resetStoryScrollSettings()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);" title="Reset scroll power/attempts back to their defaults">Reset to Defaults</button>
           </header>
 
-          <div class="setting-row" style="padding: 14px;">
-            <div>
-              <div class="setting-label">Story Map Region</div>
-              <div class="setting-desc">Captures the map-name search band (x0 y463 w1152 h30), saves it to the debug folder.</div>
-            </div>
-            <button id="btn-debug-story-region" onclick="saveStoryMapRegionDebug(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Capture</button>
-          </div>
-
+          <!-- The old "Story Map Region" capture row lived here -- removed
+               along with the search band itself: map-name labels are now
+               searched over the full window (see core/stage_select.py),
+               so there's no band left to capture/tune. -->
           <div class="setting-row" style="padding: 14px;">
             <div>
               <div class="setting-label">Scroll Power</div>

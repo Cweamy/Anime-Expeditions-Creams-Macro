@@ -1141,25 +1141,6 @@ async function testMacroOperation(btn, mode) {
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1200);
 }
 
-// Settings > Debug > "Story Map Region" -- same dance as saveDebugScreenshot:
-// the game only renders on the Dashboard, so switch there and let it settle
-// before asking Python to grab the band core.stage_select searches.
-async function saveStoryMapRegionDebug(btn) {
-  const original = btn.textContent;
-  switchScreen('dashboard');
-  btn.disabled = true;
-  btn.textContent = 'Capturing...';
-  await new Promise(resolve => setTimeout(resolve, 400));
-  try {
-    const result = await pywebview.api.debug_story_map_region();
-    btn.textContent = result.ok ? 'Saved' : `Failed (${result.reason || 'error'})`;
-    if (result.ok) addLog(`[Debug] Story map region saved: ${result.path}`);
-  } catch (e) {
-    btn.textContent = 'Failed';
-  }
-  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1600);
-}
-
 // Settings > Debug > "Camera Setup" -- the backend does the right-drag +
 // zoom-hold on its own thread (~3s); the game has to be visible and focused,
 // so switch to the Dashboard first, same as every other live-input debug
