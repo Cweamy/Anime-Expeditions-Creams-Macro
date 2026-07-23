@@ -1909,6 +1909,20 @@ class MacroRunner:
                            f'clicking it.{suffix}')
                 vision.shuffle_click_match(self._mouse, hwnd, second_confirm)
                 self._interruptible_sleep(EXTRACT_CONFIRM_SETTLE, stop_event)
+            # Second check before declaring the win: an extract click chain
+            # that didn't actually register leaves exp_extract still on
+            # screen -- reporting "win" then would record a run that never
+            # ended and strand the loop on the reward-read that follows.
+            # Still visible = not extracted; None lets the next poll tick
+            # take the whole thing from the top.
+            try:
+                still_up = vision.find_image(hwnd, "exp_extract")
+            except vision.TemplateNotFound:
+                still_up = None
+            if still_up is not None:
+                self._log('[Macro] "exp_extract" is still showing after the confirm chain -- the '
+                           'extract didn\'t register, will retry next poll.')
+                return None
             self._log("[Macro] Extracted -- on the reward screen.")
             return "win"
 
@@ -2095,9 +2109,25 @@ class MacroRunner:
                     time.sleep(0.45)
                     if vision.find_color_run(hwnd, EXP_COLOR_CONFIRM_BAND, _exp_red,
                                               EXP_COLOR_CONFIRM_MIN_RUN) is None:
-                        self._log("[Macro] Extracted -- on the reward screen.")
-                        return True
-                    break  # confirm still up -- restart from the Extract click
+                        # Second check, a beat later: the confirm vanishing
+                        # only proves the DIALOG closed -- an extract that
+                        # didn't actually register leaves the checkpoint's
+                        # own Continue/Extract still sitting in the bottom
+                        # band (and the confirm can even come back). Only
+                        # both being clear counts as extracted; anything
+                        # else restarts the attempt instead of reporting a
+                        # win that never happened.
+                        time.sleep(0.8)
+                        checkpoint_up = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green,
+                                                               EXP_COLOR_CONTINUE_MIN_RUN)
+                        confirm_back = vision.find_color_run(hwnd, EXP_COLOR_CONFIRM_BAND, _exp_red,
+                                                              EXP_COLOR_CONFIRM_MIN_RUN)
+                        if checkpoint_up is None and confirm_back is None:
+                            self._log("[Macro] Extracted -- on the reward screen.")
+                            return True
+                        self._log("[Macro] Confirm closed but the checkpoint is still up -- "
+                                   "the extract didn't register, retrying.")
+                    break  # restart from the Extract click
                 time.sleep(0.12)
         return False
 
