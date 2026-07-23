@@ -45,7 +45,11 @@ jobs:
           mkdir -p package
           cp -R "dist/Creams Macro - Anime Expeditions.app" package/
           cp -R Assets package/Assets
-          cd package && ditto -c -k --keepParent --sequesterRsrc . ../dist/Creams-Macro-Anime-Expeditions-macOS.zip
+          # No --keepParent: it wrapped everything in a "package/" folder, which both
+          # made manual extraction awkward and silently broke the updater's Assets
+          # merge on mac (it looked for Assets/ at the zip root). The updater still
+          # tolerates old wrapped zips -- see core/updater.py.
+          cd package && ditto -c -k --sequesterRsrc . ../dist/Creams-Macro-Anime-Expeditions-macOS.zip
 
       - name: Upload macOS asset to the release
         uses: softprops/action-gh-release@v2

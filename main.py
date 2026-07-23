@@ -411,33 +411,26 @@ class Api:
             # anything, it doesn't read source files at runtime. Running
             # from source: the usual source-zip-over-the-install swap.
             if constants.IS_FROZEN:
-                if sys.platform == "darwin":
-                    # The mac build is a .app bundle -- swapping a whole
-                    # bundle in place is a different (unbuilt, untested)
-                    # dance from the single-file exe swap below. Until a
-                    # tester-verified implementation exists, point at the
-                    # zip instead of half-doing it.
-                    msg = ("Self-update isn't supported on the macOS build yet -- download the new "
-                           f"macOS zip from {self._update_info.get('url')} and replace the app.")
-                    self.push_log(f"[Update] {msg}")
-                    self._update_progress = {"phase": "error", "percent": None, "message": msg}
-                    return
                 if not self._update_info.get("release_zip_url"):
                     msg = ("No release zip attached to this release -- can't self-update the build. "
                            f'Grab it manually: {self._update_info.get("url")}')
                     self.push_log(f"[Update] {msg}")
                     self._update_progress = {"phase": "error", "percent": None, "message": msg}
                     return
-                # One download covers the whole update: the new exe is
+                # One download covers the whole update: the new build (the
+                # exe on Windows, the whole .app bundle on macOS) is
                 # extracted out of the release zip and staged for the swap,
                 # and any reference images NEW in this release are add-only
                 # merged from that same file (never overwriting the user's
                 # own edited/added images -- see core.updater's Assets
                 # section) before the restart.
-                new_exe = updater.download_release_update(
+                new_build = updater.download_release_update(
                     self._update_info["release_zip_url"], self.push_log, on_progress)
                 self._update_progress = {"phase": "staging", "percent": 100, "message": "Preparing update..."}
-                helper_path = updater.stage_exe_update(new_exe)
+                if sys.platform == "darwin":
+                    helper_path = updater.stage_app_update(new_build)
+                else:
+                    helper_path = updater.stage_exe_update(new_build)
             else:
                 helper_path = updater.stage_source_update(
                     self._update_info["zip_url"], constants.APP_DIR, self.push_log, on_progress)

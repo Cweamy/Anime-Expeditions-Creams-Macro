@@ -30,6 +30,8 @@ until this process (and its file handles) are actually gone.
 """
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -315,9 +317,14 @@ def _extract_assets_zip_addonly(zip_path: str, log) -> int:
             if info.is_dir():
                 continue
             parts = info.filename.replace("\\", "/").split("/")
-            if len(parts) < 2 or parts[0].lower() != "assets":
-                continue  # the exe (or anything else at the zip root) -- not an Assets file
-            parts = parts[1:]
+            # "Assets" at the root (Windows zips) or one wrapper folder
+            # down ("package/Assets/..." -- the mac zips up to v0.6.2, see
+            # _download_release_update_mac's prefix note; this check's
+            # root-only version made the mac Assets merge a silent no-op).
+            asset_idx = next((i for i, p in enumerate(parts[:2]) if p.lower() == "assets"), None)
+            if asset_idx is None or len(parts) < asset_idx + 2:
+                continue  # the exe/bundle (or anything else) -- not an Assets file
+            parts = parts[asset_idx + 1:]
             if any(p in ("", ".", "..") for p in parts) or ":" in parts[0]:
                 continue
             dest = os.path.join(constants.ASSETS_DIR, *parts)
@@ -438,6 +445,147 @@ def _current_exe_path() -> str:
     return os.path.abspath(sys.argv[0])
 
 
+def _current_app_bundle_path() -> str:
+    """The running frozen mac build's .app directory -- sys.executable is
+    <...>/Foo.app/Contents/MacOS/<binary>, so walk up until the .app."""
+    path = os.path.abspath(sys.executable)
+    while path and not path.endswith(".app"):
+        parent = os.path.dirname(path)
+        if parent == path:
+            raise RuntimeError("Couldn't locate the .app bundle around the running binary -- "
+                                "is this actually the packaged mac build?")
+        path = parent
+    return path
+
+
+def _download_release_update_mac(release_zip_url: str, log, on_progress=None) -> str:
+    """The mac twin of the Windows exe staging below: downloads the release
+    zip and extracts its whole .app BUNDLE (a directory tree, not a single
+    file) into "<current>.app.update" NEXT TO the running bundle -- same
+    volume, so the helper's swap is two cheap renames. Returns the staged
+    bundle's path (stage_app_update writes the swap helper for it).
+
+    zipfile drops Unix permissions and symlinks by default, and a .app
+    whose Contents/MacOS binary lost its exec bit simply won't launch --
+    so both are restored by hand from each entry's external_attr (mode
+    bits in the high 16; a symlink entry's file content IS its target).
+    The add-only Assets merge rides along from the same download, exactly
+    like the Windows path."""
+    app_path = _current_app_bundle_path()
+    staged = app_path + ".update"
+    tmp_root = tempfile.mkdtemp(prefix="aecm_update_")
+    zip_path = os.path.join(tmp_root, RELEASE_ZIP_NAME)
+    try:
+        resp = _get_release_zip_with_fallback(release_zip_url, log)
+        total = int(resp.headers.get("content-length") or 0)
+        downloaded = 0
+        with open(zip_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                f.write(chunk)
+                downloaded += len(chunk)
+                if on_progress:
+                    on_progress(downloaded, total)
+
+        with zipfile.ZipFile(zip_path) as zf:
+            # The .app can sit at the zip root OR one wrapper folder down --
+            # ditto's --keepParent wrapped every zip up to v0.6.2 in a
+            # "package/" folder (confirmed against the real published zip),
+            # and the workflow fix that drops the wrapper must not strand
+            # updates FROM those older zips if one is ever re-fetched.
+            prefix = None
+            for n in zf.namelist():
+                parts = n.split("/")
+                for i, part in enumerate(parts[:2]):
+                    if part.endswith(".app"):
+                        prefix = "/".join(parts[:i + 1]) + "/"
+                        break
+                if prefix:
+                    break
+            if prefix is None:
+                raise RuntimeError(f"No .app bundle found inside {RELEASE_ZIP_NAME} -- can't stage the update.")
+            if os.path.exists(staged):
+                shutil.rmtree(staged)
+            for info in zf.infolist():
+                if not info.filename.startswith(prefix):
+                    continue
+                rel = info.filename[len(prefix):]
+                if not rel or ".." in rel.split("/"):
+                    continue  # bundle root itself / no zip-slip escapes
+                dest = os.path.join(staged, *rel.split("/"))
+                if info.is_dir():
+                    os.makedirs(dest, exist_ok=True)
+                    continue
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                mode = (info.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(mode):
+                    os.symlink(zf.read(info).decode("utf-8"), dest)
+                    continue
+                with zf.open(info) as src, open(dest, "wb") as out:
+                    while True:
+                        chunk = src.read(1 << 16)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                if mode:
+                    os.chmod(dest, mode & 0o7777)
+
+        try:
+            _extract_assets_zip_addonly(zip_path, log)
+        except Exception as exc:
+            log(f"[Update] Assets merge skipped ({exc}) -- existing Assets folder left as-is.")
+        return staged
+    finally:
+        try:
+            os.remove(zip_path)
+            os.rmdir(tmp_root)
+        except OSError:
+            pass
+
+
+def stage_app_update(staged_app_path: str) -> str:
+    """Writes the mac swap helper for a bundle staged by
+    _download_release_update_mac: wait for this process to exit, rename the
+    old bundle aside, rename the staged one into place (restoring the old
+    on failure rather than leaving no app at all), clear quarantine
+    defensively, relaunch, clean up. Every step logs to _update.log next
+    to the bundle -- same no-black-boxes policy the Windows .bat learned
+    the hard way."""
+    app_path = _current_app_bundle_path()
+    parent = os.path.dirname(app_path)
+    log_path = os.path.join(parent, "_update.log")
+    helper_path = os.path.join(parent, "_update.sh")
+    old_path = app_path + ".old"
+    pid = os.getpid()
+    script = f"""#!/bin/bash
+LOG="{log_path}"
+echo "---- $(date) ----" > "$LOG"
+echo "[1/4] Waiting for the app (pid {pid}) to exit..." >> "$LOG"
+for _ in $(seq 1 120); do
+    kill -0 {pid} 2>/dev/null || break
+    sleep 0.5
+done
+echo "[2/4] Swapping the bundle..." >> "$LOG"
+rm -rf "{old_path}" >> "$LOG" 2>&1
+mv "{app_path}" "{old_path}" >> "$LOG" 2>&1
+if ! mv "{staged_app_path}" "{app_path}" >> "$LOG" 2>&1; then
+    echo "Swap failed -- restoring the previous version." >> "$LOG"
+    mv "{old_path}" "{app_path}" >> "$LOG" 2>&1
+    open "{app_path}"
+    exit 1
+fi
+xattr -dr com.apple.quarantine "{app_path}" >> "$LOG" 2>&1
+echo "[3/4] Relaunching..." >> "$LOG"
+open "{app_path}" >> "$LOG" 2>&1
+echo "[4/4] Cleaning up." >> "$LOG"
+rm -rf "{old_path}" >> "$LOG" 2>&1
+rm -f "{helper_path}"
+"""
+    with open(helper_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(script)
+    os.chmod(helper_path, 0o755)
+    return helper_path
+
+
 def download_release_update(release_zip_url: str, log, on_progress=None) -> str:
     """Downloads the release zip and stages BOTH halves of a frozen-build
     update from that single file: the new exe is extracted alongside the
@@ -457,7 +605,13 @@ def download_release_update(release_zip_url: str, log, on_progress=None) -> str:
     on_progress(downloaded_bytes, total_bytes), if given, is called after
     every chunk -- see stage_source_update's docstring for what total=0
     means.
+
+    On macOS the staged payload is the whole .app bundle, not a single
+    exe -- see _download_release_update_mac (whose return value goes to
+    stage_app_update instead of stage_exe_update).
     """
+    if sys.platform == "darwin":
+        return _download_release_update_mac(release_zip_url, log, on_progress)
     current_exe = _current_exe_path()
     new_exe = current_exe + ".update"
     tmp_root = tempfile.mkdtemp(prefix="aecm_update_")
