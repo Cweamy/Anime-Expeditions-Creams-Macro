@@ -294,6 +294,15 @@ PLACE_PIXEL_SEARCH_SETTLE = 0.03  # brief settle after each move before capturin
 # repeatedly rescanning, up to PLACE_SEARCH_WIGGLE_TIMEOUT.
 PLACE_SEARCH_WIGGLE_OFFSETS = [(2, 0), (-2, 0), (0, 2), (0, -2)]
 PLACE_SEARCH_WIGGLE_TIMEOUT = 2.5
+# When the in-place wiggle above never sees a valid tile, the cursor walks
+# OUTWARD in rings around the saved spot, rescanning at each stop (see
+# _spiral_search_place_spot) -- the in-place search's 38px box can't see a
+# tile the game shifted further than ~19px away, which just read as
+# "giving up" on every attempt. Ring radii chosen so each stop's scan box
+# overlaps the previous ring's coverage (38px box on a 24px ring step).
+PLACE_SPIRAL_RADII = (24, 48, 72)
+PLACE_SPIRAL_MARGIN = 20     # stops this close to the window edge are skipped -- half a scan box + slack
+PLACE_SPIRAL_TIMEOUT = 8.0   # hard budget for the whole outward search
 PLACE_HOTKEY_SETTLE = 0.35  # after pressing the hotkey, before the pixel search starts sampling -- the
 # placement-mode overlay (what actually turns a tile white/red) needs real time to render; sampling too
 # soon reads the tile's normal color instead and finds neither valid nor blocked

@@ -6,6 +6,7 @@ MacroRunner's behavior (see core/runner.py, which composes the mixins).
 Methods here run with MacroRunner's full self: shared state and helpers
 (_log, _coords, _checkpoint, _click_found_image, ...) resolve normally.
 """
+import math
 import threading
 import time
 
@@ -654,11 +655,53 @@ class BlockOps:
                     self._log(f'[Macro] Place Unit "{name}": aligned to a valid tile at offset ({dx}, {dy}).')
                 return cx, cy
             if time.time() >= deadline:
-                return None
+                # Nothing valid right AT the spot -- widen the hunt instead
+                # of giving up: the 38px scan box physically can't see a
+                # tile the game moved further than ~19px away.
+                return self._spiral_search_place_spot(hwnd, stop_event, left, top, orig_x, orig_y, name)
             wx, wy = PLACE_SEARCH_WIGGLE_OFFSETS[wiggle_idx % len(PLACE_SEARCH_WIGGLE_OFFSETS)]
             self._mouse.nudge(wx, wy)
             wiggle_idx += 1
             time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
+
+    def _spiral_search_place_spot(self, hwnd, stop_event: threading.Event, left: int, top: int,
+                                    orig_x: int, orig_y: int, name: str):
+        """The in-place search's escalation: walk the cursor outward in
+        rings around the saved spot (8 compass stops per PLACE_SPIRAL_RADII
+        ring, nearest ring first), rescanning the box around each stop
+        until a valid tile shows up, the rings run out, or
+        PLACE_SPIRAL_TIMEOUT burns down. The cursor genuinely travels --
+        the placement highlight only renders where the cursor actually
+        hovers, so scanning distant boxes without moving would read
+        unhighlighted tiles and find nothing. Returns the settled (x, y)
+        window-client offset or None, same contract as
+        _find_valid_place_spot."""
+        self._log(f'[Macro] Place Unit "{name}": no valid tile right at ({orig_x}, {orig_y}) -- '
+                   f'searching outward around it.')
+        deadline = time.time() + PLACE_SPIRAL_TIMEOUT
+        for radius in PLACE_SPIRAL_RADII:
+            for i in range(8):
+                if self._checkpoint(stop_event) or time.time() >= deadline:
+                    return None
+                angle = i * math.pi / 4
+                px = int(orig_x + radius * math.cos(angle))
+                py = int(orig_y + radius * math.sin(angle))
+                if not (PLACE_SPIRAL_MARGIN <= px <= 1152 - PLACE_SPIRAL_MARGIN
+                        and PLACE_SPIRAL_MARGIN <= py <= 756 - PLACE_SPIRAL_MARGIN):
+                    continue
+                self._mouse.move_to(left + px, top + py)
+                self._mouse.nudge()  # the highlight needs real relative motion to render
+                time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
+                found = self._scan_place_search_box(left, top, px, py)
+                if found is not None:
+                    dx, dy = found
+                    cx, cy = px + dx, py + dy
+                    self._mouse.move_to(left + cx, top + cy)
+                    time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
+                    self._log(f'[Macro] Place Unit "{name}": found a valid tile at ({cx}, {cy}) '
+                               f'({radius}px out from the saved spot).')
+                    return cx, cy
+        return None
 
     def _run_place_unit_block(self, hwnd, stop_event: threading.Event, left: int, top: int, block: dict,
                                 index: int, macro_name: str, unit_ordinal: int = None,
@@ -748,8 +791,8 @@ class BlockOps:
             self._release_quick_place_shift()
             return
         if spot is None:
-            self._log(f'[Macro] Place Unit "{name}": no valid (white) tile found in the '
-                       f'{PLACE_SEARCH_BOX_SIZE}x{PLACE_SEARCH_BOX_SIZE} box around ({orig_x}, {orig_y}) -- giving up.')
+            self._log(f'[Macro] Place Unit "{name}": no valid (white) tile found at ({orig_x}, {orig_y}) '
+                       f'or within {PLACE_SPIRAL_RADII[-1]}px around it -- giving up on this block.')
             if not next_is_same_unit:
                 self._release_quick_place_shift()
             return
