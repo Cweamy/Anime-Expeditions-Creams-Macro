@@ -2452,6 +2452,17 @@ async function resetMacroCoords() {
 async function openCoordPicker(prefix) {
   puState.blockId = null;
   puState.coordTarget = prefix;
+  // Row-based points have a height companion input and become a TWO-STEP
+  // pick: click the first row, then the second, and the spacing IS the row
+  // height -- no more eyeballing a pixel count. Step 0 = waiting for row 1,
+  // step 1 = waiting for row 2. The height key isn't uniform (stage_row ->
+  // stage_row_height, but team_loadout -> team_loadout_row_height), so both
+  // suffixes are probed rather than reconstructed.
+  puState.coordHeightKey = [`${prefix}_height`, `${prefix}_row_height`]
+    .find(k => document.getElementById(`coord-${k}`)) || null;
+  puState.coordStep = puState.coordHeightKey ? 0 : null;
+  puState.coordFirst = null;
+  puState.coordPreview = null;
   const xEl = document.getElementById(`coord-${prefix}_x`);
   const yEl = document.getElementById(`coord-${prefix}_y`);
   puState.markX = xEl && xEl.value !== '' ? parseInt(xEl.value) : null;
@@ -2463,7 +2474,9 @@ async function openCoordPicker(prefix) {
   const grid = document.getElementById('pu-map-grid');
   grid.style.display = '';
   grid.innerHTML = '<div class="rh-empty">Capturing the Roblox screen...</div>';
-  document.getElementById('pu-pos-readout').textContent = puState.markX != null ? `X ${puState.markX}, Y ${puState.markY}` : 'Not set';
+  document.getElementById('pu-pos-readout').textContent = puState.coordHeightKey
+    ? 'Click the FIRST row (e.g. Level 1 / Act 1 / Loadout 1)'
+    : (puState.markX != null ? `X ${puState.markX}, Y ${puState.markY}` : 'Not set');
   document.getElementById('pu-modal').style.display = 'flex';
 
   const ok = await usePlaceUnitRobloxScreen();
@@ -2922,6 +2935,11 @@ let puState = {
   // coord-<prefix>_x/_y settings inputs rather than a block's params. The
   // two targets are mutually exclusive (blockId null while this is set).
   coordTarget: null,
+  // Two-step row pick (see openCoordPicker): coordHeightKey is the row-height
+  // setting key when the target has one, coordStep is 0 (awaiting row 1) or
+  // 1 (awaiting row 2), coordFirst is row 1's point, coordPreview the derived
+  // row markers.
+  coordHeightKey: null, coordStep: null, coordFirst: null, coordPreview: null,
 };
 
 // Remembers whichever map was picked last (see selectPlaceUnitMap), across
@@ -2995,6 +3013,10 @@ function closePlaceUnitModal() {
   document.getElementById('pu-modal').style.display = 'none';
   puState.blockId = null;
   puState.coordTarget = null;
+  puState.coordHeightKey = null;
+  puState.coordStep = null;
+  puState.coordFirst = null;
+  puState.coordPreview = null;
   restoreGameIfDashboard();  // see isBlockingOverlayOpen -- game stays hidden while this modal is up
 }
 
@@ -3165,6 +3187,29 @@ function drawPlaceUnitCanvas() {
     ctx.fillText(u.label, sx + 13, sy + 4);
   }
 
+  // Two-step row pick: teal dots at every derived row (base + n*height),
+  // numbered, so the computed spacing is visibly checkable against the real
+  // rows before you trust it.
+  if (puState.coordPreview) {
+    for (const r of puState.coordPreview) {
+      const sx = puState.panX + r.x * puState.zoom;
+      const sy = puState.panY + r.y * puState.zoom;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#45c9b5';
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.lineWidth = 1.5;
+      ctx.fill();
+      ctx.stroke();
+      ctx.font = '600 11px Inter, "Segoe UI", sans-serif';
+      const tw = ctx.measureText(r.label).width;
+      ctx.fillStyle = 'rgba(8,10,18,0.78)';
+      ctx.fillRect(sx + 8, sy - 9, tw + 10, 18);
+      ctx.fillStyle = '#45c9b5';
+      ctx.fillText(r.label, sx + 13, sy + 4);
+    }
+  }
+
   if (puState.markX != null && puState.markY != null) {
     const sx = puState.panX + puState.markX * puState.zoom;
     const sy = puState.panY + puState.markY * puState.zoom;
@@ -3187,13 +3232,44 @@ function applyPlaceUnitPosition() {
     // Macro Coordinates Pick mode -- write straight to the settings inputs
     // and persist, no block involved (see openCoordPicker).
     const p = puState.coordTarget;
+    const readout = document.getElementById('pu-pos-readout');
+
+    if (puState.coordHeightKey) {
+      // Two-step row pick. Step 0 records the base point (row 1) and
+      // prompts for row 2; step 1 derives the row height from the gap.
+      const xEl = document.getElementById(`coord-${p}_x`);
+      const yEl = document.getElementById(`coord-${p}_y`);
+      if (puState.coordStep === 0) {
+        puState.coordFirst = { x: puState.markX, y: puState.markY };
+        if (xEl) xEl.value = puState.markX;
+        if (yEl) yEl.value = puState.markY;
+        setMacroCoord(`${p}_x`, puState.markX);
+        setMacroCoord(`${p}_y`, puState.markY);
+        puState.coordStep = 1;
+        readout.textContent = `Row 1 set (X ${puState.markX}, Y ${puState.markY}). Now click the SECOND row down.`;
+        return;
+      }
+      // Step 1: height = vertical gap; base stays row 1 (already saved).
+      const h = Math.abs(puState.markY - puState.coordFirst.y);
+      const hEl = document.getElementById(`coord-${puState.coordHeightKey}`);
+      if (hEl) hEl.value = h;
+      setMacroCoord(puState.coordHeightKey, h);
+      // Preview every derived row so the math is visible before you trust it.
+      const rows = [];
+      for (let i = 0; i < 7; i++) rows.push({ x: puState.coordFirst.x, y: puState.coordFirst.y + i * h, label: `${i + 1}` });
+      puState.coordPreview = rows;
+      puState.coordStep = 0;  // click again to redo from row 1
+      readout.textContent = `Rows set: base (X ${puState.coordFirst.x}, Y ${puState.coordFirst.y}), row height ${h}px. Click row 1 again to redo.`;
+      return;
+    }
+
     const xEl = document.getElementById(`coord-${p}_x`);
     const yEl = document.getElementById(`coord-${p}_y`);
     if (xEl) xEl.value = puState.markX;
     if (yEl) yEl.value = puState.markY;
     setMacroCoord(`${p}_x`, puState.markX);
     setMacroCoord(`${p}_y`, puState.markY);
-    document.getElementById('pu-pos-readout').textContent = `X ${puState.markX}, Y ${puState.markY}`;
+    readout.textContent = `X ${puState.markX}, Y ${puState.markY}`;
     return;
   }
   if (!puState.blockId) return;
