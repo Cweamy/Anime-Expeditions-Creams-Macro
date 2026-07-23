@@ -564,6 +564,37 @@ def bring_to_top(hwnd: int) -> None:
     user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
 
 
+def set_window_cutout(hwnd: int, hole) -> None:
+    """Cuts a rectangular HOLE in a window (or restores it solid with
+    hole=None): SetWindowRgn removes the hole area from the window
+    entirely, so those pixels show whatever window sits BEHIND, and clicks
+    there land on it too -- the overlay-with-a-cutout technique the cutout
+    dock mode is built on (see core/dock.py). hole is (x, y, w, h) in
+    window-relative device pixels; our GUI window is frameless at 100%
+    scale, so its DOM coordinates map 1:1."""
+    RGN_DIFF = 4
+    if hole is None:
+        user32.SetWindowRgn(hwnd, None, True)
+        return
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    full = gdi32.CreateRectRgn(0, 0, rect.right - rect.left, rect.bottom - rect.top)
+    hx, hy, hw, hh = (int(v) for v in hole)
+    cut = gdi32.CreateRectRgn(hx, hy, hx + hw, hy + hh)
+    gdi32.CombineRgn(full, full, cut, RGN_DIFF)
+    gdi32.DeleteObject(cut)
+    # The system takes ownership of `full` from here -- no DeleteObject.
+    user32.SetWindowRgn(hwnd, full, True)
+
+
+def position_below(hwnd: int, ref_hwnd: int, x: int, y: int, w: int, h: int) -> None:
+    """Places hwnd at the given screen rect DIRECTLY BELOW ref_hwnd in the
+    z-order, without activating either -- how the cutout dock keeps Roblox
+    glued behind the GUI's hole (the GUI's solid part occludes it
+    everywhere except the hole)."""
+    user32.SetWindowPos(hwnd, ref_hwnd, x, y, w, h, SWP_NOACTIVATE)
+
+
 def set_always_on_top(hwnd: int, on: bool = True) -> None:
     flag = HWND_TOPMOST if on else HWND_NOTOPMOST
     user32.SetWindowPos(hwnd, flag, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)

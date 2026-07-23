@@ -788,6 +788,13 @@ async function loadSettingsUI() {
     if (expColorEl) expColorEl.classList.toggle('on', s.expedition_color_buttons !== false);
     const expOEl = document.getElementById('setting-expedition-o-ms');
     if (expOEl) expOEl.value = s.expedition_camera_o_ms ?? 100;
+    const cutoutEl = document.getElementById('toggle-game-cutout');
+    if (cutoutEl) {
+      cutoutEl.classList.toggle('on', !!s.game_cutout);
+      // Windows-only technique -- hide the whole row on mac rather than
+      // offering a switch that can't do anything there.
+      if (IS_MAC) cutoutEl.closest('.setting-row').style.display = 'none';
+    }
     if (!s.onboarding_done) showOnboarding();
     if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {
       // First load since the base/accent split -- migrate the old value

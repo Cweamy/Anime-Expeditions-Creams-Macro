@@ -285,6 +285,17 @@ class Api:
         self._log_window = None
         self._log_history = []
         self.docker = GameDocker()
+        # Cutout mode (Settings > Debug, Windows only, applies at launch):
+        # Roblox stays a top-level window glued BEHIND a literal hole cut in
+        # this GUI over the game slot, instead of being reparented inside it
+        # -- see core/dock.py's cutout notes. Captures must read the game's
+        # own window contents in this mode (the screen shows our solid GUI
+        # whenever the hole is closed), hence force_window_capture.
+        self.game_cutout = sys.platform != "darwin" and bool(cfg.load().get("game_cutout", False))
+        self.docker.cutout = self.game_cutout
+        if self.game_cutout:
+            from core import vision
+            vision.force_window_capture()
         self.game_hwnd = None
         self.gui_hwnd = None
         # Manual multi-instance attach (Settings > Debug > "Select Roblox
@@ -530,6 +541,7 @@ class Api:
             # False until the welcome checklist's "Get Started" -- the UI
             # shows it exactly once per install (see app.js showOnboarding).
             "onboarding_done": data.get("onboarding_done", False),
+            "game_cutout": data.get("game_cutout", False),
         }
 
     def get_tasks(self) -> list:
@@ -1089,10 +1101,24 @@ class Api:
     def show_game(self):
         # Only touches visibility, not docking state: the Roblox window stays
         # parented/borderless the whole time, so this is just a toggle.
+        # Cutout mode expresses visibility as the HOLE instead: open it over
+        # the game slot (the game is already glued behind it) rather than
+        # un-hiding a window that was never hidden.
+        if self.game_cutout:
+            if self.gui_hwnd and self.docker.docked:
+                wm.set_window_cutout(self.gui_hwnd, (0, TITLEBAR_H, config.FIXED_WIN_W, config.FIXED_WIN_H))
+            return
         if self.game_hwnd and wm.is_window(self.game_hwnd):
             wm.show_window(self.game_hwnd)
 
     def hide_game(self):
+        # Cutout mode: close the hole -- the solid GUI occludes the game
+        # (which keeps rendering behind it; captures read the window's own
+        # contents in this mode, so detection doesn't care).
+        if self.game_cutout:
+            if self.gui_hwnd:
+                wm.set_window_cutout(self.gui_hwnd, None)
+            return
         if self.game_hwnd and wm.is_window(self.game_hwnd):
             wm.hide_window(self.game_hwnd)
 
@@ -2556,7 +2582,11 @@ def _launch_ui():
                         # screen (showDocked() does that) — Info/Settings/Macro Manager are the
                         # default/other screens now, and Roblox is a native window that
                         # would otherwise render on top of them regardless of DOM state.
-                        wm.hide_window(hwnd)
+                        # Cutout mode never hides the window (captures read its
+                        # contents) -- "hidden" there is simply the hole staying
+                        # closed until show_game opens it.
+                        if not api.docker.cutout:
+                            wm.hide_window(hwnd)
                         api.pinned_hwnd = None  # dock succeeded -- back to normal auto-tracking of this hwnd
                         api.push_ui("showDocked")
                         api.push_log("Roblox docked.")
@@ -2564,6 +2594,17 @@ def _launch_ui():
                         api.push_log("Could not find the macro's own window to dock into, will retry.")
             except Exception as exc:
                 api.push_log(f"Dock watchdog error: {exc}")
+
+            # Cutout mode's glue: re-assert the game's position (tracks the
+            # GUI if it was dragged) and its just-below-the-GUI z-slot (heals
+            # after a click through the hole raised the game) every tick.
+            try:
+                if (sys.platform != "darwin" and api.docker.cutout and api.docker.docked
+                        and api.game_hwnd and wm.is_window(api.game_hwnd)
+                        and api.gui_hwnd and wm.is_window(api.gui_hwnd)):
+                    api.docker.dock(api.game_hwnd, api.gui_hwnd, x=0, y=TITLEBAR_H)
+            except Exception:
+                pass
 
             time.sleep(2)
 

@@ -56,6 +56,16 @@ else:
         (same technique used in the Anime Squadron macro): Roblox renders
         directly inside the app instead of sitting in a separate window.
 
+        CUTOUT mode (self.cutout, the experimental Settings toggle): don't
+        reparent at all -- Roblox stays its own top-level window, borderless,
+        glued at the game slot's screen position DIRECTLY BELOW the GUI in
+        z-order, and the GUI cuts a literal hole in itself over the slot
+        (wm.set_window_cutout, driven by main's show_game/hide_game). The
+        game shows through the hole and clicks there land on it natively;
+        everywhere else the GUI's solid surface occludes it -- which is why
+        modals can never be painted over in this mode, and why quitting can
+        never take Roblox down with the GUI (nothing is ever parented).
+
         dock()/undock() share a lock: Windows destroys child windows when their
         parent is destroyed, so if the app quits while a background thread is
         mid-dock, undock() must wait for that in-flight dock() to finish (not
@@ -64,6 +74,7 @@ else:
 
         def __init__(self):
             self.docked = False
+            self.cutout = False  # set by main from the game_cutout setting before first dock
             self._lock = threading.Lock()
 
         def dock(self, game_hwnd: int, gui_hwnd: int, x: int = 0, y: int = 0,
@@ -72,6 +83,19 @@ else:
                 return
 
             with self._lock:
+                if self.cutout:
+                    if not self.docked:
+                        wm.remove_borders(game_hwnd)
+                        time.sleep(0.05)
+                        self.docked = True
+                    # Re-asserted on every call (main's watchdog re-calls this
+                    # each tick): position tracks the GUI if it was dragged,
+                    # and the below-the-GUI z-slot heals after the game got
+                    # raised by a click/activation.
+                    gl, gt, _, _ = wm.get_window_rect_screen(gui_hwnd)
+                    wm.position_below(game_hwnd, gui_hwnd, gl + x, gt + y, width, height)
+                    return
+
                 if not self.docked:
                     wm.remove_borders(game_hwnd)
                     time.sleep(0.05)
@@ -91,6 +115,17 @@ else:
             reparent that silently failed would take Roblox down with it."""
             with self._lock:
                 if not game_hwnd or not wm.is_window(game_hwnd):
+                    self.docked = False
+                    return True
+                if self.cutout:
+                    # Never parented, so there's nothing whose destruction
+                    # could cascade -- just give the window its frame back
+                    # where it stands.
+                    wm.restore_borders(game_hwnd)
+                    outer_w, outer_h = wm.client_size_to_window_size(game_hwnd, width, height)
+                    wm.move_window(game_hwnd, x, y, outer_w, outer_h)
+                    wm.show_window(game_hwnd)
+                    wm.activate_window(game_hwnd)
                     self.docked = False
                     return True
                 if not self.docked and wm.get_parent(game_hwnd) == 0:

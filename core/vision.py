@@ -398,6 +398,17 @@ def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
     return gray
 
 
+def force_window_capture() -> None:
+    """Opt into the window-content capture path unconditionally (PrintWindow
+    / CGWindowListCreateImage) -- used by cutout dock mode, where the game
+    sits BEHIND the GUI and a screen grab of its rect would read the GUI's
+    own solid surface whenever the hole is closed. Same switch the
+    dead-BitBlt tiebreaker in capture_game_gray flips lazily; this just
+    sets it up front when the mode makes screen grabs categorically wrong."""
+    global _use_window_capture
+    _use_window_capture = True
+
+
 def _capture_window_bgr(hwnd: int, region: tuple = None):
     """Color twin of _capture_window_gray -- same window-content capture and
     reference-space normalization, minus the grayscale conversion."""

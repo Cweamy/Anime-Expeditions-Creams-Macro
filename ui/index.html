@@ -797,6 +797,17 @@
                off-center Continue means Extract is offered at the mirrored
                position -- fast, template-free) vs the original per-image
                template searches. See core/runner.py's EXP_COLOR_* block. -->
+          <!-- Windows-only, applies at next launch: Roblox glued BEHIND a
+               literal hole cut in the GUI over the game slot instead of
+               being reparented inside it -- see core/dock.py's cutout notes. -->
+          <div class="setting-row" style="padding: 14px;" data-win-only>
+            <div>
+              <div class="setting-label">Game Cutout Mode (experimental)</div>
+              <div class="setting-desc">Show Roblox through a cutout in the macro window instead of embedding it inside. Gentler on the game window and modals can never be covered. Applies after restarting the macro.</div>
+            </div>
+            <button id="toggle-game-cutout" class="toggle-switch" onclick="toggleSetting('game_cutout', this)"></button>
+          </div>
+
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
             <div>
               <div class="setting-label">Expedition Color Detection</div>
