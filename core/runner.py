@@ -96,6 +96,62 @@ EXPEDITION_EXTRACT_CONFIRM_TIMEOUT = 16.0
 EXTRACT_CONFIRM_SETTLE = 5.0  # settle after clicking "extract" -- reported as a click that can visually land without registering
 EXPEDITION_CONTINUE_COOLDOWN = 5.0  # settle after exp_continue/continue_2 -- a lingering banner right after the
 
+# ── Color-based Expedition checkpoint detection (the default engine --
+# Settings > Debug > "Expedition Color Detection" toggles back to the
+# template path). The checkpoint UI has exactly TWO layouts: Continue alone,
+# centered, for a plain wave transition; or Extract + Continue side by side,
+# symmetric about the window's vertical centerline, when the checkpoint
+# offers extraction. That symmetry means ONE cheap color search answers
+# everything: find the green Continue's button face in the bottom band --
+# centered means "continue", pushed right means "Extract is being offered,
+# and its button sits at Continue's position mirrored across the
+# centerline". No Extract template, no per-variant matchTemplate sweeps;
+# each check is a few ms of pixel math on a normalized reference-space
+# capture (see vision.find_color_run), which also makes the between-click
+# settles far cheaper to keep short. All bands are (x, y, w, h) in the
+# 1152x756 reference space, so they hold on any window size/density the
+# capture pipeline already normalizes (Retina included).
+# Band/threshold numbers validated against real captured frames (debug/
+# vision_exp_continue.png, vision_exp_extract.png): plain-wave Continue
+# lands at cx≈575 (the 576 centerline), the extract-offered Continue at
+# cx≈637 with the red Extract button at cx≈513 -- 2px off the mirrored
+# prediction -- both at y≈584.
+EXP_COLOR_CONTINUE_BAND = (288, 559, 576, 121)   # bottom band the Continue face renders in
+EXP_COLOR_CONFIRM_BAND = (288, 408, 380, 121)    # where the Extract confirm dialog's red button lands
+EXP_COLOR_FOLLOWUP_BAND = (380, 355, 320, 110)   # the smaller second Continue -- its real match box in
+# debug/vision_Continue_2.png spans x 457-582, y 400-438 (center 519, 419); band is that plus margin
+EXP_COLOR_MIRROR_MARGIN = 40      # Continue at least this far right of center = Extract offered
+EXP_COLOR_CONTINUE_MIN_RUN = 60   # narrower green runs are HUD noise, not a button face
+EXP_COLOR_CONFIRM_MIN_RUN = 45    # the smallest real confirm crop on file shows a 51px run
+EXP_COLOR_FOLLOWUP_MIN_RUN = 24
+# A checkpoint re-seen within this window is the SAME sighting, not a new
+# one -- the lingering wave banner used to double-count sightings, which is
+# what the template path's 5s cooldown existed to prevent; a debounce keyed
+# on time-since-last-sighting prevents it without stalling the loop.
+EXP_COLOR_SIGHTING_DEBOUNCE = 8.0
+EXP_COLOR_CONTINUE_SETTLE = 2.0   # brief settle after the continue chain so the next tick reads a fresh frame
+
+
+def _exp_green(b, g, r):
+    """The checkpoint Continue button's green face -- green well above both
+    other channels, so gameplay art (grass etc.) rarely qualifies and never
+    in a >=EXP_COLOR_CONTINUE_MIN_RUN solid horizontal run."""
+    return (g > 120) & (g > r + 45) & (g > b + 95)
+
+
+def _exp_green_loose(b, g, r):
+    """Looser green for the smaller follow-up Continue -- dimmer and
+    narrower than the main button, so the strict face predicate can miss it."""
+    return (g > 90) & (g > r + 25) & (g > b + 45)
+
+
+def _exp_red(b, g, r):
+    """The Extract confirm button's dark red -- red dominant over BOTH other
+    channels by 2x, which the game's warm gameplay art doesn't produce in a
+    solid run."""
+    return (r > 90) & (r > 2 * g) & (r > 2 * b) & (g < 95) & (b < 75)
+
+
 # Stage-select screen (after picking a map): a fixed vertical list of rows,
 # same x for every row, y stepping by one row height per stage -- Level 1
 # through 5, then Infinite, then Mastery, in that fixed order (matches
@@ -380,6 +436,15 @@ class MacroRunner:
         # at the top of _run; defaults here so the Settings > Debug test
         # paths (which never go through _run) still resolve every key.
         self._coords = dict(DEFAULT_COORDS)
+        # Set at the top of _run when nav_unitmanager is already visible
+        # (Start pressed from inside a stage); consumed one-shot by
+        # _run_task to skip the first task's lobby/stage entry.
+        self._skip_first_task_setup = False
+        # Expedition checkpoint engine choice (see the EXP_COLOR_* block) +
+        # the sighting debounce clock it uses; the real values arrive via
+        # start()/_run, these are just never-ran-yet defaults.
+        self._expedition_color_buttons = True
+        self._exp_last_sighting_at = 0.0
         # Wrapped to remember the most recent action text locally: the
         # stop path (_checkpoint) reports "Stopped. (was: <action>)" so a
         # user stopping a visibly-hung run gets told what it was stuck on
@@ -453,7 +518,8 @@ class MacroRunner:
 
     def start(self, hwnd_getter, get_tasks, scroll_power: int = None, coords: dict = None,
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
-              reward_region: dict = None, stats_region: dict = None, webhook: dict = None) -> dict:
+              reward_region: dict = None, stats_region: dict = None, webhook: dict = None,
+              expedition_color_buttons: bool = True) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -461,6 +527,7 @@ class MacroRunner:
         self._paused_logged = False
         self._stop_logged = False
         self._debug_screenshots = bool(debug_screenshots)
+        self._expedition_color_buttons = bool(expedition_color_buttons)
         self._current_hwnd = None
         self._left_stage_this_run = False
         self._thread = threading.Thread(
@@ -793,13 +860,35 @@ class MacroRunner:
                        "elevated one. If clicks aren't registering, close both and relaunch this macro "
                        "as Administrator too (right-click > Run as administrator).")
 
+        # Already standing in a match? nav_unitmanager only renders once
+        # you're actually in-game (it's the same image _wait_teleport_in
+        # treats as the "we teleported in" confirmation), so seeing it now
+        # means the user pressed Start from INSIDE a stage -- all the lobby
+        # navigation (Play, gamemode, map, stage, matchmaking, teleport)
+        # would be clicking at screens that aren't there. The first task
+        # skips straight to Pre Start instead (see _run_task's
+        # _skip_first_task_setup), picking the run up from where the user
+        # already is.
+        self._skip_first_task_setup = False
+        try:
+            if vision.find_image(hwnd, "nav_unitmanager") is not None:
+                self._skip_first_task_setup = True
+                self._log("[Macro] Unit Manager is visible -- already in-game, so the first task "
+                           "skips stage entry and starts from Pre Start.")
+        except vision.TemplateNotFound:
+            pass
+
         # Challenge runs ONCE per Start (not once per task-queue pass, see
         # the while loop below) -- if it's enabled, every ready stage slot
-        # gets attempted before the Task Queue ever starts.
+        # gets attempted before the Task Queue ever starts. Skipped when
+        # starting already in-game: its navigation begins at the lobby,
+        # which is exactly where we aren't -- ready slots still get their
+        # chance at the between-repeats check once the current stage ends.
         if self._checkpoint(stop_event):
             return
-        self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges, default_walk_paths,
-                               reward_region, stats_region, webhook)
+        if not self._skip_first_task_setup:
+            self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges, default_walk_paths,
+                                   reward_region, stats_region, webhook)
         if self._checkpoint(stop_event):
             return
 
@@ -938,14 +1027,18 @@ class MacroRunner:
             if result == "win":
                 self._mark_challenge_stage_played(slot)
             elif result == "loss":
-                # Only a WIN puts this slot on cooldown -- a loss still only
-                # gets the one attempt per window everyone else gets, not an
-                # extra free retry from being marked played when it wasn't
-                # actually cleared. The match already ran its normal Leave
-                # Stage + Return to Lobby (see _handle_match_result), so
-                # there's nothing left to recover from here.
-                self._log(f'[Macro] Challenge #{slot} was a loss -- not marking it played, '
-                           f'still available this window.')
+                # A loss starts the same until-next-window cooldown a win
+                # does -- the slot's rotated-in stage won't have changed
+                # within this window, so an immediate retry just feeds it
+                # the same losing matchup again -- but count_play=False
+                # keeps it from eating one of the day's capped plays the
+                # way a real completion does. The match already ran its
+                # normal Leave Stage + Return to Lobby (see
+                # _handle_match_result), so there's nothing left to
+                # recover from here.
+                self._mark_challenge_stage_played(slot, False)
+                self._log(f'[Macro] Challenge #{slot} was a loss -- resting it until the next '
+                           f':00/:30 window (daily count not used).')
             else:
                 self._log(f'[Macro] Challenge #{slot} didn\'t complete cleanly -- recovering to the lobby.')
                 # A quick, targeted Leave Stage + Return to Lobby is tried
@@ -974,10 +1067,11 @@ class MacroRunner:
         """Returns "win", "loss", or None -- None covers both a genuine
         technical failure (never got into the stage, map never recognized,
         etc.) AND the run being stopped mid-way, same as _play_one_match's
-        own result convention. Callers (_run_challenges) only put the slot
-        on cooldown for "win" -- a loss still only gets one shot per
-        window, same as everyone else's, not an extra free retry from
-        being falsely marked played."""
+        own result convention. Callers (_run_challenges) put the slot on
+        its until-next-window cooldown for BOTH "win" and "loss" (a loss
+        just doesn't consume a daily-cap count -- see
+        mark_challenge_stage_played's count_play); only None leaves the
+        slot ready, so a technical failure can be retried this window."""
         self._log(f"[Macro] Challenge #{slot}: entering ({play_mode})...")
         self._set_status(current_task=f"Challenge #{slot}", map="-", action="Entering Challenge...",
                           mode="challenge", stage="-", difficulty="-", play_mode=play_mode, macro="-")
@@ -1151,8 +1245,18 @@ class MacroRunner:
             # ONCE per task -- every repeat after that re-enters the same
             # stage directly via Repeat Stage (see _handle_match_result),
             # skipping the lobby/gamemode/map/stage picks entirely.
-            if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords, scroll_power,
-                                          scroll_nudges, webhook):
+            # Consumed one-shot: the started-already-in-game case (see _run's
+            # nav_unitmanager check) skips even that first entry -- the user
+            # is standing in the stage right now, so the run picks up at Pre
+            # Start. Any retry/recovery after that goes through the real
+            # setup, since a recovery lands back in the lobby.
+            skip_setup = getattr(self, "_skip_first_task_setup", False)
+            self._skip_first_task_setup = False
+            if skip_setup:
+                self._log(f'[Macro] Already in-game -- treating the current stage as "{map_name}" '
+                           f'and skipping stage entry.')
+            elif not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords, scroll_power,
+                                            scroll_nudges, webhook):
                 if stop_event.is_set():
                     return False
                 if not self._recover_to_lobby(hwnd, stop_event):
@@ -1469,6 +1573,7 @@ class MacroRunner:
         # up to extract_after, only accept the one right after that.
         self._expedition_extract_count = 0
         self._expedition_extract_accept_at = max(0, int(task.get("extract_after") or 0)) + 1
+        self._exp_last_sighting_at = 0.0  # fresh match, fresh sighting-debounce clock (see EXP_COLOR_SIGHTING_DEBOUNCE)
         # Spirit City Act 3's boss/cutscene "Click anywhere to close" popup
         # (see _click_close_popup_if_found) only ever shows up there.
         watch_close_popup = (task.get("mode") == "raid" and task.get("map") == "Spirit City"
@@ -1685,6 +1790,16 @@ class MacroRunner:
                        f"(score {defeat_match['score']:.2f}).{suffix}")
             return "loss"
 
+        # Checkpoint handling forks by engine here: color-first (the
+        # default -- one cheap pixel search plus the mirror-symmetry rule,
+        # see the EXP_COLOR_* block) or the original template path below
+        # (Settings > Debug > "Expedition Color Detection" off). Everything
+        # above this line (start-game re-check, reward card, defeat) is
+        # shared -- those are art, not color blobs, and stay template-based
+        # under both engines.
+        if self._expedition_color_buttons:
+            return self._check_expedition_checkpoint_by_color(hwnd, stop_event)
+
         # exp_extract is a recurring checkpoint choice -- Extract and
         # Continue offered side by side, not a one-shot terminal event (see
         # the counting reasoning in _play_one_match's reset of these two
@@ -1848,6 +1963,143 @@ class MacroRunner:
             return None
 
         return None
+
+    def _check_expedition_checkpoint_by_color(self, hwnd, stop_event: threading.Event) -> str:
+        """The color-first checkpoint engine (see the EXP_COLOR_* block for
+        the two-layouts/mirror-symmetry reasoning). One find_color_run for
+        the green Continue face answers, in a few milliseconds, everything
+        the template path needed four separate image searches for:
+
+        - nothing found        -> mid-wave, keep polling (return None)
+        - Continue centered    -> plain wave transition: click it, chase the
+                                  smaller follow-up Continue, brief settle
+        - Continue off-center  -> the checkpoint is offering Extract; count
+                                  the sighting (debounced -- see
+                                  EXP_COLOR_SIGHTING_DEBOUNCE), and either
+                                  decline via that same Continue or, at the
+                                  accept-at sighting, click the mirrored
+                                  Extract spot and confirm (-> "win")
+
+        Same return convention as _check_expedition_wave_result, which this
+        runs inside of: "win" once extracted, None otherwise ("loss" never
+        comes from here -- the shared defeat check above it owns that)."""
+        cont = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green, EXP_COLOR_CONTINUE_MIN_RUN)
+        if cont is None:
+            return None  # mid-wave -- nothing up this tick
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        center_x = 576  # the 1152-wide reference space's vertical centerline
+        offers_extract = cont["cx"] > center_x + EXP_COLOR_MIRROR_MARGIN
+
+        if offers_extract:
+            now = time.time()
+            if now - self._exp_last_sighting_at > EXP_COLOR_SIGHTING_DEBOUNCE:
+                self._expedition_extract_count += 1
+                self._log(f'[Macro] Checkpoint offers Extract (sighting {self._expedition_extract_count}/'
+                           f'{self._expedition_extract_accept_at} -- Continue found at x={cont["cx"]}).')
+            self._exp_last_sighting_at = now
+            # A level-up "Select an upgrade!" reward-card modal can sit on
+            # top of this exact choice -- same unconditional middle-click
+            # dismissal (harmless when no card is up) + settle the template
+            # path uses, then re-find Continue in case anything shifted.
+            self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
+            time.sleep(0.5)
+            refound = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green, EXP_COLOR_CONTINUE_MIN_RUN)
+            if refound is not None:
+                cont = refound
+            if self._expedition_extract_count >= self._expedition_extract_accept_at:
+                if self._extract_via_mirrored_button(hwnd, stop_event, left, top, center_x, cont):
+                    return "win"
+                if stop_event is not None and stop_event.is_set():
+                    return None
+                # Never stall on a failed extract: continuing costs one more
+                # wave and another (immediate -- count already past
+                # accept-at) extract chance at the next checkpoint.
+                self._log("[Macro] Extract confirm never registered -- continuing this checkpoint instead.")
+            else:
+                self._log(f'[Macro] Not the configured sighting yet -- declining (continuing).')
+        else:
+            self._log(f'[Macro] Wave Continue found (x={cont["cx"]}) -- clicking it.')
+
+        self._mouse.click(left + cont["cx"], top + cont["cy"])
+        time.sleep(0.5)
+        # The smaller follow-up Continue confirms the transition actually
+        # advanced -- hunted for the same window the template path gave
+        # continue_2 (EXPEDITION_WAVE_TIMEOUT), since the game can take a
+        # few seconds to put it up. While hunting, the MAIN Continue still
+        # being visible means the click above got eaten (confirmed live: the
+        # log showed the same "Wave Continue found" twice with nothing in
+        # between) -- re-click it right here instead of blind-waiting out a
+        # follow-up that can't appear until the first click lands.
+        deadline = time.time() + EXPEDITION_WAVE_TIMEOUT
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return None
+            follow = vision.find_color_run(hwnd, EXP_COLOR_FOLLOWUP_BAND, _exp_green_loose,
+                                            EXP_COLOR_FOLLOWUP_MIN_RUN)
+            if follow is not None:
+                self._log(f'[Macro] Follow-up Continue found at ({follow["cx"]}, {follow["cy"]}) -- clicking it.')
+                self._mouse.click(left + follow["cx"], top + follow["cy"])
+                break
+            still = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green,
+                                           EXP_COLOR_CONTINUE_MIN_RUN)
+            if still is not None:
+                self._mouse.click(left + still["cx"], top + still["cy"])
+            time.sleep(0.25)
+        self._interruptible_sleep(EXP_COLOR_CONTINUE_SETTLE, stop_event)
+        return None
+
+    def _extract_via_mirrored_button(self, hwnd, stop_event: threading.Event, left: int, top: int,
+                                       center_x: int, cont: dict) -> bool:
+        """Clicks the Extract button -- found by its own red face in the
+        bottom band when possible, else at the Continue's position mirrored
+        across the centerline (the two share a row, symmetric about center;
+        verified 2px apart on a real frame, see the EXP_COLOR_* comment) --
+        then hunts the confirm dialog's red button and verifies it actually
+        went away. Up to 4 full attempts, tight settles -- re-checking is a
+        few ms, so there's no reason to sit on long cooldowns between
+        tries. True once the confirm is clicked and gone (the reward screen
+        is up), False if it never registered."""
+        red_btn = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_red, EXP_COLOR_CONTINUE_MIN_RUN)
+        if red_btn is not None:
+            ex, ey = red_btn["cx"], red_btn["cy"]
+            how = "by color"
+        else:
+            ex, ey = 2 * center_x - cont["cx"], cont["cy"]
+            how = "mirrored from Continue"
+        self._log(f'[Macro] Sighting {self._expedition_extract_count}/{self._expedition_extract_accept_at} -- '
+                   f'extracting for real (Extract at ({ex}, {ey}), {how}).')
+        for attempt in range(1, 5):
+            if self._checkpoint(stop_event):
+                return False
+            self._mouse.click(left + ex, top + ey)
+            time.sleep(0.45)
+            deadline = time.time() + 2.2
+            while time.time() < deadline:
+                if self._checkpoint(stop_event):
+                    return False
+                confirm = vision.find_color_run(hwnd, EXP_COLOR_CONFIRM_BAND, _exp_red,
+                                                 EXP_COLOR_CONFIRM_MIN_RUN)
+                if confirm is None:
+                    # Template backstop for the one band no real capture has
+                    # verified yet -- the "extract" confirm crop already on
+                    # file finds the same dialog by art if the color band
+                    # is off on some setup.
+                    try:
+                        tmpl = vision.find_image(hwnd, "extract")
+                    except vision.TemplateNotFound:
+                        tmpl = None
+                    if tmpl is not None:
+                        confirm = {"cx": tmpl["cx"], "cy": tmpl["cy"]}
+                if confirm is not None:
+                    self._mouse.click(left + confirm["cx"], top + confirm["cy"])
+                    time.sleep(0.45)
+                    if vision.find_color_run(hwnd, EXP_COLOR_CONFIRM_BAND, _exp_red,
+                                              EXP_COLOR_CONFIRM_MIN_RUN) is None:
+                        self._log("[Macro] Extracted -- on the reward screen.")
+                        return True
+                    break  # confirm still up -- restart from the Extract click
+                time.sleep(0.12)
+        return False
 
     def debug_check_expedition_wave(self, hwnd) -> str:
         """Settings > Debug > "Test Expedition Wave Check" -- runs exactly
@@ -2609,16 +2861,31 @@ class MacroRunner:
 
     def _run_prestart(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
                         first_repeat: bool = True) -> bool:
-        # Camera setup ALWAYS runs in Pre Start -- it's a per-match reset
-        # (the camera doesn't stay put across a repeat's re-teleport), so it
-        # isn't gated by first_repeat the way the walk below is.
-        self._log("[Macro] Pre Start: setting up the camera...")
-        self._set_status(action="Setting up camera...")
-        try:
-            camera.run_camera_setup(self._mouse, self._keyboard, hwnd)
-            self._log("[Macro] Camera setup done.")
-        except Exception as exc:
-            self._log(f"[Macro] Camera setup failed: {exc}")
+        # Camera setup runs ONCE per fresh entry into a stage (same
+        # first_repeat gate as Team Loadout and the Walk Path block below)
+        # -- it used to re-run on every repeat as a "per-match reset", but
+        # the camera actually holds its angle across a repeat's
+        # re-teleport, so re-running just re-dragged an already-correct
+        # camera off its spot every loop.
+        #
+        # Expedition gets its own sequence: the standard drag-down + O
+        # zoom-hold doesn't frame Expedition maps right, so it uses the
+        # drag-down + Left-arrow rotate instead (the same sequence Settings
+        # > Debug > Camera Setup 3 tests) -- 730ms rotate, then a 100ms O
+        # tap for a small zoom step.
+        if first_repeat:
+            self._log("[Macro] Pre Start: setting up the camera...")
+            self._set_status(action="Setting up camera...")
+            try:
+                if task.get("mode") == "expedition":
+                    camera.run_camera_drag_hold(self._mouse, self._keyboard, hwnd, hold_ms=730, o_tap_ms=100)
+                else:
+                    camera.run_camera_setup(self._mouse, self._keyboard, hwnd)
+                self._log("[Macro] Camera setup done.")
+            except Exception as exc:
+                self._log(f"[Macro] Camera setup failed: {exc}")
+        else:
+            self._log("[Macro] Repeat of the same stage -- skipping camera setup (already set on entry).")
         if self._checkpoint(stop_event):
             return False
 
@@ -2805,9 +3072,23 @@ class MacroRunner:
         # was never wired up: the field existed on every Task card, but
         # nothing ever read it. Runs after camera+walk and before Start Game
         # is pressed, same as Pre Start blocks are laid out in Creation.
+        # A synthesized Auto Walk Path block, used everywhere below a real
+        # one is missing: walking is MANDATORY now, not opt-in -- Auto mode
+        # resolves the map's Default Auto Walk entry (Settings > Debug >
+        # Pathing; ships with known-good paths for Fairy King Forest,
+        # King's Tomb and Spirit City Act 3) and quietly does nothing for a
+        # map without one, so forcing it on can never walk somewhere wrong,
+        # only fix the "template/task without the block never walks" hole.
+        # once=True matches how the editor now pins it (and what the walk
+        # does anyway -- _run_walk_path_block itself only walks on the
+        # first entry into a stage).
+        auto_walk_block = {"type": "walk_path", "params": {}, "once": True, "mode": "auto", "pathName": ""}
+
         macro_name = task.get("macro")
         if not macro_name:
-            self._log("[Macro] No Macro Operation set on this task -- nothing to place.")
+            self._log("[Macro] No Macro Operation set on this task -- running just the default Auto walk.")
+            self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {},
+                                        auto_walk_block, first_repeat)
             return
 
         from . import templates as tpl
@@ -2816,6 +3097,9 @@ class MacroRunner:
         if isinstance(blocks, list):
             self._log(f'[Macro] Template "{macro_name}" is saved in an old format -- '
                        f'open it in Macro Manager and Save again to run its Pre Start blocks.')
+            # Its blocks can't run, but the mandatory Auto walk still can.
+            self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {},
+                                        auto_walk_block, first_repeat)
             return
         prestart_blocks = blocks.get("prestart") if "prestart" in blocks else blocks.get("before")
         prestart_blocks = self._strip_auto_upgrade_for_expedition(prestart_blocks or [], task)
@@ -2833,16 +3117,15 @@ class MacroRunner:
         # always effectively ran before), so a template someone never
         # happens to open in the editor still walks correctly.
         legacy_walk = blocks.get("walk")
-        if legacy_walk and not any(b.get("type") == "walk_path" for b in prestart_blocks):
+        if not any(b.get("type") == "walk_path" for b in prestart_blocks):
+            # No walk block at all (a template saved back when the block was
+            # removable, or hand-edited) gets the plain synthesized Auto one
+            # -- same mandatory-walk rule as the no-macro case above.
             prestart_blocks = [{
-                "type": "walk_path", "params": {}, "once": False,
-                "mode": "custom" if legacy_walk.get("mode") == "custom" else "auto",
-                "pathName": legacy_walk.get("pathName") or "",
+                "type": "walk_path", "params": {}, "once": True,
+                "mode": "custom" if legacy_walk and legacy_walk.get("mode") == "custom" else "auto",
+                "pathName": (legacy_walk.get("pathName") or "") if legacy_walk else "",
             }] + prestart_blocks
-
-        if not prestart_blocks:
-            self._log(f'[Macro] Template "{macro_name}" has no Pre Start blocks.')
-            return
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._log(f'[Macro] Running {len(prestart_blocks)} Pre Start block(s) from "{macro_name}"...')

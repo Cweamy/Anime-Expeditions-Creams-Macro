@@ -77,7 +77,9 @@ LOGS_H = 160  # log strip under the docked Roblox window, same width as the game
 GUI_WIDTH_FULL = config.FIXED_WIN_W + PANEL_WIDTH
 GUI_WIDTH_COMPACT = PANEL_WIDTH
 GUI_HEIGHT_FULL = TITLEBAR_H + config.FIXED_WIN_H + LOGS_H
-GUI_HEIGHT_COMPACT = TITLEBAR_H + 280
+GUI_HEIGHT_COMPACT = TITLEBAR_H + 380  # tall enough for the waiting screen's full stack (emblem +
+# expanding ping rings + tag + title + status + Skip + version badge) -- 280 clipped the emblem's
+# animation and the bottom rows
 
 # ── macOS side-by-side geometry ─────────────────────────────────────────────
 # On Windows the game is a child window INSIDE ours, so one window size covers
@@ -525,6 +527,7 @@ class Api:
             "story_scroll_nudges": data.get("story_scroll_nudges", 8),
             "debug_screenshots": data.get("debug_screenshots", False),
             "action_delay_ms": data.get("action_delay_ms", 0),
+            "expedition_color_buttons": data.get("expedition_color_buttons", True),
         }
 
     def get_tasks(self) -> list:
@@ -672,17 +675,21 @@ class Api:
             self.push_log("[Challenge] Daily play counts reset.")
         return merged
 
-    def mark_challenge_stage_played(self, stage: str) -> dict:
+    def mark_challenge_stage_played(self, stage: str, count_play: bool = True) -> dict:
         # Called by the runner right after actually running a Challenge
-        # stage -- starts that slot's cooldown and bumps its daily count in
-        # one write (both change together every real play, so no reason to
-        # split into two round trips).
+        # stage -- starts that slot's cooldown (not ready again until the
+        # next :00/:30 window) and bumps its daily count in one write.
+        # count_play=False is the LOSS case: the cooldown still applies
+        # (retrying the same rotated-in stage right away just loses again
+        # -- wait for the next window), but a loss shouldn't eat one of the
+        # day's capped plays the way a real completion does.
         if stage not in CHALLENGE_STAGE_SLOTS:
             return {"ok": False, "reason": "bad_stage"}
         data = cfg.load()
         challenge = self.get_challenge_settings()
         challenge["stages"][stage]["last_played_at"] = time.time()
-        challenge["stages"][stage]["count"] += 1
+        if count_play:
+            challenge["stages"][stage]["count"] += 1
         data["challenge"] = challenge
         cfg.save(data)
         return {"ok": True}
@@ -766,7 +773,8 @@ class Api:
         webhook_settings = self.get_webhook_settings()
         return self.runner.start(
             lambda: self.game_hwnd, self.get_tasks, scroll_power, coords, scroll_nudges, debug_screenshots,
-            default_walk_paths, reward_region, stats_region, webhook_settings)
+            default_walk_paths, reward_region, stats_region, webhook_settings,
+            expedition_color_buttons=data.get("expedition_color_buttons", True))
 
     def debug_story_map_region(self) -> dict:
         # Settings > Debug > "Story Map Region": saves exactly the band
@@ -1292,6 +1300,9 @@ class Api:
         hwnd = self.game_hwnd
         if not hwnd or not wm.is_window(hwnd):
             return {"ok": False, "reason": "no_roblox"}
+        # The test tick should exercise the same checkpoint engine a real
+        # run would use (see the Expedition Color Detection toggle).
+        self.runner._expedition_color_buttons = cfg.load().get("expedition_color_buttons", True)
         result = self.runner.debug_check_expedition_wave(hwnd)
         return {"ok": True, "result": result}
 
@@ -1650,6 +1661,35 @@ class Api:
                 self.push_log(f"[Debug] Camera setup 2 done ({hold_ms:.0f}ms hold).")
             except Exception as exc:
                 self.push_log(f"[Debug] Camera setup 2 failed: {exc}")
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True}
+
+    def debug_camera_setup_3(self, hold_ms) -> dict:
+        # Settings > Debug > "Camera Setup 3": the standard right-click
+        # drag-down pitch pin, then HOLD the Left arrow key for a
+        # caller-supplied time instead of the O zoom-hold -- the same
+        # sequence Expedition's Pre Start runs with a 750ms hold (see
+        # core.camera.run_camera_drag_hold), runnable here with any hold
+        # time for tuning.
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+        try:
+            hold_ms = max(0.0, float(hold_ms))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_hold_ms"}
+
+        wm.show_window(hwnd)
+        wm.activate_window(hwnd)
+
+        def run():
+            from core import camera
+            try:
+                camera.run_camera_drag_hold(self.mouse, self.keyboard, hwnd, hold_ms=hold_ms)
+                self.push_log(f"[Debug] Camera setup 3 done (drag down, {hold_ms:.0f}ms Left-arrow hold).")
+            except Exception as exc:
+                self.push_log(f"[Debug] Camera setup 3 failed: {exc}")
 
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True}

@@ -651,11 +651,23 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .block-row.removing { opacity: 0; transform: translateX(14px) scale(0.97); }
 /* The pinned Walk Path row at the top of Pre Start: part of every routine,
    so it can't be dragged, cloned, or deleted -- a steady teal fixture the
-   draggable blocks stack under. */
+   draggable blocks stack under (see renderBlockRow's isPinnedWalk). */
 .block-row.pinned {
   border-left-color: var(--teal);
   background: color-mix(in srgb, var(--teal) 6%, var(--bg-card));
   cursor: default;
+}
+.block-row.pinned:hover { transform: none; }
+.pinned-walk-icon { width: 15px; height: 15px; color: var(--teal); flex-shrink: 0; }
+/* Fixed state marker, not a toggle -- same amber family as .block-mod-btn.on
+   but unmistakably a badge (uppercase, no hover), since it can't be turned
+   off: the walk only ever runs on a task's first entry into a stage. */
+.pinned-walk-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  padding: 3px 8px; border-radius: 6px; flex-shrink: 0; cursor: default;
 }
 .block-drag-handle { color: var(--text-muted); font-size: 14px; flex-shrink: 0; }
 .block-label { font-size: 12px; font-weight: 700; min-width: 118px; color: var(--blk, var(--text)); }

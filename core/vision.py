@@ -398,6 +398,116 @@ def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
     return gray
 
 
+def _capture_window_bgr(hwnd: int, region: tuple = None):
+    """Color twin of _capture_window_gray -- same window-content capture and
+    reference-space normalization, minus the grayscale conversion."""
+    result = wm.capture_window_rgb(hwnd)
+    if not result:
+        return None
+    rgb, w, h = result
+    img = np.frombuffer(rgb, np.uint8).reshape(h, w, 3)
+    bgr = img[:, :, ::-1]
+    if bgr.shape[:2] != (config.FIXED_WIN_H, config.FIXED_WIN_W):
+        bgr = cv2.resize(bgr, (config.FIXED_WIN_W, config.FIXED_WIN_H), interpolation=cv2.INTER_AREA)
+    if region is not None:
+        rx, ry, rw, rh = (int(v) for v in region)
+        bgr = bgr[max(0, ry):ry + rh, max(0, rx):rx + rw]
+    return bgr
+
+
+def capture_game_bgr(hwnd: int, region: tuple = None) -> np.ndarray:
+    """Color twin of capture_game_gray: a BGR capture normalized to
+    reference-space dimensions, for detection that keys off a button's
+    COLOR rather than its art (see find_color_run). Same capture-path
+    rules as the grayscale version -- honors the window-capture switch,
+    and a region is reference-space (x, y, w, h)."""
+    if _use_window_capture:
+        bgr = _capture_window_bgr(hwnd, region)
+        if bgr is not None:
+            return bgr
+
+    import mss
+    left, top, sx, sy = _window_geometry(hwnd)
+    if region is not None:
+        rx, ry, rw, rh = region
+        grab_left, grab_top = left + rx * sx, top + ry * sy
+        grab_w, grab_h = rw * sx, rh * sy
+        out_w, out_h = int(rw), int(rh)
+    else:
+        grab_left, grab_top = left, top
+        grab_w, grab_h = config.FIXED_WIN_W * sx, config.FIXED_WIN_H * sy
+        out_w, out_h = config.FIXED_WIN_W, config.FIXED_WIN_H
+    if grab_w <= 0 or grab_h <= 0:
+        return None
+    with mss.MSS() as sct:
+        shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
+                          "width": int(round(grab_w)), "height": int(round(grab_h))})
+        bgr = np.array(shot)[:, :, :3]
+    if bgr.shape[:2] != (out_h, out_w):
+        bgr = cv2.resize(bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
+    if not bgr.any():
+        # Same dead-BitBlt tiebreaker as capture_game_gray -- but the
+        # switch itself is left to the grayscale path (it runs every tick
+        # regardless); here it's enough to just serve the window capture.
+        window_bgr = _capture_window_bgr(hwnd, region)
+        if window_bgr is not None and window_bgr.any():
+            return window_bgr
+    return bgr
+
+
+def find_color_run(hwnd: int, region: tuple, mask_fn, min_run: int, min_height: int = 3) -> dict:
+    """Finds a solid-colored UI element (a button face) by COLOR inside a
+    reference-space band, without any template: capture the band in color,
+    mark every pixel mask_fn accepts, and take the widest horizontal run of
+    accepted pixels. A run at least min_run px wide (and min_height tall
+    through its center column) is a hit; its center comes back as
+    cx/cy in full-window reference coords, like find_image's.
+
+    Complements template matching rather than replacing it: a template
+    keys off ART (exact glyphs, so it distinguishes two same-colored
+    buttons but pays a full matchTemplate sweep per variant per scale),
+    while this keys off a COLOR BLOB (milliseconds per check, immune to
+    text/art changes inside the button, but only usable where a color +
+    location band is unambiguous -- e.g. the Expedition checkpoint's
+    green Continue, see core.runner's color checkpoint path).
+
+    mask_fn receives the band's (b, g, r) int16 ndarrays and returns a
+    bool mask -- vectorized, so predicates stay cheap. Gaps up to 3px
+    inside a run are bridged (anti-aliased button text punches thin holes
+    in the face color)."""
+    img = capture_game_bgr(hwnd, region)
+    if img is None or img.size == 0:
+        return None
+    arr = img.astype(np.int16)
+    mask = mask_fn(arr[:, :, 0], arr[:, :, 1], arr[:, :, 2])
+    if not mask.any():
+        return None
+    best = None  # (width, y, x0, x1)
+    for y in range(mask.shape[0]):
+        xs = np.flatnonzero(mask[y])
+        if xs.size < 2:
+            continue
+        for run in np.split(xs, np.where(np.diff(xs) > 3)[0] + 1):
+            width = int(run[-1] - run[0])
+            if best is None or width > best[0]:
+                best = (width, y, int(run[0]), int(run[-1]))
+    if best is None or best[0] < min_run:
+        return None
+    width, y, x0, x1 = best
+    cx = (x0 + x1) // 2
+    ys = np.flatnonzero(mask[:, cx])
+    band = None
+    for run in np.split(ys, np.where(np.diff(ys) > 3)[0] + 1):
+        if run[0] <= y <= run[-1]:
+            band = run
+            break
+    height = int(band[-1] - band[0]) + 1 if band is not None else 1
+    if height < min_height:
+        return None
+    cy = int((band[0] + band[-1]) // 2) if band is not None else y
+    return {"cx": cx + int(region[0]), "cy": cy + int(region[1]), "w": width, "h": height}
+
+
 def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold: float = DEFAULT_THRESHOLD,
                   mask: np.ndarray = None) -> dict:
     """One-shot match of template_gray against haystack_gray. Returns the

@@ -775,6 +775,9 @@ async function loadSettingsUI() {
     if (actionDelayEl) actionDelayEl.value = s.action_delay_ms || 0;
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
     if (debugScreenshotsEl) debugScreenshotsEl.classList.toggle('on', !!s.debug_screenshots);
+    const expColorEl = document.getElementById('toggle-expedition-color');
+    // Default ON -- the key is simply absent until the user first flips it.
+    if (expColorEl) expColorEl.classList.toggle('on', s.expedition_color_buttons !== false);
     if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {
       // First load since the base/accent split -- migrate the old value
       // once, then persist the split so this branch never runs again.
@@ -1188,6 +1191,27 @@ async function runCameraSetup2(btn) {
   await new Promise(resolve => setTimeout(resolve, 400));
   try {
     const result = await pywebview.api.debug_camera_setup_2(holdMs);
+    btn.textContent = result.ok ? 'Started' : `Failed (${result.reason || 'error'})`;
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, Math.max(3200, holdMs + 1200));
+}
+
+// Settings > Debug > "Camera Setup 3" -- experimental: right-click drag
+// down-right (diagonal), then hold the LEFT mouse button for the entered
+// time (ms). For testing camera interactions the standard setup doesn't
+// produce; nothing in the macro run uses it.
+async function runCameraSetup3(btn) {
+  const original = btn.textContent;
+  const msInput = document.getElementById('camera-setup-3-ms');
+  const holdMs = Math.max(0, parseInt(msInput && msInput.value, 10) || 0);
+  switchScreen('dashboard');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  await new Promise(resolve => setTimeout(resolve, 400));
+  try {
+    const result = await pywebview.api.debug_camera_setup_3(holdMs);
     btn.textContent = result.ok ? 'Started' : `Failed (${result.reason || 'error'})`;
   } catch (e) {
     btn.textContent = 'Failed';
@@ -2046,8 +2070,12 @@ const PHASES = ['prestart', 'battle'];
 const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle' };
 const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat' };
 const PHASE_ALLOWED = {
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'walk_path', 'click', 'wait_ms'],
-  battle: Object.keys(BLOCK_TYPES),
+  // walk_path is deliberately in NEITHER palette: it's the one unique
+  // pinned block -- every routine always has exactly one in Pre Start
+  // (synthesized on new/load, never removable), so offering it as an
+  // addable block would only create duplicates.
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'click', 'wait_ms'],
+  battle: Object.keys(BLOCK_TYPES).filter(t => t !== 'walk_path'),
 };
 
 let creationPhases = { prestart: [], battle: [] };
@@ -2117,6 +2145,14 @@ function removeBlock(id) {
   if (recordingBlockId === id) recordingBlockId = null;
   const loc = findBlockLocation(id);
   if (!loc) return;
+  // The pinned Walk Path renders without a remove button at all (see
+  // renderBlockRow's isPinnedWalk) -- this guard just backs that up so no
+  // other path can strip the one block every routine must keep.
+  const b = creationPhases[loc.phase][loc.idx];
+  if (b.type === 'walk_path' && loc.phase === 'prestart'
+      && creationPhases.prestart.filter(x => x.type === 'walk_path').length <= 1) {
+    return;
+  }
   const el = document.querySelector(`#creation-phases .block-row[data-id="${id}"]`);
   const drop = () => {
     creationPhases[loc.phase].splice(loc.idx, 1);
@@ -2408,8 +2444,11 @@ function renderPalette() {
   if (!el) return;
   // Grouped by what the block acts on (Units / Pathing / Timing) so the
   // palette scans as sections instead of one undifferentiated stack.
+  // walk_path is skipped: it's the pinned block every routine already has
+  // (see renderPhases' invariant), so there's nothing to drag in.
   const groups = [];
   for (const [type, def] of Object.entries(BLOCK_TYPES)) {
+    if (type === 'walk_path') continue;
     let g = groups.find(x => x.name === def.group);
     if (!g) { g = { name: def.group, chips: [] }; groups.push(g); }
     g.chips.push(`
@@ -2671,8 +2710,34 @@ function renderBlockRow(b, phase) {
     : b.type === 'upgrade_unit' ? renderUpgradeControls(b)
     : b.type === 'auto_upgrade_unit' ? renderAutoUpgradeControls(b)
     : b.type === 'sell_unit' ? renderSellUnitControls(b) : '';
-  const onceBtn = `<button type="button" class="block-mod-btn ${b.once ? 'on' : ''}" onclick="toggleBlockOnce('${b.id}')" title="Only run this block once, even if the routine repeats">Once</button>`;
   const entering = enteringBlockIds.has(b.id) ? ' entering' : '';
+  // Walk Path is the one unique pinned block: the sole Pre Start copy
+  // (legacy templates can still carry extras, which render as normal
+  // removable rows) is simply always there -- the permanent pinned-row
+  // look of old: not draggable, no clone/remove/Once controls, a walk
+  // icon in place of the drag handle and a fixed RUNS ONCE badge on the
+  // right, since walking only ever runs on the first entry into a stage
+  // (repeating it would walk you away from your spot). renderPhases'
+  // invariant keeps it at the top of the list.
+  const isPinnedWalk = b.type === 'walk_path' && phase === 'prestart'
+    && creationPhases.prestart.filter(x => x.type === 'walk_path').length <= 1;
+  if (isPinnedWalk) {
+    return `
+    <div class="block-row pinned${entering}" style="--blk: ${def.color};" data-id="${b.id}"
+         ondragover="onBlockRowDragOver(event, '${phase}', '${b.id}')"
+         ondrop="onBlockDrop(event, '${phase}', '${b.id}')">
+      <svg class="pinned-walk-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+        <circle cx="12" cy="10" r="3"/>
+      </svg>
+      <span class="block-label" style="color: var(--teal);">${def.label}</span>
+      ${extra}
+      <span class="flex-1"></span>
+      <span class="pinned-walk-badge" title="Pinned -- every routine walks once, on its first entry into a stage. Auto uses the map's default path (Settings > Debug > Pathing) and does nothing for maps without one.">Runs Once</span>
+    </div>
+  `;
+  }
+  const onceBtn = `<button type="button" class="block-mod-btn ${b.once ? 'on' : ''}" onclick="toggleBlockOnce('${b.id}')" title="Only run this block once, even if the routine repeats">Once</button>`;
   return `
     <div class="block-row${entering}" style="--blk: ${def.color};" draggable="true" data-id="${b.id}"
          ondragstart="if (['INPUT','SELECT','BUTTON'].includes(event.target.tagName)) { event.preventDefault(); return false; } event.dataTransfer.setData('block-reorder', '${b.id}')"
@@ -3528,6 +3593,24 @@ function renderCreationLoadout() {
 function renderPhases() {
   const el = document.getElementById('creation-phases');
   if (!el) return;
+  // The pinned Walk Path invariant, enforced at the render chokepoint so
+  // EVERY path into the editor keeps it -- initial page load (which starts
+  // from the bare `creationPhases` literal and never went through
+  // newTemplate/load), New, Load, imports, and any drag/drop edit: exactly
+  // one walk_path sits at the top of Pre Start with Once on. Legacy
+  // templates carrying extra walk copies keep them (in stored order) until
+  // they're deleted down to the one that pins.
+  const walks = creationPhases.prestart.filter(b => b.type === 'walk_path');
+  if (walks.length === 0) {
+    creationPhases.prestart.unshift({ id: newBlockId(), type: 'walk_path', params: {}, once: true, mode: 'auto', pathName: '' });
+  } else if (walks.length === 1) {
+    walks[0].once = true;
+    const idx = creationPhases.prestart.indexOf(walks[0]);
+    if (idx > 0) {
+      creationPhases.prestart.splice(idx, 1);
+      creationPhases.prestart.unshift(walks[0]);
+    }
+  }
   // Only a genuine fresh load (initial page render, New Template, Load
   // Template) plays the phase-panel/pinned-row entrance -- every other call
   // is just reflecting an edit to the existing list, so those shells should
@@ -3537,15 +3620,20 @@ function renderPhases() {
   el.innerHTML = PHASES.map(phase => {
     const blocks = creationPhases[phase];
     const emptyText = phase === 'prestart'
-      ? 'Drag Place Unit, Setting, Auto Upgrade Unit, Walk Path, or Click blocks here -- only those are possible before the match starts.'
+      ? 'Drag Place Unit, Setting, Auto Upgrade Unit, Click, or Wait blocks here -- only those are possible before the match starts.'
       : 'Drag blocks here -- upgrades, sells, waits, clicks, anything goes mid-battle.';
     const emptyDiv = `<div class="text-xs text-center" style="color: var(--text-muted); padding: 16px 0;">${emptyText}</div>`;
-    // Walk Path used to be a permanent pinned row here, always running
-    // before EVERY block in this list no matter where they were dragged --
-    // it's a real block now (see BLOCK_TYPES.walk_path), so Pre Start
-    // renders in true stored order same as Battle already does, and
-    // dragging it (or anything else) actually changes when it runs.
-    const body = blocks.length === 0 ? emptyDiv : blocks.map(b => renderBlockRow(b, phase)).join('');
+    // Pre Start always holds at least the pinned Walk Path (see the
+    // invariant at the top of this function), so its "empty" hint shows
+    // when that's the ONLY thing there -- same layout the old permanent
+    // pinned row had: the row up top, the drag hint below it.
+    const onlyPinned = phase === 'prestart' && blocks.length === 1 && blocks[0].type === 'walk_path';
+    const body = blocks.length === 0 ? emptyDiv
+      : blocks.map(b => renderBlockRow(b, phase)).join('') + (onlyPinned ? emptyDiv : '');
+    // The pinned Walk Path is furniture, not content -- the count reads as
+    // "blocks you added", same as when it was a literal pinned row.
+    const hasPinnedWalk = phase === 'prestart' && blocks.filter(b => b.type === 'walk_path').length === 1;
+    const blockCount = blocks.length - (hasPinnedWalk ? 1 : 0);
     return `
       <div class="phase-panel${panelEntering} ${phaseCollapsed[phase] ? 'collapsed' : ''}">
         <div class="phase-head" onclick="togglePhaseCollapsed('${phase}')">
@@ -3554,7 +3642,7 @@ function renderPhases() {
           </svg>
           ${PHASE_LABELS[phase]}
           <span class="rp-head-tag" style="--rp-tag: ${phase === 'prestart' ? 'var(--teal)' : 'var(--rose)'}; margin-left: 2px;">${PHASE_TAGS[phase]}</span>
-          <span class="phase-count">${blocks.length}</span>
+          <span class="phase-count">${blockCount}</span>
         </div>
         <div id="creation-canvas-${phase}" class="canvas-dropzone p-2"
              ondragover="onCanvasDragOver(event, '${phase}')" ondragleave="onCanvasDragLeave(event, '${phase}')"
@@ -3762,11 +3850,9 @@ async function saveCurrentTemplate() {
 // already assumes on first load, just re-applied on demand so starting a
 // new template doesn't require manually clearing out whatever was loaded.
 function newTemplate() {
-  // A default Auto Walk Path block, same as every routine used to always
-  // get for free when it was a permanent pinned row -- still real/removable
-  // now, just pre-added so a brand new template isn't missing pathing by
-  // default.
-  creationPhases = { prestart: [{ id: newBlockId(), type: 'walk_path', params: {}, once: false, mode: 'auto', pathName: '' }], battle: [] };
+  // The unique pinned Auto Walk Path block (see renderBlockRow's
+  // isPinnedWalk) -- always there, Once always on, still reorderable.
+  creationPhases = { prestart: [{ id: newBlockId(), type: 'walk_path', params: {}, once: true, mode: 'auto', pathName: '' }], battle: [] };
   creationTeam = '';
   creationEquipment = 'include';
   document.getElementById('template-name').value = '';
@@ -3897,6 +3983,9 @@ async function loadSelectedTemplate() {
       creationTeam = payload.team || '';
       creationEquipment = payload.equipment === 'exclude' ? 'exclude' : 'include';
     }
+    // No walk_path handling needed here: renderPhases() below enforces the
+    // pinned-block invariant (synthesize if missing, force Once, keep at
+    // top) for every load shape.
     creationFreshLoad = true;
     renderPhases();
     document.getElementById('template-name').value = data.name || name;
