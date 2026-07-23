@@ -780,6 +780,7 @@ async function loadSettingsUI() {
     if (expColorEl) expColorEl.classList.toggle('on', s.expedition_color_buttons !== false);
     const expOEl = document.getElementById('setting-expedition-o-ms');
     if (expOEl) expOEl.value = s.expedition_camera_o_ms ?? 100;
+    if (!s.onboarding_done) showOnboarding();
     if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {
       // First load since the base/accent split -- migrate the old value
       // once, then persist the split so this branch never runs again.
@@ -1179,6 +1180,23 @@ async function runCameraSetup2(btn) {
     btn.textContent = 'Failed';
   }
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, Math.max(3200, holdMs + 1200));
+}
+
+// First-run welcome (see #onboarding-modal): shown once per install, rows
+// filtered to the current platform. "Get Started" persists the flag so it
+// never shows again; the Health Check button inside it reuses the normal
+// Settings > Debug handler.
+function showOnboarding() {
+  document.querySelectorAll('#onboarding-modal [data-plat]').forEach(el => {
+    const plat = el.getAttribute('data-plat');
+    if ((plat === 'mac') !== IS_MAC) el.style.display = 'none';
+  });
+  document.getElementById('onboarding-modal').style.display = 'flex';
+}
+
+async function closeOnboarding() {
+  document.getElementById('onboarding-modal').style.display = 'none';
+  try { await pywebview.api.set_setting('onboarding_done', true); } catch (e) {}
 }
 
 // Settings > Debug > "Health Check" -- backend runs every environment probe

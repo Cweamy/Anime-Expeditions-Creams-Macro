@@ -534,6 +534,9 @@ class Api:
             "action_delay_ms": data.get("action_delay_ms", 0),
             "expedition_color_buttons": data.get("expedition_color_buttons", True),
             "expedition_camera_o_ms": data.get("expedition_camera_o_ms", 100),
+            # False until the welcome checklist's "Get Started" -- the UI
+            # shows it exactly once per install (see app.js showOnboarding).
+            "onboarding_done": data.get("onboarding_done", False),
         }
 
     def get_tasks(self) -> list:
