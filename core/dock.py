@@ -88,12 +88,22 @@ else:
                         wm.remove_borders(game_hwnd)
                         time.sleep(0.05)
                         self.docked = True
-                    # Re-asserted on every call (main's watchdog re-calls this
-                    # each tick): position tracks the GUI if it was dragged,
-                    # and the below-the-GUI z-slot heals after the game got
-                    # raised by a click/activation.
+                    # The layering is deliberately NOT a fragile cross-process
+                    # insert-after chain (SetWindowPos's hWndInsertAfter can
+                    # silently no-op across processes -- seen live as an empty
+                    # hole with the game parked who-knows-where in z). Instead:
+                    # the GUI rides the TOPMOST band, and the game just gets
+                    # raised to the top of the normal band at the hole's screen
+                    # position -- nothing can sit between the two bands, so
+                    # the game is always what shows through the hole. Both are
+                    # re-asserted every watchdog tick (position tracks a
+                    # dragged GUI; the raise heals after other windows came up
+                    # over the game), NOACTIVATE so the tick never steals
+                    # focus.
+                    self._gui_hwnd = gui_hwnd
                     gl, gt, _, _ = wm.get_window_rect_screen(gui_hwnd)
-                    wm.position_below(game_hwnd, gui_hwnd, gl + x, gt + y, width, height)
+                    wm.position_below(game_hwnd, 0, gl + x, gt + y, width, height)  # 0 = HWND_TOP of the normal band
+                    wm.set_always_on_top(gui_hwnd, True)
                     return
 
                 if not self.docked:
@@ -119,8 +129,15 @@ else:
                     return True
                 if self.cutout:
                     # Never parented, so there's nothing whose destruction
-                    # could cascade -- just give the window its frame back
-                    # where it stands.
+                    # could cascade -- give the window its frame back where it
+                    # stands, and drop the GUI out of the topmost band so a
+                    # closing/undocking macro stops floating over everything.
+                    gui = getattr(self, "_gui_hwnd", None)
+                    if gui and wm.is_window(gui):
+                        try:
+                            wm.set_always_on_top(gui, False)
+                        except Exception:
+                            pass
                     wm.restore_borders(game_hwnd)
                     outer_w, outer_h = wm.client_size_to_window_size(game_hwnd, width, height)
                     wm.move_window(game_hwnd, x, y, outer_w, outer_h)

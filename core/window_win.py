@@ -588,10 +588,11 @@ def set_window_cutout(hwnd: int, hole) -> None:
 
 
 def position_below(hwnd: int, ref_hwnd: int, x: int, y: int, w: int, h: int) -> None:
-    """Places hwnd at the given screen rect DIRECTLY BELOW ref_hwnd in the
-    z-order, without activating either -- how the cutout dock keeps Roblox
-    glued behind the GUI's hole (the GUI's solid part occludes it
-    everywhere except the hole)."""
+    """Places hwnd at the given screen rect at a z position in one call,
+    without activating anything: ref_hwnd is a window to slot directly
+    below, or 0 (HWND_TOP) for the top of the normal band -- the cutout
+    dock uses the latter, with the GUI riding the TOPMOST band above it,
+    since a cross-process insert-after can silently no-op."""
     user32.SetWindowPos(hwnd, ref_hwnd, x, y, w, h, SWP_NOACTIVATE)
 
 
