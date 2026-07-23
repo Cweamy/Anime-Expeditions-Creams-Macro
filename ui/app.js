@@ -98,6 +98,9 @@ let hasAutoShownDashboard = false;
 // Called from Python (main.py) the moment docking actually succeeds,
 // don't wait on the 1.5s status poll for a state this important to flip.
 function showDocked() {
+  // Roblox is here -- leave the cutout idle (panel-only) layout; the dock
+  // watchdog has already resized the window back to full two-column size.
+  document.documentElement.removeAttribute('data-cutout-idle');
   document.getElementById('waiting-screen').style.display = 'none';
   document.getElementById('main-layout').style.display = 'flex';
   document.getElementById('titlebar').style.display = 'flex';
@@ -301,6 +304,11 @@ async function applyUpdate() {
 }
 
 let skipped = false;
+// Windows cutout mode (Settings > Debug) -- set from get_settings at
+// pywebviewready; drives the data-cutout-idle panel-only layout while no
+// game is docked. False until settings load, which is fine: the attribute
+// paths all re-check.
+let IS_CUTOUT = false;
 
 function showWaiting() {
   if (skipped) return;  // user chose to use the panel before Roblox docks, don't yank it away
@@ -312,6 +320,10 @@ function showWaiting() {
 function skipWaiting() {
   skipped = true;
   try { window.pywebview && pywebview.api.skip_waiting(); } catch (e) {}
+  // Cutout mode: no game to leave a slot for -- single-column panel layout
+  // in the panel-sized window skip_waiting keeps (see main.py). Cleared by
+  // showDocked when Roblox actually arrives.
+  if (IS_CUTOUT) document.documentElement.setAttribute('data-cutout-idle', '');
   document.getElementById('waiting-screen').style.display = 'none';
   document.getElementById('main-layout').style.display = 'flex';
   document.getElementById('titlebar').style.display = 'flex';
@@ -794,6 +806,16 @@ async function loadSettingsUI() {
       // Windows-only technique -- hide the whole row on mac rather than
       // offering a switch that can't do anything there.
       if (IS_MAC) cutoutEl.closest('.setting-row').style.display = 'none';
+    }
+    // Cutout mode: remember it for the idle-layout logic (skipWaiting/
+    // showWaiting/showDocked below) -- with no game docked the window is
+    // panel-sized and the dashboard reflows to the mac-style single column
+    // (see :root[data-cutout-idle] in ui/style.css).
+    IS_CUTOUT = !!s.game_cutout && !IS_MAC;
+    if (IS_CUTOUT && !document.getElementById('main-layout').style.display.includes('flex')) {
+      // Settings can load after the user already skipped -- align the attr
+      // with the current dock state rather than assuming.
+      document.documentElement.toggleAttribute('data-cutout-idle', skipped && !hasAutoShownDashboard);
     }
     if (!s.onboarding_done) showOnboarding();
     if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {
