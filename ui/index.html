@@ -756,12 +756,17 @@
             <span class="rp-head-rule"></span>
           </header>
 
-          <div class="setting-row" style="padding: 14px;">
+          <div class="setting-row" style="padding: 14px; flex-wrap: wrap;">
             <div>
               <div class="setting-label">Health Check</div>
-              <div class="setting-desc">Verifies capture, input, permissions, display scale, reference images and OCR in one pass -- results land in the Process Log.</div>
+              <div class="setting-desc">Verifies capture, input, permissions, display scale, reference images and OCR in one pass.</div>
             </div>
             <button id="btn-health-check" onclick="runHealthCheck(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--teal); border-color: var(--border);">Run</button>
+            <!-- Filled by runHealthCheck -- the verdict alone ("Issues
+                 found") with the details off on the Dashboard's log was
+                 exactly the confusing half-answer this row existed to
+                 prevent. -->
+            <div id="health-results" class="text-xs" style="flex-basis: 100%; display: none; margin-top: 10px; line-height: 1.8;"></div>
           </div>
 
           <div class="setting-row" style="padding: 14px; border-bottom: none;">

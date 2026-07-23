@@ -1199,17 +1199,30 @@ async function closeOnboarding() {
   try { await pywebview.api.set_setting('onboarding_done', true); } catch (e) {}
 }
 
-// Settings > Debug > "Health Check" -- backend runs every environment probe
-// and logs each result; the button just reflects the overall verdict.
+// Settings > Debug > "Health Check" -- backend runs every environment probe;
+// full results render right under the button (the Process Log only shows on
+// the Dashboard, so a bare "Issues found" verdict here explained nothing).
+// The onboarding modal's copy of the button has no results div nearby -- its
+// callers get the log copy the backend writes either way.
 async function runHealthCheck(btn) {
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Checking...';
+  const out = document.getElementById('health-results');
   try {
     const result = await pywebview.api.run_health_check();
     btn.textContent = result.ok ? 'All good' : 'Issues found';
+    if (out) {
+      out.innerHTML = (result.checks || []).map(c => {
+        const mark = c.ok ? '<span style="color: var(--teal);">&#10003;</span>' : '<span style="color: var(--rose);">&#10007;</span>';
+        const detail = c.detail ? ` <span style="color: var(--text-muted);">-- ${c.detail}</span>` : '';
+        return `<div>${mark} <span style="color: var(--text-dim);">${c.name}</span>${detail}</div>`;
+      }).join('');
+      out.style.display = '';
+    }
   } catch (e) {
     btn.textContent = 'Failed';
+    if (out) { out.textContent = `Health check crashed: ${e}`; out.style.display = ''; }
   }
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2600);
 }
