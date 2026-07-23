@@ -1843,50 +1843,6 @@ class Api:
         self.push_log(f"[Health] {'All checks passed.' if overall else 'Some checks need attention -- see above.'}")
         return {"ok": overall, "checks": checks}
 
-    def get_glass_backdrop(self) -> dict:
-        """Liquid Glass theme's backdrop: the desktop wallpaper as a file
-        URL plus the primary screen's size, so the UI can pin the image
-        1:1 behind the panels (offset per window position -- see
-        get_window_position). Real per-pixel window transparency is
-        impossible over this UI stack (see __init__'s NOTE), so glass
-        recreates the desktop underneath itself instead; on a static
-        wallpaper the illusion is exact. ok=False (no resolvable
-        wallpaper file, solid-color desktops, macOS) means the theme
-        falls back to its built-in gradient."""
-        import base64
-        path = wm.get_wallpaper_path()
-        if not path:
-            return {"ok": False}
-        try:
-            with open(path, "rb") as f:
-                raw = f.read()
-        except OSError:
-            return {"ok": False}
-        # Data URI, not a file:// URL: the page is served from pywebview's
-        # local HTTP origin, and file:// subresources are blocked as
-        # cross-origin from there (seen live -- the CSS held the URL but
-        # the image never loaded). Mime sniffed from magic bytes since
-        # TranscodedWallpaper has no extension.
-        mime = "image/png" if raw[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
-        data_uri = f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
-        screen_w, screen_h = wm.get_screen_size()
-        return {"ok": True, "file_url": data_uri,
-                "screen_w": screen_w, "screen_h": screen_h}
-
-    def get_window_position(self) -> dict:
-        """Where this GUI window currently sits on screen -- polled by the
-        Liquid Glass theme to keep the wallpaper layer aligned with the
-        desktop while the window is dragged."""
-        hwnd = self.gui_hwnd
-        if not hwnd or not wm.is_window(hwnd):
-            hwnd = WindowManager(GUI_TITLE).find()
-            if hwnd:
-                self.gui_hwnd = hwnd
-        if not hwnd:
-            return {"ok": False}
-        left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        return {"ok": True, "x": left, "y": top}
-
     def open_releases_page(self) -> dict:
         # Health check's "Assets folder missing" fix-it button: the GitHub
         # latest-release page, where the full zip lives.

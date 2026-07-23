@@ -10,6 +10,11 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body class="h-full w-full flex flex-col">
+  <!-- Liquid Glass theme's animated backdrop (see #glass-aurora in
+       style.css) -- FIRST child on purpose: later siblings paint above it
+       with no z-index involvement. display:none outside the theme. -->
+  <div id="glass-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
 
   <!-- Custom titlebar (frameless window, no native OS chrome). Hidden while the
        waiting screen shows (see showWaiting()/showDocked() in app.js) so the

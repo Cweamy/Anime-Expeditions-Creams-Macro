@@ -564,34 +564,6 @@ def bring_to_top(hwnd: int) -> None:
     user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
 
 
-def get_wallpaper_path() -> str:
-    """The current desktop wallpaper's file path ('' for solid colors) --
-    the Liquid Glass theme aligns this image behind the UI, since real
-    per-pixel window transparency isn't possible over WebView2 (see
-    main.Api.__init__'s NOTE).
-
-    SPI_GETDESKWALLPAPER alone isn't trusted: with Spotlight/theme/
-    slideshow wallpapers it can report a stale path (seen live: the
-    Windows default img0.jpg while the desktop showed something else
-    entirely). Windows keeps what's ACTUALLY displayed transcoded under
-    %APPDATA%\\Microsoft\\Windows\\Themes -- so gather every candidate and
-    trust the most recently modified one."""
-    candidates = []
-    SPI_GETDESKWALLPAPER = 0x0073
-    buf = ctypes.create_unicode_buffer(512)
-    if user32.SystemParametersInfoW(SPI_GETDESKWALLPAPER, 512, buf, 0) and buf.value:
-        candidates.append(buf.value)
-    themes = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Themes")
-    candidates.append(os.path.join(themes, "TranscodedWallpaper"))
-    cached = os.path.join(themes, "CachedFiles")
-    if os.path.isdir(cached):
-        candidates.extend(os.path.join(cached, n) for n in os.listdir(cached))
-    existing = [p for p in candidates if p and os.path.isfile(p)]
-    if not existing:
-        return ""
-    return max(existing, key=os.path.getmtime)
-
-
 def place_topmost(hwnd: int, x: int, y: int, w: int, h: int) -> None:
     """Position + promote into the TOPMOST band in one call, no activation
     -- cutout mode's 'show': the game floats over the GUI's game slot.
