@@ -84,6 +84,16 @@ jobs:
           Copy-Item "dist/Creams Macro - Anime Expeditions.exe" package/
           Copy-Item Assets package/Assets -Recurse
           Compress-Archive -Path package/* -DestinationPath "dist/Creams-Macro-Anime-Expeditions-Windows.zip"
+          # Second copy under the OLD unsuffixed name -- same compatibility
+          # story as the bare exe below, one updater generation later:
+          # v0.4.0's updater (the first zip-based one, before flexible asset
+          # matching landed in v0.4.1) downloads the release zip by this
+          # exact constructed name, so renaming the zip to -Windows stranded
+          # every v0.4.0 install on a 404 ("[Update] 404 ... for
+          # Creams-Macro-Anime-Expeditions.zip", seen live against v0.5.0).
+          # Their updater swaps in this copy, whose own updater then matches
+          # the suffixed zips fine from the next release on.
+          Copy-Item "dist/Creams-Macro-Anime-Expeditions-Windows.zip" "dist/Creams-Macro-Anime-Expeditions.zip"
 
       - name: Get changelog from the tag message
         # A curated summary, not GitHub's raw commit-list changelog --
@@ -130,6 +140,7 @@ jobs:
           body: ${{ steps.changelog.outputs.body }}
           files: |
             dist/Creams-Macro-Anime-Expeditions-Windows.zip
+            dist/Creams-Macro-Anime-Expeditions.zip
             dist/Creams Macro - Anime Expeditions.exe
 
       # Python script, not inline bash+jq -- the jq version sent Discord
@@ -166,7 +177,9 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pyinstaller
+          # pillow: build-time only -- converts logo.ico to the .icns the
+          # .app bundle icon needs (see build_pyinstaller.py's _mac_icns_path).
+          pip install pyinstaller pillow
 
       - name: Build app (PyInstaller)
         run: python build_pyinstaller.py

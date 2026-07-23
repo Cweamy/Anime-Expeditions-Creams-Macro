@@ -32,7 +32,9 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pyinstaller
+          # pillow: build-time only -- converts logo.ico to the .icns the
+          # .app bundle icon needs (see build_pyinstaller.py's _mac_icns_path).
+          pip install pyinstaller pillow
 
       - name: Build app (PyInstaller)
         run: python build_pyinstaller.py

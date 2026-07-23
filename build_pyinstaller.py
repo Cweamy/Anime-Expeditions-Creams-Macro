@@ -67,6 +67,43 @@ ADD_DATA = [
     ("VERSION", "."),
 ]
 
+def _mac_icns_path():
+    """The .icns for the mac .app bundle -- macOS won't take the .ico
+    (that's a Windows format; passing it straight through is what failed
+    the first mac CI build), so one is converted from logo.ico at build
+    time with Pillow. A hand-made logo.icns in the repo root wins if one
+    ever gets added; the converted one lands in build/ (gitignored)
+    because it's a derived artifact, not a source file.
+
+    logo.ico's largest frame is only 64x64, so the 512px base this writes
+    is a LANCZOS upscale -- soft at full Finder-preview size, but the Dock
+    and title bars render it at ~16-128px where it looks right. Pillow's
+    ICNS writer generates all the standard smaller sizes from the base
+    image on its own, so one save covers the whole set.
+
+    Returns None (build keeps PyInstaller's default icon, exactly the old
+    behavior) rather than failing the build if Pillow's missing or the
+    conversion chokes -- an icon is never worth a broken release."""
+    hand_made = os.path.join(ROOT, "logo.icns")
+    if os.path.exists(hand_made):
+        return hand_made
+    out = os.path.join(ROOT, "build", "logo.icns")
+    try:
+        from PIL import Image
+        icon = Image.open(os.path.join(ROOT, "logo.ico"))  # .ico opens at its largest frame
+        icon = icon.convert("RGBA").resize((512, 512), Image.LANCZOS)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        icon.save(out, format="ICNS")
+        print(f"Converted logo.ico -> {out} for the .app icon.")
+        return out
+    except ImportError:
+        print("Pillow isn't installed -- building with PyInstaller's default icon. "
+              "`pip install pillow` to get the custom one.")
+    except Exception as exc:
+        print(f"Couldn't convert logo.ico to .icns ({exc}) -- building with PyInstaller's default icon.")
+    return None
+
+
 cmd = [
     sys.executable, "-m", "PyInstaller",
     "--onefile",
@@ -76,11 +113,11 @@ cmd = [
     "--distpath=dist",
     "--workpath=build",
 ]
-# .ico is a Windows icon format -- macOS bundles want .icns, and passing
-# the .ico there just fails the build. The mac app keeps PyInstaller's
-# default icon until someone makes an .icns (testers: `--icon=logo.icns`
-# here once one exists).
-if sys.platform != "darwin":
+if sys.platform == "darwin":
+    icns = _mac_icns_path()
+    if icns:
+        cmd.append(f"--icon={icns}")
+else:
     cmd.append(f"--icon={os.path.join(ROOT, 'logo.ico')}")
 for mod in HIDDEN_IMPORTS:
     cmd += [f"--hidden-import={mod}"]
