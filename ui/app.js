@@ -110,6 +110,14 @@ function showDocked() {
   } else if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
   }
+  // Docking makes the native child window visible regardless of what the
+  // DOM shows -- if a blocking modal (welcome, update, scale warning) is
+  // up at this exact moment, the freshly docked game would paint straight
+  // over it (seen live: the first-run welcome unreachable behind the
+  // game). Hide it; the modal's own close handler restores it.
+  if (isBlockingOverlayOpen()) {
+    try { window.pywebview && pywebview.api.hide_game(); } catch (e) {}
+  }
 }
 
 // Set by the two capture dances (usePlaceUnitRobloxScreen /
@@ -139,7 +147,7 @@ function isBlockingOverlayOpen() {
     const el = document.getElementById(id);
     return el && el.style.display !== 'none' && el.style.display !== '';
   };
-  if (['update-modal', 'scale-warning-modal'].some(isOpen)) return true;
+  if (['update-modal', 'scale-warning-modal', 'onboarding-modal'].some(isOpen)) return true;
   if (!captureDanceActive && ['im-modal', 'pu-modal', 'path-name-modal'].some(isOpen)) return true;
   return false;
 }
@@ -1192,11 +1200,17 @@ function showOnboarding() {
     if ((plat === 'mac') !== IS_MAC) el.style.display = 'none';
   });
   document.getElementById('onboarding-modal').style.display = 'flex';
+  // Same as the update/scale modals: the docked game is a native child
+  // window that paints over ALL DOM, this modal included -- hide it while
+  // the welcome is up (no-op when nothing's docked yet; the dock-time
+  // guard in showDocked covers Roblox arriving mid-modal).
+  try { window.pywebview && pywebview.api.hide_game(); } catch (e) {}
 }
 
 async function closeOnboarding() {
   document.getElementById('onboarding-modal').style.display = 'none';
   try { await pywebview.api.set_setting('onboarding_done', true); } catch (e) {}
+  restoreGameIfDashboard();
 }
 
 // Settings > Debug > "Health Check" -- backend runs every environment probe;
