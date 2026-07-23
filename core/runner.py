@@ -156,17 +156,10 @@ DIFFICULTY_CLICK_DELAY = 1.0
 
 RETURN_TO_LOBBY_CHECK_TIMEOUT = 2.5  # how long to poll for the "Return to Lobby" confirmation after Leave Stage
 
-# Defaults for the stage-detail panel's Normal/Hard toggle and the region
-# Enter Matchmaking is searched for in -- overridable per-run via the
-# `coords` dict (see _run), sourced from Settings > Debug > Macro
-# Coordinates so a game update shifting any of these doesn't need a code
-# change, just a setting.
-DEFAULT_COORDS = {
-    "difficulty_normal_x": 311, "difficulty_normal_y": 315,
-    "difficulty_hard_x": 364, "difficulty_hard_y": 315,
-    "matchmaking_region_x": 277, "matchmaking_region_y": 543,
-    "matchmaking_region_w": 437, "matchmaking_region_h": 45,
-}
+# The stage-detail panel's Normal/Hard toggle and the Enter Matchmaking
+# search region default in DEFAULT_COORDS (defined below, after the last
+# click-point constant it collects) -- overridable per-run via the `coords`
+# dict, sourced from Settings > Debug > Macro Coordinates.
 MATCHMAKING_WAIT_TIMEOUT = 10.0
 SOLO_START_TIMEOUT = 10.0  # Solo mode's direct Start button, in place of Enter Matchmaking
 
@@ -337,6 +330,34 @@ WAIT_WAVE_POLL_INTERVAL = 2.0
 DEFAULT_REWARD_REGION = {"x": 212, "y": 429, "width": 504, "height": 106}
 DEFAULT_STATS_REGION = {"x": 210, "y": 337, "width": 509, "height": 57}
 
+# EVERY fixed click point/row layout the runner uses, as overridable
+# settings (Settings > Debug > Macro Coordinates -- mirrors main.py's
+# MACRO_COORD_DEFAULTS): a game update shifting any of these needs a number
+# changed (or re-picked from a screenshot) in Settings, not a code change.
+# Values come from the tuple constants above where one exists -- those stay
+# the documented single source of each default; this dict is the runtime
+# override surface (merged with the user's saved values in _run, read via
+# self._coords/_cxy). All in the docked window's 1152x756 client space.
+DEFAULT_COORDS = {
+    "difficulty_normal_x": 311, "difficulty_normal_y": 315,
+    "difficulty_hard_x": 364, "difficulty_hard_y": 315,
+    "matchmaking_region_x": 277, "matchmaking_region_y": 543,
+    "matchmaking_region_w": 437, "matchmaking_region_h": 45,
+    "story_click_x": STORY_CLICK[0], "story_click_y": STORY_CLICK[1],
+    "stage_row_x": STAGE_CLICK_BASE[0], "stage_row_y": STAGE_CLICK_BASE[1],
+    "stage_row_height": STAGE_ROW_HEIGHT,
+    "act_row_x": ACT_CLICK_BASE[0], "act_row_y": ACT_CLICK_BASE[1],
+    "act_row_height": ACT_ROW_HEIGHT,
+    "challenge_stage_1_x": CHALLENGE_STAGE_CLICK["1"][0], "challenge_stage_1_y": CHALLENGE_STAGE_CLICK["1"][1],
+    "challenge_stage_2_x": CHALLENGE_STAGE_CLICK["2"][0], "challenge_stage_2_y": CHALLENGE_STAGE_CLICK["2"][1],
+    "challenge_stage_3_x": CHALLENGE_STAGE_CLICK["3"][0], "challenge_stage_3_y": CHALLENGE_STAGE_CLICK["3"][1],
+    "expedition_difficulty_x": EXPEDITION_DIFFICULTY_CLICK[0], "expedition_difficulty_y": EXPEDITION_DIFFICULTY_CLICK[1],
+    "team_loadout_x": TEAM_LOADOUT_CLICK_1[0], "team_loadout_y": TEAM_LOADOUT_CLICK_1[1],
+    "team_loadout_row_height": TEAM_LOADOUT_ROW_HEIGHT,
+    "screen_middle_x": SCREEN_MIDDLE_CLICK[0], "screen_middle_y": SCREEN_MIDDLE_CLICK[1],
+    "unit_info_reset_x": UNIT_INFO_RESET_CLICK[0], "unit_info_reset_y": UNIT_INFO_RESET_CLICK[1],
+}
+
 # Victory/Defeat: no fixed timeout makes sense for "how long can a battle
 # run", so this is a generous safety net (30 min), not an expected duration --
 # polled slowly since there's no rush to notice a screen that, once it
@@ -355,6 +376,10 @@ class MacroRunner:
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
+        # Live click-point overrides -- replaced with the user's saved values
+        # at the top of _run; defaults here so the Settings > Debug test
+        # paths (which never go through _run) still resolve every key.
+        self._coords = dict(DEFAULT_COORDS)
         # Wrapped to remember the most recent action text locally: the
         # stop path (_checkpoint) reports "Stopped. (was: <action>)" so a
         # user stopping a visibly-hung run gets told what it was stuck on
@@ -446,7 +471,8 @@ class MacroRunner:
         self._thread.start()
         return {"ok": True}
 
-    def start_debug_test(self, hwnd_getter, mode: str, macro_name: str, debug_screenshots: bool = False) -> dict:
+    def start_debug_test(self, hwnd_getter, mode: str, macro_name: str, debug_screenshots: bool = False,
+                           coords: dict = None) -> dict:
         """Settings > Debug > "Test Pre Start"/"Test Battle" -- runs a
         chosen Macro Operation's Pre Start or Battle blocks against Roblox
         as it is right now, WITHOUT going through the whole lobby/gamemode/
@@ -470,6 +496,11 @@ class MacroRunner:
         self._paused_logged = False
         self._stop_logged = False
         self._debug_screenshots = bool(debug_screenshots)
+        # Same saved click-point overrides a real run gets (see _run) --
+        # without this, a debug test of blocks that click through
+        # unit-info resets etc. would use the defaults the user may have
+        # specifically re-picked away from.
+        self._coords = {**DEFAULT_COORDS, **(coords or {})}
         self._current_hwnd = None
         self._left_stage_this_run = True  # nothing to Leave Stage from -- there's no real match here
         self._thread = threading.Thread(
@@ -685,7 +716,7 @@ class MacroRunner:
         suffix = f" Debug: {debug_path}" if debug_path else ""
         self._log(f'[Macro] Found "select upgrade card" (score {match["score"]:.2f}) -- clicking it.{suffix}')
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._mouse.click(left + SCREEN_MIDDLE_CLICK[0], top + SCREEN_MIDDLE_CLICK[1])
+        self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
         return True
 
     def _detect_current_challenge_map(self, hwnd) -> str:
@@ -721,6 +752,10 @@ class MacroRunner:
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,
               reward_region: dict = None, stats_region: dict = None, webhook: dict = None) -> None:
         coords = {**DEFAULT_COORDS, **(coords or {})}
+        # Also kept on self: most click sites live in methods coords was
+        # never threaded through -- one shared dict beats adding a parameter
+        # to a dozen call chains (see _cxy).
+        self._coords = coords
         default_walk_paths = default_walk_paths or {}
         reward_region = reward_region or DEFAULT_REWARD_REGION
         stats_region = stats_region or DEFAULT_STATS_REGION
@@ -1035,10 +1070,10 @@ class MacroRunner:
                            f"can't confirm the Challenge screen opened, stopping.")
             return False
 
-        if slot not in CHALLENGE_STAGE_CLICK:
+        if slot not in CHALLENGE_STAGE_SLOTS:
             self._log(f'[Macro] Unknown Challenge stage slot "{slot}".')
             return False
-        x, y = CHALLENGE_STAGE_CLICK[slot]
+        x, y = self._cxy(f"challenge_stage_{slot}")
         self._log(f'[Macro] Challenge screen loaded -- clicking stage slot #{slot} at ({x}, {y}).')
         self._set_status(action=f"Clicking Challenge #{slot}...")
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
@@ -1390,6 +1425,13 @@ class MacroRunner:
                 if not wm.activate_window(hwnd):
                     self._log("[Macro] Couldn't confirm focus before clicking Start Game -- "
                                "click may not register.")
+                # Z first -- same deselect pressed before every unit placement:
+                # if Pre Start's last block left a unit selected/placing, the
+                # cursor still owns that state and the Start Game click gets
+                # eaten by it instead of landing on the button. (After
+                # activate_window, so the tap actually reaches the game.)
+                self._keyboard.tap(ord("Z"))
+                time.sleep(0.1)
                 vision.click_match(self._mouse, hwnd, start_match)
                 time.sleep(START_GAME_CLICK_VERIFY_SETTLE)
                 if self._checkpoint(stop_event):
@@ -1594,6 +1636,11 @@ class MacroRunner:
             debug_path = self._debug_save(hwnd, start_name, start_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f'[Macro] Found "{start_name}" again mid-run -- clicking it.{suffix}')
+            # Same Z-deselect as the first Start Game click: mid-run this
+            # popup can appear right after a Battle place/upgrade block, and
+            # a still-selected unit eats the click just as readily here.
+            self._keyboard.tap(ord("Z"))
+            time.sleep(0.1)
             vision.click_match(self._mouse, hwnd, start_match)
             # Also clicks dead center of the screen once -- a real stuck
             # report showed this same button getting re-found and re-clicked
@@ -1605,7 +1652,7 @@ class MacroRunner:
             # already worked, but gives a real shot at clearing whatever's
             # actually blocking it if it didn't.
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            self._mouse.click(left + SCREEN_MIDDLE_CLICK[0], top + SCREEN_MIDDLE_CLICK[1])
+            self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
             return None
 
         # Same idea as the nav_start_game re-check above -- a level-up
@@ -1667,7 +1714,7 @@ class MacroRunner:
             # itself both need a beat to actually render, not just the
             # instant this match was found in.
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            self._mouse.click(left + SCREEN_MIDDLE_CLICK[0], top + SCREEN_MIDDLE_CLICK[1])
+            self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
             time.sleep(0.5)
 
             if self._expedition_extract_count < self._expedition_extract_accept_at:
@@ -2014,7 +2061,7 @@ class MacroRunner:
             return True
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+        self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
         time.sleep(0.1)
 
         self._set_status(action=f"Upgrading unit ({state['remaining']} left)...")
@@ -2052,7 +2099,7 @@ class MacroRunner:
             # that runs (another attempt on this same unit, or whatever
             # Battle block comes after it) doesn't have to fight a leftover
             # panel/tooltip still covering the screen.
-            self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+            self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
             state["remaining"] -= 1
             state["next_attempt"] = 0.0
             return state["remaining"] <= 0
@@ -2076,7 +2123,7 @@ class MacroRunner:
             return True
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+        self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
         time.sleep(0.1)
 
         self._set_status(action="Selling unit...")
@@ -2089,7 +2136,8 @@ class MacroRunner:
         self._keyboard.tap(ord("X"))
         return True
 
-    def _run_wait_ms_tick(self, stop_event: threading.Event, block: dict, block_num: int) -> None:
+    def _run_wait_ms_tick(self, stop_event: threading.Event, block: dict, block_num: int,
+                            phase_label: str = "Battle") -> None:
         """Just waits -- no unit/click involved. Slept in small chunks
         (checking _checkpoint between each) rather than one bare
         time.sleep(), so Pause/Stop still cuts in promptly during a long
@@ -2099,7 +2147,7 @@ class MacroRunner:
         except (TypeError, ValueError):
             ms = 0
         ms = max(0, ms)
-        self._log(f'Battle block #{block_num} (Wait): waiting {ms}ms.')
+        self._log(f'{phase_label} block #{block_num} (Wait): waiting {ms}ms.')
         self._set_status(action=f"Waiting {ms}ms...")
         deadline = time.time() + ms / 1000.0
         while time.time() < deadline:
@@ -2239,7 +2287,7 @@ class MacroRunner:
         if self._checkpoint(stop_event):
             return True
 
-        self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+        self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
         return True
 
     @staticmethod
@@ -2281,7 +2329,7 @@ class MacroRunner:
         # state/tooltip from whatever was under the cursor can't throw off
         # whichever button gets clicked next.
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._mouse.move_to(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+        self._mouse.move_to(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
         time.sleep(0.1)
 
         # A level-up reward-card modal can land exactly as the match ends
@@ -2306,7 +2354,7 @@ class MacroRunner:
             # back to the same near-empty corner used above before this
             # loop ever ran, so that hover state doesn't linger into the
             # repeat_stage/leave_stage search below.
-            self._mouse.move_to(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+            self._mouse.move_to(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
             time.sleep(0.1)
 
         # Matchmaking never uses Repeat Stage, even with more repeats left --
@@ -2477,7 +2525,7 @@ class MacroRunner:
             # Move off the reward box once scrolling is done -- leaving the
             # cursor parked there can keep it "active"/hovered for whatever
             # comes next, same reasoning as the unit-info-panel reset click.
-            self._mouse.move_to(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+            self._mouse.move_to(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
             return (image_top, image_bottom)
         except Exception as exc:
             self._log(f"[Macro] Couldn't capture the rewards region: {exc}")
@@ -2675,6 +2723,7 @@ class MacroRunner:
             return
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        row1_x, row1_y = self._cxy("team_loadout")  # Loadout 1's row (Settings > Debug > Macro Coordinates)
         if team_num > 3:
             # A click-drag on the list itself, not a wheel scroll -- 7/8
             # need a bigger drag that re-anchors the list differently
@@ -2705,10 +2754,10 @@ class MacroRunner:
             # behind it, which is what turned into "the click/scroll goes
             # way too far, outside Roblox" for teams 5-6 (4 was off too, by
             # the same bug, just closer to a row that still did something).
-            row_y = TEAM_LOADOUT_CLICK_1[1] + (team_num - 4) * TEAM_LOADOUT_ROW_HEIGHT
+            row_y = row1_y + (team_num - 4) * int(self._coords["team_loadout_row_height"])
         else:
-            row_y = TEAM_LOADOUT_CLICK_1[1] + (team_num - 1) * TEAM_LOADOUT_ROW_HEIGHT
-        self._mouse.click(left + TEAM_LOADOUT_CLICK_1[0], top + row_y)
+            row_y = row1_y + (team_num - 1) * int(self._coords["team_loadout_row_height"])
+        self._mouse.click(left + row1_x, top + row_y)
         self._log(f"[Macro] Clicked Loadout {team_num}.")
         if self._checkpoint(stop_event):
             return
@@ -2838,6 +2887,8 @@ class MacroRunner:
                     self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {}, block, first_repeat)
                 elif btype == "click":
                     self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
+                elif btype == "wait_ms":
+                    self._run_wait_ms_tick(stop_event, block, i, phase_label="Pre Start")
                 else:
                     self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
                 time.sleep(0.2)  # brief gap between blocks so the game UI can settle
@@ -3137,7 +3188,7 @@ class MacroRunner:
         self._keyboard.tap(ord("Z"))
         time.sleep(0.1)
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._mouse.click(left + UNIT_INFO_RESET_CLICK[0], top + UNIT_INFO_RESET_CLICK[1])
+        self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
 
     # Windows/Meta-style keys are blocked from the Setting block's custom
     # hotkey box -- letting a macro send these could minimize the game,
@@ -3821,6 +3872,13 @@ class MacroRunner:
                    "auto-start the round instead of disabling it.")
         return True
 
+    def _cxy(self, prefix: str) -> tuple:
+        """(x, y) for a Macro Coordinates point -- self._coords holds the
+        user's saved overrides (or DEFAULT_COORDS before a run starts), so
+        every click site that reads through here is re-tunable from
+        Settings > Debug without a code change."""
+        return int(self._coords[f"{prefix}_x"]), int(self._coords[f"{prefix}_y"])
+
     def _select_difficulty(self, hwnd, difficulty: str, coords: dict) -> None:
         # Fixed spot on the stage-detail panel, same as the stage rows --
         # no image search needed, just like Story's click was.
@@ -3841,11 +3899,12 @@ class MacroRunner:
         if clicks == 0:
             self._log(f'[Macro] Difficulty "{difficulty}" is the default -- no click needed.')
             return
-        self._log(f'[Macro] Clicking difficulty "+" {clicks} time(s) at {EXPEDITION_DIFFICULTY_CLICK} '
+        plus_x, plus_y = self._cxy("expedition_difficulty")
+        self._log(f'[Macro] Clicking difficulty "+" {clicks} time(s) at ({plus_x}, {plus_y}) '
                    f'for difficulty {difficulty}.')
         self._set_status(action=f'Setting difficulty {difficulty}...')
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        x, y = left + EXPEDITION_DIFFICULTY_CLICK[0], top + EXPEDITION_DIFFICULTY_CLICK[1]
+        x, y = left + plus_x, top + plus_y
         for _ in range(clicks):
             if stop_event.is_set():
                 return
@@ -3889,8 +3948,8 @@ class MacroRunner:
         # with 3 Act rows spaced differently instead of the 7 stage rows
         # (see ACT_ORDER/ACT_CLICK_BASE/ACT_ROW_HEIGHT).
         order, base, row_height, label = (
-            (ACT_ORDER, ACT_CLICK_BASE, ACT_ROW_HEIGHT, "Act") if mode == "raid"
-            else (STAGE_ORDER, STAGE_CLICK_BASE, STAGE_ROW_HEIGHT, "stage"))
+            (ACT_ORDER, self._cxy("act_row"), int(self._coords["act_row_height"]), "Act") if mode == "raid"
+            else (STAGE_ORDER, self._cxy("stage_row"), int(self._coords["stage_row_height"]), "stage"))
         if stage not in order:
             self._log(f'[Macro] Unknown {label} "{stage}" -- expected one of {order}.')
             return False
@@ -4241,9 +4300,10 @@ class MacroRunner:
         else:
             if stop_event.is_set():
                 return False
-            self._log(f"[Macro] Story card not found by image search -- falling back to fixed coordinate {STORY_CLICK}.")
+            story_x, story_y = self._cxy("story_click")
+            self._log(f"[Macro] Story card not found by image search -- falling back to fixed coordinate ({story_x}, {story_y}).")
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            self._mouse.click(left + STORY_CLICK[0], top + STORY_CLICK[1])
+            self._mouse.click(left + story_x, top + story_y)
         # Unlike Raid/Expedition/Challenge (which wait_for_image their own
         # gamemode card before clicking, naturally giving the screen a
         # moment), the fixed-coordinate fallback above is blind -- nav_back

@@ -116,6 +116,21 @@ MACRO_COORD_DEFAULTS = {
     "difficulty_hard_x": 364, "difficulty_hard_y": 315,
     "matchmaking_region_x": 277, "matchmaking_region_y": 543,
     "matchmaking_region_w": 437, "matchmaking_region_h": 45,
+    # Every other fixed click point the runner uses, same override story --
+    # mirrors core.runner's DEFAULT_COORDS (which documents what each one
+    # is); all in the docked window's 1152x756 client space, each pickable
+    # from a captured Roblox screenshot via the Pick buttons in Settings >
+    # Debug > Macro Coordinates.
+    "story_click_x": 666, "story_click_y": 147,
+    "stage_row_x": 246, "stage_row_y": 230, "stage_row_height": 56,
+    "act_row_x": 250, "act_row_y": 267, "act_row_height": 129,
+    "challenge_stage_1_x": 460, "challenge_stage_1_y": 277,
+    "challenge_stage_2_x": 460, "challenge_stage_2_y": 400,
+    "challenge_stage_3_x": 460, "challenge_stage_3_y": 533,
+    "expedition_difficulty_x": 1094, "expedition_difficulty_y": 456,
+    "team_loadout_x": 800, "team_loadout_y": 324, "team_loadout_row_height": 126,
+    "screen_middle_x": 576, "screen_middle_y": 378,
+    "unit_info_reset_x": 3, "unit_info_reset_y": 3,
 }
 
 # Settings > Debug > "Reward Reader"/"Game Stats": OCR capture regions for
@@ -1304,7 +1319,10 @@ class Api:
         hwnd = self.game_hwnd
         if not hwnd or not wm.is_window(hwnd):
             return {"ok": False, "reason": "no_roblox"}
-        return self.runner.start_debug_test(lambda: self.game_hwnd, mode, macro_name)
+        data = cfg.load()
+        coords = {k: data.get(k, v) for k, v in MACRO_COORD_DEFAULTS.items()}
+        return self.runner.start_debug_test(lambda: self.game_hwnd, mode, macro_name,
+                                              data.get("debug_screenshots", False), coords)
 
     def open_assets_folder(self) -> dict:
         # Settings > General > "Open Assets Folder" (also the Image

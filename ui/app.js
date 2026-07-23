@@ -2039,13 +2039,14 @@ const BLOCK_TYPES = {
 };
 
 // Two phases: Pre Start (walk to your spot, place starter units, flip any
-// settings that need to be set before the match begins) and Battle
-// (everything else -- upgrades/sells/waits only make sense once it's live).
+// settings that need to be set before the match begins -- plus Wait, for
+// pacing those against game UI that needs a beat to settle) and Battle
+// (everything else -- upgrades/sells/wave waits only make sense once it's live).
 const PHASES = ['prestart', 'battle'];
 const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle' };
 const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat' };
 const PHASE_ALLOWED = {
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'walk_path', 'click'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'walk_path', 'click', 'wait_ms'],
   battle: Object.keys(BLOCK_TYPES),
 };
 
@@ -2228,6 +2229,16 @@ async function removeDefaultWalkPath(mapName) {
 const MACRO_COORD_KEYS = [
   'difficulty_normal_x', 'difficulty_normal_y', 'difficulty_hard_x', 'difficulty_hard_y',
   'matchmaking_region_x', 'matchmaking_region_y', 'matchmaking_region_w', 'matchmaking_region_h',
+  'story_click_x', 'story_click_y',
+  'stage_row_x', 'stage_row_y', 'stage_row_height',
+  'act_row_x', 'act_row_y', 'act_row_height',
+  'challenge_stage_1_x', 'challenge_stage_1_y',
+  'challenge_stage_2_x', 'challenge_stage_2_y',
+  'challenge_stage_3_x', 'challenge_stage_3_y',
+  'expedition_difficulty_x', 'expedition_difficulty_y',
+  'team_loadout_x', 'team_loadout_y', 'team_loadout_row_height',
+  'screen_middle_x', 'screen_middle_y',
+  'unit_info_reset_x', 'unit_info_reset_y',
 ];
 
 async function loadMacroCoords() {
@@ -2249,6 +2260,33 @@ async function resetMacroCoords() {
   try { await pywebview.api.reset_macro_coords(); } catch (e) {}
   await loadMacroCoords();
   addLog('[Debug] Macro coordinates reset to defaults.');
+}
+
+// The "Pick" buttons beside each coordinate pair: reuses the Place Unit
+// picker modal in coord mode (see puState.coordTarget) -- captures the
+// Roblox screen, and the spot clicked on it lands in the coord-<prefix>_x/_y
+// inputs and saves immediately. Navigate the GAME to the screen the point
+// lives on first (e.g. the stage list for stage rows) -- the capture is of
+// whatever Roblox is showing right now.
+async function openCoordPicker(prefix) {
+  puState.blockId = null;
+  puState.coordTarget = prefix;
+  const xEl = document.getElementById(`coord-${prefix}_x`);
+  const yEl = document.getElementById(`coord-${prefix}_y`);
+  puState.markX = xEl && xEl.value !== '' ? parseInt(xEl.value) : null;
+  puState.markY = yEl && yEl.value !== '' ? parseInt(yEl.value) : null;
+  puState.image = null;
+
+  document.getElementById('pu-canvas-wrap').style.display = 'none';
+  document.getElementById('pu-category-tabs').innerHTML = '';
+  const grid = document.getElementById('pu-map-grid');
+  grid.style.display = '';
+  grid.innerHTML = '<div class="rh-empty">Capturing the Roblox screen...</div>';
+  document.getElementById('pu-pos-readout').textContent = puState.markX != null ? `X ${puState.markX}, Y ${puState.markY}` : 'Not set';
+  document.getElementById('pu-modal').style.display = 'flex';
+
+  const ok = await usePlaceUnitRobloxScreen();
+  if (!ok) closePlaceUnitModal();  // no Roblox to capture -- nothing to pick on
 }
 
 async function saveMatchmakingRegionDebug(btn) {
@@ -2669,6 +2707,11 @@ let puState = {
   image: null, naturalW: 0, naturalH: 0,
   zoom: 1, panX: 0, panY: 0,
   markX: null, markY: null,
+  // Settings > Debug > Macro Coordinates "Pick" mode: a coord key prefix
+  // (e.g. 'story_click') instead of a block -- a picked spot writes to the
+  // coord-<prefix>_x/_y settings inputs rather than a block's params. The
+  // two targets are mutually exclusive (blockId null while this is set).
+  coordTarget: null,
 };
 
 // Remembers whichever map was picked last (see selectPlaceUnitMap), across
@@ -2741,6 +2784,7 @@ async function openPlaceUnitModal(blockId) {
 function closePlaceUnitModal() {
   document.getElementById('pu-modal').style.display = 'none';
   puState.blockId = null;
+  puState.coordTarget = null;
   restoreGameIfDashboard();  // see isBlockingOverlayOpen -- game stays hidden while this modal is up
 }
 
@@ -2809,7 +2853,10 @@ async function selectPlaceUnitMap(name) {
 async function usePlaceUnitRobloxScreen() {
   // captureDanceActive: this hop NEEDS show_game() to fire even though our
   // modal is open (see isBlockingOverlayOpen) -- the game being visible is
-  // what makes the screenshot possible at all.
+  // what makes the screenshot possible at all. Returns whether a capture
+  // actually loaded (the Macro Coordinates Pick flow closes its modal on
+  // false -- see openCoordPicker).
+  const returnTo = currentScreen;  // 'creation' for Place Unit, 'settings' for a coord Pick
   captureDanceActive = true;
   let result = null;
   try {
@@ -2818,15 +2865,16 @@ async function usePlaceUnitRobloxScreen() {
     try {
       result = await pywebview.api.get_roblox_snapshot();
     } catch (e) {}
-    switchScreen('creation');
+    switchScreen(returnTo === 'dashboard' ? 'creation' : returnTo);
   } finally {
     captureDanceActive = false;
   }
   if (!result || !result.ok) {
     addLog(`[Macro Manager] Couldn't capture Roblox screen: ${(result && result.reason) || 'error'}`);
-    return;
+    return false;
   }
   loadPlaceUnitImage(result.data_uri);
+  return true;
 }
 
 function loadPlaceUnitImage(dataUri) {
@@ -2887,7 +2935,9 @@ function drawPlaceUnitCanvas() {
   if (!puState.image) return;
   ctx.drawImage(puState.image, puState.panX, puState.panY, puState.naturalW * puState.zoom, puState.naturalH * puState.zoom);
 
-  for (const u of otherPlacedUnits()) {
+  // Placed-unit markers are Macro Manager context -- noise on a Macro
+  // Coordinates pick, where no blocks are involved.
+  for (const u of (puState.coordTarget ? [] : otherPlacedUnits())) {
     const sx = puState.panX + u.x * puState.zoom;
     const sy = puState.panY + u.y * puState.zoom;
     ctx.beginPath();
@@ -2923,6 +2973,19 @@ function drawPlaceUnitCanvas() {
 }
 
 function applyPlaceUnitPosition() {
+  if (puState.coordTarget) {
+    // Macro Coordinates Pick mode -- write straight to the settings inputs
+    // and persist, no block involved (see openCoordPicker).
+    const p = puState.coordTarget;
+    const xEl = document.getElementById(`coord-${p}_x`);
+    const yEl = document.getElementById(`coord-${p}_y`);
+    if (xEl) xEl.value = puState.markX;
+    if (yEl) yEl.value = puState.markY;
+    setMacroCoord(`${p}_x`, puState.markX);
+    setMacroCoord(`${p}_y`, puState.markY);
+    document.getElementById('pu-pos-readout').textContent = `X ${puState.markX}, Y ${puState.markY}`;
+    return;
+  }
   if (!puState.blockId) return;
   const loc = findBlockLocation(puState.blockId);
   if (!loc) return;
