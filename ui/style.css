@@ -1377,29 +1377,3 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   min-height: 120px;
 }
 
-/* Cutout mode's IDLE layout (Windows, Settings > Debug -- data-cutout-idle
-   set by app.js while no game is docked): with nothing to float over the
-   slot, the window stays panel-sized (see main.skip_waiting) and the
-   Dashboard borrows the exact same single-column reflow macOS uses --
-   the selectors below extend each mac rule rather than duplicating it. */
-:root[data-cutout-idle] #main-layout {
-  flex-direction: column;
-}
-:root[data-cutout-idle] #game-slot {
-  display: none;
-}
-:root[data-cutout-idle] #main-layout > div:first-child {
-  width: 100% !important;
-  order: 2;
-  flex: 0 0 200px !important;
-  min-height: 0;
-}
-:root[data-cutout-idle] #main-layout > div:last-child {
-  width: 100% !important;
-  order: 1;
-  flex: 1 1 auto !important;
-  min-height: 0;
-}
-:root[data-cutout-idle] #log-list {
-  min-height: 120px;
-}

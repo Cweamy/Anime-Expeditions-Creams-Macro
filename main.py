@@ -300,9 +300,10 @@ class Api:
         # the Chrome child hwnds), and LWA_COLORKEY only keys content in the
         # GDI redirection surface, which GPU-composited WebView2 skips
         # (behavior verified live either way, including under
-        # --disable-gpu-compositing / --disable-gpu). Cutout-with-no-game
-        # is expressed as the window COLLAPSING to the panel instead --
-        # see skip_waiting and :root[data-cutout-idle].
+        # --disable-gpu-compositing / --disable-gpu). A panel-collapse idle
+        # layout was also tried and reverted (read as broken UI) -- with no
+        # game docked, cutout mode simply shows the normal layout with an
+        # empty slot.
         if self.game_cutout:
             from core import vision
             vision.force_window_capture()
@@ -1254,18 +1255,6 @@ class Api:
                 self._apply_panel_geometry(
                     layout["x"], layout["y"], layout["expanded_w"], layout["panel_h"])
                 self._mac_panel_ready = True
-            self.push_log("Skipped waiting for Roblox.")
-            return
-        if self.game_cutout and self._window:
-            # Cutout mode with no game docked: the two-column layout's 1152px
-            # slot would just be a dead slab covering the desktop -- stay at
-            # the PANEL width (the UI reflows to the mac-style single column,
-            # see :root[data-cutout-idle] in ui/style.css) so the desktop is
-            # genuinely visible beside the macro. The dock watchdog resizes
-            # to full and drops the idle layout the moment Roblox arrives.
-            self._window.restore()
-            time.sleep(0.2)
-            self._window.resize(GUI_WIDTH_COMPACT + 24, GUI_HEIGHT_FULL)
             self.push_log("Skipped waiting for Roblox.")
             return
         if self._window:
