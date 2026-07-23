@@ -14,6 +14,18 @@
        style.css) -- FIRST child on purpose: later siblings paint above it
        with no z-index involvement. display:none outside the theme. -->
   <div id="glass-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+  <!-- Liquid Glass's LENS: an SVG displacement filter the glass panels use
+       via backdrop-filter: url(#glass-lens) -- feDisplacementMap bends the
+       backdrop at panel rims like real glass (refraction, not just blur;
+       Chromium-only, which this WebView2 always is). The map image is
+       generated at runtime by ensureLiquidLensMap() in app.js: R/G channels
+       encode x/y bend vectors around a rounded-rect edge band. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <filter id="glass-lens" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feImage id="glass-lens-map" href="" preserveAspectRatio="none" x="0" y="0" width="100%" height="100%" result="map"/>
+      <feDisplacementMap in="SourceGraphic" in2="map" scale="64" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </svg>
 
 
   <!-- Custom titlebar (frameless window, no native OS chrome). Hidden while the

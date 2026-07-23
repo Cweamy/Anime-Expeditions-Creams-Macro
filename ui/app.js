@@ -727,7 +727,69 @@ function applyThemeBase(name, announce) {
   if (activeThemeBase === 'default') delete document.documentElement.dataset.themeBase;
   else document.documentElement.dataset.themeBase = activeThemeBase;
   renderThemePicker();
+  if (activeThemeBase === 'glass') ensureLiquidLensMap();
   if (announce) addLog(`[Theme] Background: ${THEME_BASES[activeThemeBase].label}`);
+}
+
+// ---- Liquid Glass lens ----------------------------------------------------
+// What separates liquid glass from plain glassmorphism is REFRACTION: panel
+// rims bend the content behind them like a lens. The panels' backdrop-filter
+// references the SVG filter in index.html (#glass-lens), whose
+// feDisplacementMap reads per-pixel bend vectors from the map generated
+// here: a rounded-rect edge band where displacement ramps up toward the rim
+// along the edge normal (R = x-bend, G = y-bend, 128 = neutral -- the
+// feDisplacementMap convention). Generated once, on the first switch into
+// the glass theme.
+let liquidLensMapReady = false;
+
+function ensureLiquidLensMap() {
+  if (liquidLensMapReady) return;
+  const target = document.getElementById('glass-lens-map');
+  if (!target) return;
+  const W = 400, H = 300, CORNER = 24, RIM = 46;
+
+  // Signed distance to a rounded rectangle centered in the canvas
+  // (negative inside) -- the standard 2D SDF.
+  const hw = W / 2 - 1, hh = H / 2 - 1;
+  function sdf(px, py) {
+    const qx = Math.abs(px) - (hw - CORNER);
+    const qy = Math.abs(py) - (hh - CORNER);
+    const ox = Math.max(qx, 0), oy = Math.max(qy, 0);
+    return Math.hypot(ox, oy) + Math.min(Math.max(qx, qy), 0) - CORNER;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const px = x + 0.5 - W / 2, py = y + 0.5 - H / 2;
+      const inside = -sdf(px, py);           // distance in from the edge
+      let dx = 0, dy = 0;
+      if (inside >= 0 && inside < RIM) {
+        const t = 1 - inside / RIM;          // 0 interior -> 1 at edge
+        const k = Math.pow(t, 2.2);          // lens curve: gentle, then steep
+        // Edge normal via numeric SDF gradient; bend OUTWARD so the rim
+        // magnifies what's behind it, the way thick glass edges do.
+        const e = 0.75;
+        const gx = sdf(px + e, py) - sdf(px - e, py);
+        const gy = sdf(px, py + e) - sdf(px, py - e);
+        const len = Math.hypot(gx, gy) || 1;
+        dx = (gx / len) * k;
+        dy = (gy / len) * k;
+      }
+      const i = (y * W + x) * 4;
+      d[i] = Math.round(128 + dx * 127);
+      d[i + 1] = Math.round(128 + dy * 127);
+      d[i + 2] = 128;
+      d[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  target.setAttribute('href', canvas.toDataURL('image/png'));
+  liquidLensMapReady = true;
 }
 
 function applyThemeAccent(name, announce) {
