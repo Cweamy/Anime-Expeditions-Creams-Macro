@@ -96,26 +96,18 @@ def get_pytesseract():
     )
 
 
-import threading
-
-_thread_local = threading.local()
-
-
-def _get_mss():
-    """Thread-local mss.MSS instance to avoid recreating GDI handles."""
-    sct = getattr(_thread_local, "sct", None)
-    if sct is None:
-        import mss
-        sct = mss.MSS()
-        _thread_local.sct = sct
-    return sct
+from . import mss_manager
 
 
 def capture_region(left: int, top: int, width: int, height: int) -> np.ndarray:
     """Screenshots a screen-space rect, returns it as a BGR numpy array
     (OpenCV's native order) ready for cv2 preprocessing."""
-    sct = _get_mss()
-    shot = sct.grab({"left": left, "top": top, "width": width, "height": height})
+    try:
+        sct = mss_manager.get_mss()
+        shot = sct.grab({"left": left, "top": top, "width": width, "height": height})
+    except Exception:
+        mss_manager.close_mss()
+        raise
     bgra = np.frombuffer(shot.raw, dtype=np.uint8).reshape(shot.height, shot.width, 4)
     return cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
 

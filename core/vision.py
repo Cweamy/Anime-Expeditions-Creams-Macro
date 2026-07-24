@@ -334,19 +334,23 @@ def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
 # would quietly run against whatever is overlapping the game instead of failing
 # loudly. Windows keeps the lazy detection -- there the game is a child window
 # inside ours and can't be occluded by a foreign window in the first place.
+from . import mss_manager
+
 _use_window_capture = sys.platform == "darwin"
-_thread_local = threading.local()
 
 
 def _get_mss():
-    """Returns a thread-local mss.MSS instance to avoid recreating GDI handles
-    on every frame capture poll."""
-    sct = getattr(_thread_local, "sct", None)
-    if sct is None:
-        import mss
-        sct = mss.MSS()
-        _thread_local.sct = sct
-    return sct
+    return mss_manager.get_mss()
+
+
+def close_mss() -> None:
+    """Closes the current thread's MSS instance."""
+    mss_manager.close_mss()
+
+
+def close_all_mss() -> None:
+    """Closes all active MSS instances across all threads."""
+    mss_manager.close_all_mss()
 
 
 def _capture_window_gray(hwnd: int, region: tuple = None):
@@ -450,9 +454,13 @@ def _screen_grab_gray(hwnd: int, region: tuple = None):
         out_w, out_h = config.FIXED_WIN_W, config.FIXED_WIN_H
     if grab_w <= 0 or grab_h <= 0:
         return None
-    sct = _get_mss()
-    shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
-                      "width": int(round(grab_w)), "height": int(round(grab_h))})
+    try:
+        sct = _get_mss()
+        shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
+                          "width": int(round(grab_w)), "height": int(round(grab_h))})
+    except Exception:
+        close_mss()
+        raise
     bgra = np.frombuffer(shot.raw, dtype=np.uint8).reshape(shot.height, shot.width, 4)
     gray = cv2.cvtColor(bgra, cv2.COLOR_BGRA2GRAY)
     if gray.shape[:2] != (out_h, out_w):
@@ -523,9 +531,13 @@ def capture_game_bgr(hwnd: int, region: tuple = None) -> np.ndarray:
         out_w, out_h = config.FIXED_WIN_W, config.FIXED_WIN_H
     if grab_w <= 0 or grab_h <= 0:
         return None
-    sct = _get_mss()
-    shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
-                      "width": int(round(grab_w)), "height": int(round(grab_h))})
+    try:
+        sct = _get_mss()
+        shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
+                          "width": int(round(grab_w)), "height": int(round(grab_h))})
+    except Exception:
+        close_mss()
+        raise
     bgra = np.frombuffer(shot.raw, dtype=np.uint8).reshape(shot.height, shot.width, 4)
     bgr = cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
     if bgr.shape[:2] != (out_h, out_w):
