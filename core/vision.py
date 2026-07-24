@@ -335,6 +335,18 @@ def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
 # loudly. Windows keeps the lazy detection -- there the game is a child window
 # inside ours and can't be occluded by a foreign window in the first place.
 _use_window_capture = sys.platform == "darwin"
+_thread_local = threading.local()
+
+
+def _get_mss():
+    """Returns a thread-local mss.MSS instance to avoid recreating GDI handles
+    on every frame capture poll."""
+    sct = getattr(_thread_local, "sct", None)
+    if sct is None:
+        import mss
+        sct = mss.MSS()
+        _thread_local.sct = sct
+    return sct
 
 
 def _capture_window_gray(hwnd: int, region: tuple = None):
@@ -426,7 +438,6 @@ def _screen_grab_gray(hwnd: int, region: tuple = None):
     flashes the display white on some GPU/fullscreen-optimization setups --
     which is why window-content capture (see capture_game_gray) is preferred
     now. Kept as the fallback for setups where PrintWindow renders black."""
-    import mss
     left, top, sx, sy = _window_geometry(hwnd)
     if region is not None:
         rx, ry, rw, rh = region
@@ -439,11 +450,11 @@ def _screen_grab_gray(hwnd: int, region: tuple = None):
         out_w, out_h = config.FIXED_WIN_W, config.FIXED_WIN_H
     if grab_w <= 0 or grab_h <= 0:
         return None
-    with mss.MSS() as sct:
-        shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
-                          "width": int(round(grab_w)), "height": int(round(grab_h))})
-        bgr = np.array(shot)[:, :, :3]
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    sct = _get_mss()
+    shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
+                      "width": int(round(grab_w)), "height": int(round(grab_h))})
+    bgra = np.frombuffer(shot.raw, dtype=np.uint8).reshape(shot.height, shot.width, 4)
+    gray = cv2.cvtColor(bgra, cv2.COLOR_BGRA2GRAY)
     if gray.shape[:2] != (out_h, out_w):
         # Non-reference capture (Retina 2x, off-size window) -- normalize.
         # INTER_AREA: this is almost always a shrink, where it's the
@@ -500,7 +511,6 @@ def capture_game_bgr(hwnd: int, region: tuple = None) -> np.ndarray:
         if bgr is not None:
             return bgr
 
-    import mss
     left, top, sx, sy = _window_geometry(hwnd)
     if region is not None:
         rx, ry, rw, rh = region
@@ -513,10 +523,11 @@ def capture_game_bgr(hwnd: int, region: tuple = None) -> np.ndarray:
         out_w, out_h = config.FIXED_WIN_W, config.FIXED_WIN_H
     if grab_w <= 0 or grab_h <= 0:
         return None
-    with mss.MSS() as sct:
-        shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
-                          "width": int(round(grab_w)), "height": int(round(grab_h))})
-        bgr = np.array(shot)[:, :, :3]
+    sct = _get_mss()
+    shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
+                      "width": int(round(grab_w)), "height": int(round(grab_h))})
+    bgra = np.frombuffer(shot.raw, dtype=np.uint8).reshape(shot.height, shot.width, 4)
+    bgr = cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
     if bgr.shape[:2] != (out_h, out_w):
         bgr = cv2.resize(bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
     if not bgr.any():
