@@ -43,3 +43,6 @@ build/
 dist/
 *.spec
 .bootstrap_version
+
+# Personal Claude Code permission grants -- not team-wide.
+.claude/settings.local.json
