@@ -172,6 +172,14 @@ if sys.platform == "darwin":
     icns = _mac_icns_path()
     if icns:
         cmd.append(f"--icon={icns}")
+    # A STABLE bundle identifier is half the fix for "I granted Accessibility
+    # but it keeps asking": macOS's TCC database keys a permission grant to
+    # the app's identity (bundle id + code signature), so a build with no
+    # fixed identifier looks like a different app on each release/relaunch and
+    # the grant silently stops matching. Pinned here so the grant sticks to
+    # ONE identity across versions. (The other half is the ad-hoc codesign
+    # step after the build below.)
+    cmd.append("--osx-bundle-identifier=com.cweamy.creams-macro-anime-expeditions")
 else:
     cmd.append(f"--icon={os.path.join(ROOT, 'logo.ico')}")
     version_file = _windows_version_file()  # AV-friendly metadata, Windows only
@@ -197,4 +205,28 @@ result = subprocess.run(cmd, cwd=ROOT)
 if result.returncode != 0:
     print("\nBuild FAILED!")
     sys.exit(1)
+
+if sys.platform == "darwin":
+    # The other half of the Accessibility-permission fix (see the
+    # --osx-bundle-identifier note above): give the whole .app a consistent
+    # ad-hoc signature so TCC has a stable code identity to key the grant to.
+    # `--sign -` is ad-hoc (no Apple Developer account needed); `--deep` also
+    # signs the nested binaries/dylibs; `--force` replaces the signature
+    # PyInstaller applies on Apple Silicon so the whole bundle is signed the
+    # same way on both Intel and Apple Silicon runners. Without a paid
+    # Developer ID this still can't survive the binary CHANGING (an update
+    # gives a new cdhash, so macOS may ask once more after updating), but it
+    # stops the "asks on every single launch" case. Not fatal if it somehow
+    # fails -- the app still runs unsigned, just with the old permission
+    # flakiness -- so this warns and continues rather than failing the build.
+    app_path = os.path.join(ROOT, "dist", f"{EXE_NAME}.app")
+    print(f"\nAd-hoc code-signing {app_path} (stable identity for macOS permissions)...")
+    sign = subprocess.run(
+        ["codesign", "--force", "--deep", "--sign", "-", app_path])
+    if sign.returncode == 0:
+        print("Code-signing done.")
+    else:
+        print("WARNING: ad-hoc code-signing failed -- the .app will still run, but macOS "
+              "Accessibility/Input Monitoring grants may not persist reliably.")
+
 print(f"\nDone! Check dist/{EXE_NAME}.exe")
