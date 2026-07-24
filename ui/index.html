@@ -873,6 +873,18 @@
             <button id="toggle-game-cutout" class="toggle-switch" onclick="toggleSetting('game_cutout', this)"></button>
           </div>
 
+          <!-- Windows-only, applies at next launch: Windows.Graphics.Capture
+               backend for setups where the game captures fully black -- see
+               core/wgc_capture.py. Forces cutout mode (needs the game
+               top-level to find it by title). -->
+          <div class="setting-row" style="padding: 14px;" data-win-only>
+            <div>
+              <div class="setting-label">Hardware Capture Fix (Windows.Graphics.Capture)</div>
+              <div class="setting-desc">Turn this on only if image detection fails on a black/blank game (common with NVIDIA GPU scheduling or fullscreen optimizations) even with Flicker-Free Capture off. Reads the game a different way that survives those setups. Also turns on Game Cutout Mode, since it needs Roblox as its own window. Applies after restarting the macro.</div>
+            </div>
+            <button id="toggle-wgc-capture" class="toggle-switch" onclick="toggleSetting('use_wgc_capture', this)"></button>
+          </div>
+
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
             <div>
               <div class="setting-label">Expedition Color Detection</div>

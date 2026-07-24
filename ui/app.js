@@ -920,6 +920,12 @@ async function loadSettingsUI() {
       // offering a switch that can't do anything there.
       if (IS_MAC) cutoutEl.closest('.setting-row').style.display = 'none';
     }
+    const wgcEl = document.getElementById('toggle-wgc-capture');
+    if (wgcEl) {
+      wgcEl.classList.toggle('on', !!s.use_wgc_capture);
+      // Windows-only (Windows.Graphics.Capture) -- hide on mac.
+      if (IS_MAC) wgcEl.closest('.setting-row').style.display = 'none';
+    }
     // Onboarding first (once), then the subscribe prompt (once) -- if both
     // are pending on a fresh install, the subscribe prompt waits until
     // onboarding is dismissed rather than stacking on top of it.

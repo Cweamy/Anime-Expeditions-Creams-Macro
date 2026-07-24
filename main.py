@@ -321,6 +321,17 @@ class Api:
         from core import vision as _vision
         _vision.set_name_thresholds(_cfg.get("image_thresholds", {}))
         self.game_cutout = sys.platform != "darwin" and bool(_cfg.get("game_cutout", False))
+        # WGC capture (see core/wgc_capture.py) fixes black-frame capture on
+        # hardware-accelerated / flip-model Roblox. Opt-in (default off): it
+        # reads the game window by title, so it needs Roblox to stay a
+        # top-level window -- enabling it therefore also forces cutout mode.
+        # Windows-only. Off by default so nothing changes for the majority
+        # whose stock capture works fine.
+        self.use_wgc_capture = sys.platform == "win32" and bool(_cfg.get("use_wgc_capture", False))
+        if self.use_wgc_capture:
+            self.game_cutout = True  # WGC needs the game top-level -> cutout, not the child-reparent dock
+            from core import wgc_capture
+            wgc_capture.set_enabled(True)
         self.docker.cutout = self.game_cutout
         self._cutout_game_visible = False  # show_game/hide_game drive this; watchdog re-glues only while visible
         # NOTE for future attempts: a LITERAL see-through slot was tried two
@@ -586,6 +597,7 @@ class Api:
             # dismissed either way, so it never reappears.
             "subscribe_prompted": data.get("subscribe_prompted", False),
             "game_cutout": data.get("game_cutout", False),
+            "use_wgc_capture": data.get("use_wgc_capture", False),
             "flicker_free_capture": data.get("flicker_free_capture", True),
         }
 
