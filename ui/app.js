@@ -1152,6 +1152,21 @@ async function saveDebugScreenshot(btn) {
 // tune this flow by navigating to the screen being tested in Roblox by
 // hand and pressing the button repeatedly, instead of restarting a whole
 // run every time. Result/errors are already logged on the Python side.
+// Settings > Debug > "Wave Monitor" -- opens the always-on-top pop-out that
+// polls read_current_wave (see main.py's pop_out_wave_monitor).
+async function openWaveMonitor(btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Opening...';
+  try {
+    await pywebview.api.pop_out_wave_monitor();
+    btn.textContent = 'Opened';
+  } catch (e) {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1400);
+}
+
 async function testExpeditionWave(btn) {
   const original = btn.textContent;
   switchScreen('dashboard');

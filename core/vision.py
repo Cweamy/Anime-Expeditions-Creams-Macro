@@ -426,6 +426,15 @@ def _capture_window_bgr(hwnd: int, region: tuple = None):
     return bgr
 
 
+def capture_window_region_bgr(hwnd: int, region: tuple = None):
+    """Window-CONTENT capture (PrintWindow / CGWindowListCreateImage) of a
+    reference-space region, cropped and normalized -- works even when the
+    window is covered or unfocused (unlike a screen grab). The wave monitor
+    uses this so it can keep reading the HUD while you're tabbed out of
+    Roblox. Returns None if the window can't be rendered."""
+    return _capture_window_bgr(hwnd, region)
+
+
 def capture_game_bgr(hwnd: int, region: tuple = None) -> np.ndarray:
     """Color twin of capture_game_gray: a BGR capture normalized to
     reference-space dimensions, for detection that keys off a button's

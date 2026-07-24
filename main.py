@@ -98,6 +98,7 @@ MAC_PANEL_MIN_W = PANEL_WIDTH  # narrower than the Windows panel column and it s
 MAC_PANEL_MAX_W = 560  # past this the single-column dashboard just looks stretched
 UI_INDEX = os.path.join(constants.UI_DIR, "index.html")
 LOGS_WINDOW_HTML = os.path.join(constants.UI_DIR, "logs_window.html")
+WAVE_MONITOR_HTML = os.path.join(constants.UI_DIR, "wave_monitor.html")
 LOGO_ICO = os.path.join(constants.BUNDLE_DIR, "logo.ico")
 LOG_HISTORY_LIMIT = 500  # caps what a freshly popped-out window gets replayed with
 
@@ -283,6 +284,7 @@ class Api:
     def __init__(self):
         self._window = None
         self._log_window = None
+        self._wave_window = None  # the Wave Monitor pop-out (see pop_out_wave_monitor)
         self._log_history = []
         self.docker = GameDocker()
         # Cutout mode (Settings > Debug, Windows only, applies at launch):
@@ -1098,6 +1100,58 @@ class Api:
             self._log_window = None
 
         win.events.shown += _seed
+        win.events.closed += _on_closed
+        return {"ok": True}
+
+    def read_current_wave(self) -> dict:
+        """Polled by the Wave Monitor pop-out: reads the wave HUD from
+        Roblox's OWN window contents (works while tabbed out -- see
+        vision.capture_window_region_bgr) and returns the OCR reading plus
+        the raw crop as a data URI, so the monitor can show the actual
+        pixels even when OCR misreads a busy background."""
+        import base64
+        from core import vision, wave as wave_module
+        from core.runner_constants import WAVE_REGION
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+        try:
+            img = vision.capture_window_region_bgr(hwnd, WAVE_REGION)
+            if img is None or img.size == 0:
+                return {"ok": False, "reason": "capture_failed"}
+            current, maximum = wave_module.read_wave(img)
+            import cv2
+            up = cv2.resize(img, (img.shape[1] * 3, img.shape[0] * 3), interpolation=cv2.INTER_NEAREST)
+            ok, png = cv2.imencode(".png", up)
+            data_uri = "data:image/png;base64," + base64.b64encode(png.tobytes()).decode("ascii") if ok else None
+            return {"ok": True, "current": current, "max": maximum, "crop": data_uri}
+        except Exception as exc:
+            return {"ok": False, "reason": str(exc)}
+
+    def pop_out_wave_monitor(self) -> dict:
+        # Settings > Debug > "Wave Monitor": a small always-on-top window
+        # that polls read_current_wave so the wave count is visible while
+        # you're tabbed out of Roblox. Same one-window-reused pattern as
+        # pop_out_logs; js_api=self so its own JS can call the bridge.
+        import webview
+        if self._wave_window:
+            try:
+                self._wave_window.restore()
+                return {"ok": True}
+            except Exception:
+                self._wave_window = None
+        win = webview.create_window(
+            "Wave Monitor | Cream's Macro",
+            url=WAVE_MONITOR_HTML,
+            width=300, height=280,
+            on_top=True,
+            background_color="#11131c",
+            js_api=self,
+        )
+        self._wave_window = win
+
+        def _on_closed():
+            self._wave_window = None
         win.events.closed += _on_closed
         return {"ok": True}
 

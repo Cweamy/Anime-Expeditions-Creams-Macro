@@ -833,12 +833,20 @@
             <button id="toggle-expedition-color" class="toggle-switch" onclick="toggleSetting('expedition_color_buttons', this)"></button>
           </div>
 
-          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+          <div class="setting-row" style="padding: 14px;">
             <div>
               <div class="setting-label">Test Expedition Wave Check</div>
               <div class="setting-desc">Navigate to a wave/checkpoint/extract screen in Roblox by hand, then press this -- runs one detection+click tick and logs what it found, no macro run needed.</div>
             </div>
             <button id="btn-debug-expedition-wave" onclick="testExpeditionWave(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Run Test Tick</button>
+          </div>
+
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Wave Monitor</div>
+              <div class="setting-desc">Opens a small always-on-top window that keeps reading the wave count from Roblox's window -- so you can tab out and still see if the run's progressing. Shows the live crop too, in case the number's a misread.</div>
+            </div>
+            <button id="btn-wave-monitor" onclick="openWaveMonitor(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--teal); border-color: var(--border);">Open Monitor</button>
           </div>
 
           <!-- Manually fires the same deep-link rejoin a real disconnect

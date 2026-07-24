@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Wave Monitor | Cream's Macro</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  body {
+    margin: 0; height: 100vh; box-sizing: border-box; padding: 14px;
+    background: var(--bg-deep); color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    -webkit-user-select: none; user-select: none;
+  }
+  .label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+  .wave {
+    font-family: 'Sora', 'Inter', sans-serif; font-weight: 700; font-size: 46px; line-height: 1;
+    color: var(--teal); letter-spacing: 0.02em;
+  }
+  .wave.stale { color: var(--text-muted); }
+  .crop {
+    width: 100%; max-width: 260px; border-radius: 8px; border: 1px solid var(--border);
+    image-rendering: pixelated; background: #000;
+  }
+  .foot { font-size: 10px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="label">Current Wave</div>
+  <div id="wave" class="wave">— / —</div>
+  <img id="crop" class="crop" alt="wave HUD" />
+  <div id="foot" class="foot">starting…</div>
+
+  <script>
+    // Has its own js_api (main.py passes js_api=self to this window), so it
+    // polls the bridge directly. Shows the OCR reading AND the raw HUD crop
+    // -- so a misread on a busy background is still verifiable by eye. Reads
+    // Roblox's own window contents, so it keeps updating while tabbed out.
+    let lastGood = null;   // last confident "x / y"
+    let lastGoodAt = 0;
+
+    async function tick() {
+      const waveEl = document.getElementById('wave');
+      const cropEl = document.getElementById('crop');
+      const foot = document.getElementById('foot');
+      try {
+        const r = await pywebview.api.read_current_wave();
+        if (!r || !r.ok) {
+          foot.textContent = r && r.reason === 'no_roblox' ? 'Roblox not attached' : 'waiting for capture…';
+          waveEl.classList.add('stale');
+          return;
+        }
+        if (r.crop) cropEl.src = r.crop;
+        if (r.current != null && r.max != null) {
+          lastGood = `${r.current} / ${r.max}`;
+          lastGoodAt = Date.now();
+          waveEl.textContent = lastGood;
+          waveEl.classList.remove('stale');
+          foot.textContent = 'live';
+        } else {
+          // no clean read this tick -- keep showing the last good one, dimmed
+          waveEl.classList.add('stale');
+          const ago = lastGood ? Math.round((Date.now() - lastGoodAt) / 1000) : null;
+          foot.textContent = lastGood ? `no read now · last ${ago}s ago (see crop)` : 'no reading yet (see crop)';
+        }
+      } catch (e) {
+        foot.textContent = 'bridge not ready…';
+      }
+    }
+
+    let started = false;
+    function start() {
+      if (started) return;   // pywebviewready and the already-ready check can both fire
+      started = true;
+      tick();
+      setInterval(tick, 1500);
+    }
+    window.addEventListener('pywebviewready', start);
+    if (window.pywebview) start();  // in case it was ready before this script ran
+  </script>
+</body>
+</html>
