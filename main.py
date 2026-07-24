@@ -2734,10 +2734,13 @@ def _launch_ui():
                             wm.move_window(gui_hwnd, 0, 0, GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
                             time.sleep(0.2)
                             l, t, r, b = wm.get_window_rect_screen(gui_hwnd)
-                            if (r - l, b - t) != (GUI_WIDTH_FULL, GUI_HEIGHT_FULL):
-                                api.push_log("Macro window would not reach full size, retrying dock...")
+                            if (r - l) <= GUI_WIDTH_COMPACT + 50:
+                                api.push_log("Macro window still compact, retrying dock...")
                                 time.sleep(2)
                                 continue
+                            elif (r - l, b - t) != (GUI_WIDTH_FULL, GUI_HEIGHT_FULL):
+                                api.push_log(f"Warning: Macro window size ({r - l}x{b - t}) is smaller than requested "
+                                             f"({GUI_WIDTH_FULL}x{GUI_HEIGHT_FULL}) due to display resolution or DPI scaling. Docking anyway.")
                         api.gui_hwnd = gui_hwnd
                         # Final stopping re-check: several sleeps have passed
                         # since the one guarding this branch, and a dock()
