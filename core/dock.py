@@ -106,11 +106,31 @@ else:
                     return
 
                 if not self.docked:
+                    # A stale TOPMOST style (a cutout-mode session that got
+                    # force-killed before undock, or anything else that
+                    # floated the game) makes SetParent flaky-to-invalid --
+                    # a topmost child is not a legal combination. Clear it
+                    # first, always: harmless when not set.
+                    wm.set_always_on_top(game_hwnd, False)
                     wm.remove_borders(game_hwnd)
                     time.sleep(0.05)
+                    # VERIFIED, not assumed: SetParent fails silently (seen
+                    # live -- "docked" Roblox floating unparented, the dock
+                    # just moving it around), and docked=True on a failed
+                    # parent told the watchdog everything was fine forever.
+                    # Same retry treatment undock() already learned.
                     wm.set_parent(game_hwnd, gui_hwnd)
-                    self.docked = True
+                    for _ in range(5):
+                        if wm.get_parent(game_hwnd) == gui_hwnd:
+                            break
+                        time.sleep(0.05)
+                        wm.set_parent(game_hwnd, gui_hwnd)
+                    self.docked = wm.get_parent(game_hwnd) == gui_hwnd
                     time.sleep(0.1)
+                    if not self.docked:
+                        # Leave docked=False so the watchdog's next tick
+                        # retries the whole dock instead of trusting a lie.
+                        return
 
                 wm.move_window(game_hwnd, x, y, width, height)
                 wm.bring_to_top(game_hwnd)
