@@ -86,13 +86,6 @@ GUI_HEIGHT_COMPACT = TITLEBAR_H + 380  # tall enough for the waiting screen's fu
 # expanding ping rings + tag + title + status + Skip + version badge) -- 280 clipped the emblem's
 # animation and the bottom rows
 
-# F7 "compact strip" size (see Api.enter_compact): a small always-on-top
-# control bar -- status readout + Start/Pause/Stop -- for when the full
-# dashboard is just in the way. Frameless window, so these are also the
-# client size the strip's HTML lays out into (see #compact-strip in the UI).
-GUI_WIDTH_STRIP = 360
-GUI_HEIGHT_STRIP = 54
-
 # ── macOS side-by-side geometry ─────────────────────────────────────────────
 # On Windows the game is a child window INSIDE ours, so one window size covers
 # both (GUI_*_FULL above). macOS can't embed another app's window at all (see
@@ -343,9 +336,6 @@ class Api:
         # instantly re-attaching after an explicit Un-Attach.
         self.pinned_hwnd = None
         self.dock_suspended = False
-        # F7 compact-strip mode (see enter_compact/exit_compact): purely this
-        # window's own size + z-order, never touches Roblox's parenting.
-        self._compact = False
         # macOS side-by-side layout state (see set_panel_expanded): the panel
         # only starts trading width against the game once it has actually been
         # arranged, and the lock keeps the screen-switch resizes from
@@ -1331,110 +1321,6 @@ class Api:
             self.push_log(f"[Macro] Couldn't resize the panel: {exc}")
             measured = None
         self._mac_panel_width = measured if measured and measured > 0 else None
-
-    def _resize_gui(self, x: int, y: int, w: int, h: int) -> tuple:
-        """Move+resize our own frameless window to (x, y, w, h) and return the
-        size it actually ended up at, as (width, height).
-
-        Mirrors the sequence skip_waiting/_dock_watchdog already use on this
-        exact window -- which is the ONLY resize path proven to take here:
-        pywebview's resize() can be silently dropped on a minimized/odd-DPI
-        window, and this window is created resizable=False (a FixedSingle
-        WinForms form), so a plain native SetWindowPos is reverted by the
-        form's own WM_WINDOWPOSCHANGING handling. restore() first, then
-        pywebview resize()+move(), then verify and fall back to a native
-        MoveWindow only if pywebview's was lost."""
-        measured = None
-        try:
-            self._window.restore()
-            time.sleep(0.15)
-            self._window.resize(w, h)
-            self._window.move(x, y)
-            time.sleep(0.25)
-        except Exception as exc:
-            self.push_log(f"[Compact] window resize call failed: {exc}")
-        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
-        if gui_hwnd and wm.is_window(gui_hwnd):
-            try:
-                l, t, r, b = wm.get_window_rect_screen(gui_hwnd)
-                measured = (r - l, b - t)
-                if measured != (w, h):
-                    wm.move_window(gui_hwnd, x, y, w, h)
-                    time.sleep(0.15)
-                    l, t, r, b = wm.get_window_rect_screen(gui_hwnd)
-                    measured = (r - l, b - t)
-            except Exception as exc:
-                self.push_log(f"[Compact] native resize failed: {exc}")
-        return measured
-
-    def enter_compact(self) -> None:
-        """F7 compact strip: shrink this window to a small always-on-top
-        control bar (status + Start/Pause/Stop) and get the game out from
-        under it.
-
-        Purely a UI convenience -- the run keeps going untouched. The game is
-        hidden exactly the way switching to the Settings screen hides it (a
-        supported mid-run flow: flicker-free window capture reads the window's
-        own contents whether it's visible or not), so nothing about the macro
-        loop changes. No undock, no reparent -- only this window's own size
-        and z-order, which is why it can't disturb Roblox."""
-        if not self._window:
-            return
-        self._compact = True
-        try:
-            self.hide_game()
-        except Exception as exc:
-            self.push_log(f"[Compact] couldn't hide the game: {exc}")
-        if sys.platform == "darwin":
-            # mac: no game inside the window, so just shrink the panel to the
-            # strip via the tested mac geometry path.
-            with self._mac_geometry_lock:
-                self._apply_panel_geometry(24, 24, GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP)
-            gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
-            if gui_hwnd and wm.is_window(gui_hwnd):
-                try:
-                    wm.set_always_on_top(gui_hwnd, True)
-                except Exception:
-                    pass
-            return
-        # Top-left corner: predictable, needs no screen-metrics call, and the
-        # strip is draggable to wherever the user wants it anyway.
-        measured = self._resize_gui(0, 0, GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP)
-        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
-        if gui_hwnd and wm.is_window(gui_hwnd):
-            try:
-                wm.set_always_on_top(gui_hwnd, True)
-            except Exception as exc:
-                self.push_log(f"[Compact] couldn't pin the strip on top: {exc}")
-        if measured != (GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP):
-            self.push_log(f"[Compact] window would not shrink to the strip "
-                          f"(ended at {measured}) -- press F7 again to restore.")
-
-    def exit_compact(self) -> None:
-        """Undo enter_compact: drop always-on-top and grow the window back to
-        full size. Game visibility is deliberately left to the JS side's
-        switchScreen (it knows which screen is being restored and reuses its
-        existing show/hide coordination)."""
-        if not self._window:
-            return
-        self._compact = False
-        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
-        if gui_hwnd and wm.is_window(gui_hwnd):
-            try:
-                wm.set_always_on_top(gui_hwnd, False)
-            except Exception:
-                pass
-        if sys.platform == "darwin":
-            # mac never uses the 1552px two-column size (no game inside the
-            # window); restore the side-by-side panel geometry instead, the
-            # same tested resize path every other mac navigation uses. The
-            # JS switchScreen that follows re-asserts expand/collapse.
-            layout = _mac_panel_layout()
-            with self._mac_geometry_lock:
-                width = layout["panel_w"] if self.docker.docked else layout["expanded_w"]
-                self._apply_panel_geometry(layout["x"], layout["y"], width, layout["panel_h"])
-            return
-        self._resize_gui(0, 0, GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
 
     def skip_waiting(self):
         # Lets the panel be used (config, etc.) before Roblox is even open.

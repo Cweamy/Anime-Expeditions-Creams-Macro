@@ -1491,44 +1491,34 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 }
 
 /* ============ Compact strip (F7) ============
-   Shown only while body.compact-mode is set; the window is shrunk to this
-   bar's size by Api.enter_compact. Everything else in the app is hidden so
-   the strip is all that's left. */
+   A slim control bar pinned to the bottom of the (still full-size) window,
+   shown only while body.compact-mode is set. It hides the busy side panel +
+   process log but leaves the docked game exactly where it is -- Roblox stays
+   visible and clickable, the window is never resized, docking is untouched. */
 #compact-strip { display: none; }
 
-body.compact-mode > #titlebar,
-body.compact-mode > #screen-dashboard,
-body.compact-mode > #screen-task,
-body.compact-mode > #screen-creation,
-body.compact-mode > #screen-challenge,
-body.compact-mode > #screen-settings,
-body.compact-mode > #glass-aurora { display: none !important; }
+/* Hide the busy dashboard chrome; keep the game slot (and its docked Roblox). */
+body.compact-mode #dash-side,
+body.compact-mode #dash-log { display: none !important; }
 
-body.compact-mode > #compact-strip {
+body.compact-mode #compact-strip {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   position: fixed;
-  inset: 0;
-  padding: 0 8px 0 4px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 50px;
+  padding: 0 14px;
   background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border-top: 1px solid var(--border);
   box-sizing: border-box;
   -webkit-user-select: none;
   user-select: none;
   overflow: hidden;
-  z-index: 9999;
+  z-index: 60;
 }
-
-.cs-grip {
-  display: flex;
-  align-items: center;
-  color: var(--text-muted);
-  flex-shrink: 0;
-  cursor: move;
-}
-.cs-grip svg { width: 16px; height: 16px; }
 
 .cs-status {
   display: flex;

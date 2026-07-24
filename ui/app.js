@@ -95,9 +95,8 @@ function tickTimers() {
 // ---------------------------------------------------------------------------
 let hasAutoShownDashboard = false;
 // Compact strip (F7) state -- declared up here (not beside toggleCompactStrip)
-// because showDocked/switchScreen/restoreGameIfDashboard above all read it.
+// because switchScreen above reads it.
 let compactMode = false;
-let compactReturnScreen = 'dashboard';
 
 // Called from Python (main.py) the moment docking actually succeeds,
 // don't wait on the 1.5s status poll for a state this important to flip.
@@ -111,7 +110,7 @@ function showDocked() {
   if (!hasAutoShownDashboard) {
     hasAutoShownDashboard = true;
     switchScreen('dashboard');
-  } else if (currentScreen === 'dashboard' && !compactMode && !isBlockingOverlayOpen()) {
+  } else if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
   }
   // Docking makes the native child window visible regardless of what the
@@ -161,7 +160,7 @@ function isBlockingOverlayOpen() {
 // blocking overlay is still up -- same logic dismissUpdateModal/
 // dismissScaleWarning already used individually.
 function restoreGameIfDashboard() {
-  if (currentScreen === 'dashboard' && !compactMode && !isBlockingOverlayOpen()) {
+  if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
   }
 }
@@ -351,6 +350,13 @@ if (IS_MAC) document.documentElement.dataset.platform = 'mac';
 let wasMacroRunning = false;
 
 function switchScreen(name) {
+  // Navigating anywhere off the Dashboard drops out of the compact strip --
+  // the strip is a Dashboard overlay, so leaving the Dashboard should restore
+  // the full UI rather than leave the strip stranded over another screen.
+  if (compactMode && name !== 'dashboard') {
+    compactMode = false;
+    document.body.classList.remove('compact-mode');
+  }
   const changed = currentScreen !== name;
   currentScreen = name;
   if (name !== 'dashboard') lastNonDashboardScreen = name;
@@ -386,9 +392,7 @@ function switchScreen(name) {
       // prompt already hides Roblox for) could end up hidden behind Roblox
       // the moment docking happened to land after it was shown. The modal's
       // own dismiss handler is what restores show_game() once it closes.
-      // Never reveal the game while the compact strip is up -- it would paint
-      // straight over the strip (native child window, always above the DOM).
-      if (name === 'dashboard' && !compactMode && !isBlockingOverlayOpen()) pywebview.api.show_game();
+      if (name === 'dashboard' && !isBlockingOverlayOpen()) pywebview.api.show_game();
       else if (name !== 'dashboard') pywebview.api.hide_game();
 
       // macOS: hide_game() above is a no-op there (you cannot hide another
@@ -424,31 +428,23 @@ function toggleGameScreenHotkey() {
 }
 
 // ---------------------------------------------------------------------------
-// Compact strip (F7): collapse the whole dashboard to a small always-on-top
-// control bar and back. The window resize + always-on-top + hiding the game
-// out from under the strip is done by Api.enter_compact/exit_compact; this
-// side owns the DOM state (body.compact-mode) and restoring the right screen.
-// (compactMode / compactReturnScreen are declared near the top -- earlier
-// functions read them.)
+// Compact strip (F7): hide the busy side panel + process log and show a slim
+// control bar at the bottom, leaving the docked game exactly where it is
+// (visible and clickable -- nothing about the window size or docking changes,
+// so the macro keeps clicking Roblox normally). Pure DOM: body.compact-mode
+// does all the hiding via CSS. (compactMode is declared near the top so the
+// earlier switchScreen can read it.)
 // ---------------------------------------------------------------------------
-async function toggleCompactStrip() {
+function toggleCompactStrip() {
   if (!compactMode) {
+    // The strip only makes sense over the game, which lives on the Dashboard
+    // -- make sure we're there (also un-hides the game if we were elsewhere).
+    switchScreen('dashboard');
     compactMode = true;
-    compactReturnScreen = currentScreen;
-    // Add the class BEFORE the resize so the strip is what's on screen as the
-    // window shrinks, not the full dashboard squeezing into 360px first.
     document.body.classList.add('compact-mode');
-    try { await pywebview.api.enter_compact(); } catch (e) {}
   } else {
     compactMode = false;
-    // Resize back to full FIRST, then drop the class -- reverse order, so the
-    // dashboard never flashes crammed into the strip's footprint.
-    try { await pywebview.api.exit_compact(); } catch (e) {}
     document.body.classList.remove('compact-mode');
-    // Reuses switchScreen's own show/hide-game coordination to restore
-    // whatever screen was up when we collapsed (show_game is gated on
-    // !compactMode, which is now false again).
-    switchScreen(compactReturnScreen || 'dashboard');
   }
 }
 
@@ -548,9 +544,7 @@ function setMacroButtons(running, paused) {
 }
 
 async function startMacro() {
-  // From the compact strip, starting must NOT hop to the Dashboard (that
-  // would show_game() straight over the strip) -- stay collapsed.
-  if (!compactMode) switchScreen('dashboard');
+  switchScreen('dashboard');
   setMacroButtons(true, false);
   try {
     const result = await pywebview.api.start_macro();
