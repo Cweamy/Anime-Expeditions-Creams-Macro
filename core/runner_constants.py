@@ -309,6 +309,11 @@ PLACE_HOTKEY_SETTLE = 0.35  # after pressing the hotkey, before the pixel search
 PLACE_UNIT_CLICK_SETTLE = 0.25   # lets the placement actually register before the next check
 PLACE_UNIT_VERIFY_TIMEOUT = 2.0
 PLACE_UNIT_VERIFY_ATTEMPTS = 3  # search-then-click retried up to this many times before giving up on verifying
+# "Keep Placing" block toggle: re-run the WHOLE select->find->click->verify
+# sequence (not just re-click a spot) until unit_exist confirms, capped so a
+# genuinely-impossible placement (no gold, unit on cooldown, no valid tile
+# anywhere) still moves on instead of looping forever.
+PLACE_RETRY_UNTIL_PLACED_ATTEMPTS = 5
 MAX_PLACEMENT_THRESHOLD = 0.85
 UNIT_INFO_RESET_CLICK = (3, 3)  # near-empty corner of the Roblox screen -- closes the unit info panel after verifying
 SCREEN_MIDDLE_CLICK = (576, 378)  # dead center of the 1152x756 game client area -- see FIXED_WIN_W/H in core.config

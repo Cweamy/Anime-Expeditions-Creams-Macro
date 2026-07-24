@@ -2346,6 +2346,16 @@ function toggleIgnoreHighlight(id) {
   renderPhases();
 }
 
+// Place Unit "Keep Placing": re-run the whole placement until unit_exist
+// confirms the unit is down (see _place_unit_retrying in the runner).
+function toggleRetryUntilPlaced(id) {
+  const loc = findBlockLocation(id);
+  if (!loc) return;
+  const block = creationPhases[loc.phase][loc.idx];
+  block.retryUntilPlaced = !block.retryUntilPlaced;
+  renderPhases();
+}
+
 function togglePhaseCollapsed(phase) {
   phaseCollapsed[phase] = !phaseCollapsed[phase];
   renderPhases();
@@ -2736,7 +2746,8 @@ function renderPlaceUnitControls(b) {
   const hasPos = b.params.x || b.params.y;
   const set = field('Position', `<button type="button" class="pu-set-btn ${hasPos ? 'has-pos' : ''} tooltip-side" data-tooltip="Pick position on a map" onclick="openPlaceUnitModal('${b.id}')">${hasPos ? 'Set &#10003;' : 'Set'}</button>`);
   const ignoreHighlight = `<button type="button" class="block-mod-btn ${b.ignoreHighlight ? 'on' : ''} tooltip-side" data-tooltip="Skip the white-tile search and click the saved X/Y directly" onclick="toggleIgnoreHighlight('${b.id}')">Ignore Highlight</button>`;
-  return idx + name + x + y + hotkey + set + ignoreHighlight;
+  const retryUntilPlaced = `<button type="button" class="block-mod-btn ${b.retryUntilPlaced ? 'on' : ''} tooltip-side" data-tooltip="Keep re-placing until the unit is confirmed placed (needs Assets/ui/unit_exist.png)" onclick="toggleRetryUntilPlaced('${b.id}')">Keep Placing</button>`;
+  return idx + name + x + y + hotkey + set + ignoreHighlight + retryUntilPlaced;
 }
 
 // Click block: X/Y plus the same Set/position-picker button Place Unit has
@@ -4057,7 +4068,7 @@ async function saveCurrentTemplate() {
   PHASES.forEach(phase => {
     payload[phase] = creationPhases[phase].map(b => ({
       type: b.type, params: b.params, once: b.once, kind: b.kind, value: b.value, hotkey: b.hotkey,
-      mode: b.mode, pathName: b.pathName, ignoreHighlight: b.ignoreHighlight,
+      mode: b.mode, pathName: b.pathName, ignoreHighlight: b.ignoreHighlight, retryUntilPlaced: b.retryUntilPlaced,
     }));
   });
   try {
@@ -4160,6 +4171,7 @@ function blockFromSaved(b) {
   if (b.type === 'place_unit') {
     block.hotkey = b.hotkey || '';
     block.ignoreHighlight = !!b.ignoreHighlight;
+    block.retryUntilPlaced = !!b.retryUntilPlaced;
   }
   if (b.type === 'walk_path') {
     block.mode = b.mode === 'custom' ? 'custom' : 'auto';

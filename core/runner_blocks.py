@@ -744,6 +744,17 @@ class BlockOps:
         # Pre Start placement too instead of just the chained ones.
         skip_verify = is_quick_place or not verify
 
+        # "Keep Placing" (block toggle): keep re-doing the whole placement
+        # until unit_exist confirms it landed, up to a cap. Handled by its
+        # own self-contained method -- it always verifies (even in Pre Start,
+        # which normally skips verification for speed) since it needs that
+        # signal to know when to stop, and it never applies to a quick-place
+        # chain (those can't verify mid-run).
+        if bool(block.get("retryUntilPlaced")) and not is_quick_place:
+            self._place_unit_retrying(hwnd, stop_event, left, top, name, hotkey,
+                                       orig_x, orig_y, block, unit_ordinal)
+            return
+
         if self._quick_place_shift_down:
             self._log(f'[Macro] Place Unit "{name}": quick-placing (Shift held, same unit as last).')
         else:
@@ -872,6 +883,99 @@ class BlockOps:
                    f'(score {exists_match["score"]:.2f}).')
         if unit_ordinal is not None:
             self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+
+    def _place_unit_retrying(self, hwnd, stop_event: threading.Event, left: int, top: int,
+                               name: str, hotkey, orig_x: int, orig_y: int, block: dict,
+                               unit_ordinal: int) -> None:
+        """Place Unit with "Keep Placing" on: run the full select -> find
+        spot -> click -> verify sequence and, if unit_exist doesn't confirm
+        the unit landed, do the WHOLE thing again (re-select the unit, find
+        a valid tile, click, re-verify) up to PLACE_RETRY_UNTIL_PLACED_
+        ATTEMPTS times. Never a quick-place chain member (see the caller),
+        so no Shift is ever held here."""
+        if not hotkey:
+            self._log(f'[Macro] Place Unit "{name}" has no hotkey set -- skipping this block.')
+            return
+        vk = keys.key_name_to_vk(hotkey)
+        if vk is None:
+            self._log(f'[Macro] Place Unit "{name}": hotkey "{hotkey}" isn\'t recognized -- skipping this block.')
+            return
+
+        n = PLACE_RETRY_UNTIL_PLACED_ATTEMPTS
+        for attempt in range(1, n + 1):
+            if self._checkpoint(stop_event):
+                return
+            # Select the unit fresh each attempt (Z-deselect first, as every
+            # placement does).
+            self._keyboard.tap(ord("Z"))
+            time.sleep(0.1)
+            self._keyboard.tap(vk)
+            time.sleep(PLACE_HOTKEY_SETTLE)
+
+            if block.get("ignoreHighlight"):
+                self._mouse.move_to(left + orig_x, top + orig_y)
+                time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
+                spot = (orig_x, orig_y)
+            else:
+                spot = self._find_valid_place_spot(hwnd, stop_event, left, top, orig_x, orig_y, name)
+            if self._checkpoint(stop_event):
+                return
+            if spot is None:
+                self._log(f'[Macro] Place Unit "{name}": no valid tile (attempt {attempt}/{n}) -- retrying.')
+                continue
+            cur_x, cur_y = spot
+
+            self._mouse.click(left + cur_x, top + cur_y)
+            time.sleep(PLACE_UNIT_CLICK_SETTLE)
+            if self._checkpoint(stop_event):
+                return
+
+            try:
+                limit_match = vision.find_image(hwnd, "max_placement_reached", threshold=MAX_PLACEMENT_THRESHOLD)
+            except vision.TemplateNotFound:
+                limit_match = None
+            if limit_match is not None:
+                self._log(f'[Macro] Place Unit "{name}": max placement limit reached -- skipping this block.')
+                return
+
+            # Verify: search for unit_exist first, click once to open the
+            # info panel if not seen, up to PLACE_UNIT_VERIFY_ATTEMPTS.
+            exists_match = None
+            clicked_to_verify = False
+            for va in range(1, PLACE_UNIT_VERIFY_ATTEMPTS + 1):
+                if self._checkpoint(stop_event):
+                    return
+                if va > 1:
+                    self._mouse.click(left + cur_x, top + cur_y)
+                    clicked_to_verify = True
+                    time.sleep(0.3)
+                try:
+                    exists_match = vision.wait_for_image(hwnd, "unit_exist", timeout=PLACE_UNIT_VERIFY_TIMEOUT)
+                except vision.TemplateNotFound:
+                    # No unit_exist.png -- "Keep Placing" has no stop signal
+                    # without it, so trust this one placement rather than
+                    # loop blindly re-placing a unit that may already be down.
+                    if clicked_to_verify:
+                        self._reset_unit_info_panel(hwnd)
+                    self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) but "Keep Placing" '
+                               f'needs Assets/ui/unit_exist.png to know when to stop -- treating as placed.')
+                    if unit_ordinal is not None:
+                        self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+                    return
+                if exists_match is not None:
+                    break
+            if clicked_to_verify:
+                self._reset_unit_info_panel(hwnd)
+
+            if exists_match is not None:
+                self._log(f'[Macro] Place Unit "{name}": verified placed at ({cur_x}, {cur_y}) '
+                           f'(score {exists_match["score"]:.2f}, attempt {attempt}/{n}).')
+                if unit_ordinal is not None:
+                    self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+                return
+            self._log(f'[Macro] Place Unit "{name}": not confirmed placed (attempt {attempt}/{n}) -- placing again.')
+
+        self._log(f'[Macro] Place Unit "{name}": still not confirmed placed after {n} attempts -- giving up.')
 
     def _reset_unit_info_panel(self, hwnd) -> None:
         # Closes whatever info panel double-clicking a placed unit opened
