@@ -44,6 +44,26 @@ advapi32.GetTokenInformation.argtypes = [
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ROBLOX_PROCESS_NAME = "robloxplayerbeta.exe"
+ROBLOX_PROCESS_NAMES = {
+    "robloxplayerbeta.exe",
+    "robloxplayerbeta",
+    "roblox.exe",
+    "robloxplayerlauncher.exe",
+    "bloxstrap.exe",
+}
+
+
+def is_roblox_process_or_title(hwnd: int, title: str) -> bool:
+    title_lower = title.lower()
+    if "roblox" not in title_lower:
+        return False
+    proc_name = get_process_name(hwnd)
+    if proc_name in ROBLOX_PROCESS_NAMES or proc_name.startswith("roblox") or proc_name.startswith("bloxstrap"):
+        return True
+    if not proc_name and (title_lower == "roblox" or title_lower.startswith("roblox")):
+        return True
+    return False
+
 
 GWL_STYLE = -16
 GWL_EXSTYLE = -20
@@ -326,7 +346,7 @@ def find_roblox_window() -> int:
             return True
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
-        if "roblox" in buf.value.lower() and get_process_name(hwnd) == ROBLOX_PROCESS_NAME:
+        if is_roblox_process_or_title(hwnd, buf.value):
             matches.append(hwnd)
             return False
         return True
@@ -361,7 +381,7 @@ def list_roblox_windows() -> list:
             return True
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
-        if "roblox" in buf.value.lower() and get_process_name(hwnd) == ROBLOX_PROCESS_NAME:
+        if is_roblox_process_or_title(hwnd, buf.value):
             results.append({"hwnd": hwnd, "pid": get_window_pid(hwnd), "title": buf.value})
         return True
 
