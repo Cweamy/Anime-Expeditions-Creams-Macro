@@ -1,0 +1,7 @@
+# Dev/test-only dependencies -- NOT needed to run the macro, only to run the
+# unit test suite (tests/) locally or in CI (see .github/workflows/ci.yml).
+# The runtime deps live in requirements.txt; install both for development:
+#   pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+
+pytest
