@@ -478,14 +478,15 @@ def capture_window_rgb(hwnd: int):
         buf = (ctypes.c_char * (w * h * 4))()
         if gdi32.GetDIBits(mem_dc, bmp, 0, h, buf, ctypes.byref(bmi), 0) != h:
             return None
-        raw = bytearray(buf)  # BGRA
-        rgb = bytearray(w * h * 3)
-        rgb[0::3] = raw[2::4]
-        rgb[1::3] = raw[1::4]
-        rgb[2::3] = raw[0::4]
-        if not any(rgb):  # "success" but nothing was actually rendered
+        import cv2
+        import numpy as np
+        # Zero-copy NumPy view over the C DIBits buffer (BGRA format)
+        arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
+        if not arr[:, :, :3].any():  # "success" but nothing was actually rendered
             return None
-        return bytes(rgb), w, h
+        # Vectorized BGRA to RGB conversion in C/OpenCV
+        rgb_arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+        return rgb_arr.tobytes(), w, h
     finally:
         gdi32.SelectObject(mem_dc, old)
         gdi32.DeleteObject(bmp)

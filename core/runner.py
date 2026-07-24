@@ -240,6 +240,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                                                        macro_name=macro_name)
                         time.sleep(MATCH_RESULT_POLL_INTERVAL)
         finally:
+            vision.close_mss()
             if not (stop_event is not None and stop_event.is_set()):
                 self._log("[Debug] Test finished.")
             self._set_status(action="Idle")
@@ -457,86 +458,89 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                        "elevated one. If clicks aren't registering, close both and relaunch this macro "
                        "as Administrator too (right-click > Run as administrator).")
 
-        # Already standing in a match? nav_unitmanager only renders once
-        # you're actually in-game (it's the same image _wait_teleport_in
-        # treats as the "we teleported in" confirmation), so seeing it now
-        # means the user pressed Start from INSIDE a stage -- all the lobby
-        # navigation (Play, gamemode, map, stage, matchmaking, teleport)
-        # would be clicking at screens that aren't there. The first task
-        # skips straight to Pre Start instead (see _run_task's
-        # _skip_first_task_setup), picking the run up from where the user
-        # already is.
-        self._skip_first_task_setup = False
         try:
-            if vision.find_image(hwnd, "nav_unitmanager") is not None:
-                self._skip_first_task_setup = True
-                self._log("[Macro] Unit Manager is visible -- already in-game, so the first task "
-                           "skips stage entry and starts from Pre Start.")
-        except vision.TemplateNotFound:
-            pass
+            # Already standing in a match? nav_unitmanager only renders once
+            # you're actually in-game (it's the same image _wait_teleport_in
+            # treats as the "we teleported in" confirmation), so seeing it now
+            # means the user pressed Start from INSIDE a stage -- all the lobby
+            # navigation (Play, gamemode, map, stage, matchmaking, teleport)
+            # would be clicking at screens that aren't there. The first task
+            # skips straight to Pre Start instead (see _run_task's
+            # _skip_first_task_setup), picking the run up from where the user
+            # already is.
+            self._skip_first_task_setup = False
+            try:
+                if vision.find_image(hwnd, "nav_unitmanager") is not None:
+                    self._skip_first_task_setup = True
+                    self._log("[Macro] Unit Manager is visible -- already in-game, so the first task "
+                               "skips stage entry and starts from Pre Start.")
+            except vision.TemplateNotFound:
+                pass
 
-        # Challenge runs ONCE per Start (not once per task-queue pass, see
-        # the while loop below) -- if it's enabled, every ready stage slot
-        # gets attempted before the Task Queue ever starts. Skipped when
-        # starting already in-game: its navigation begins at the lobby,
-        # which is exactly where we aren't -- ready slots still get their
-        # chance at the between-repeats check once the current stage ends.
-        if self._checkpoint(stop_event):
-            return
-        if not self._skip_first_task_setup:
-            self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges, default_walk_paths,
-                                   reward_region, stats_region, webhook)
-        if self._checkpoint(stop_event):
-            return
-
-        loop_pass = 1
-        while True:
-            # Re-read the queue every pass instead of once up front -- a run
-            # loops indefinitely (see below), potentially for hours, and the
-            # user may edit the Task screen (add/remove/reorder) between
-            # passes expecting the NEXT pass to pick up their changes rather
-            # than keep replaying a stale snapshot from when the run started.
-            tasks = get_tasks()
-            if not tasks:
-                self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
-                self._set_status(action="Idle")
+            # Challenge runs ONCE per Start (not once per task-queue pass, see
+            # the while loop below) -- if it's enabled, every ready stage slot
+            # gets attempted before the Task Queue ever starts. Skipped when
+            # starting already in-game: its navigation begins at the lobby,
+            # which is exactly where we aren't -- ready slots still get their
+            # chance at the between-repeats check once the current stage ends.
+            if self._checkpoint(stop_event):
+                return
+            if not self._skip_first_task_setup:
+                self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges, default_walk_paths,
+                                       reward_region, stats_region, webhook)
+            if self._checkpoint(stop_event):
                 return
 
-            if loop_pass == 1:
-                self._log(f"[Macro] Starting run -- {len(tasks)} task(s) queued.")
-            else:
-                self._log(f"[Macro] Task queue finished -- restarting from task 1 (pass {loop_pass}).")
-
-            for task_index, task in enumerate(tasks, start=1):
-                if self._checkpoint(stop_event):
-                    return
-
-                map_name = task.get("map")
-                if not map_name:
-                    self._log(f"[Macro] Task {task_index}/{len(tasks)} has no map set -- skipping it.")
-                    continue
-
-                # A disconnect/rejoin during a previous task (see
-                # _attempt_rejoin) may have re-docked Roblox under a new
-                # hwnd -- pick that up before starting the next task.
-                if self._current_hwnd and wm.is_window(self._current_hwnd):
-                    hwnd = self._current_hwnd
-
-                # A mid-task failure (a stuck battle, a missed click, ...)
-                # doesn't kill the whole overnight run -- _run_task recovers to
-                # the lobby and retries internally, only returning False when
-                # stop_event actually fired.
-                if not self._run_task(hwnd, stop_event, task, task_index, len(tasks), coords, scroll_power,
-                                        scroll_nudges, default_walk_paths, reward_region, stats_region, webhook):
+            loop_pass = 1
+            while True:
+                # Re-read the queue every pass instead of once up front -- a run
+                # loops indefinitely (see below), potentially for hours, and the
+                # user may edit the Task screen (add/remove/reorder) between
+                # passes expecting the NEXT pass to pick up their changes rather
+                # than keep replaying a stale snapshot from when the run started.
+                tasks = get_tasks()
+                if not tasks:
+                    self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
                     self._set_status(action="Idle")
                     return
 
-            # The queue always loops back to task 1 once it finishes rather
-            # than going Idle -- Stop (F2) is the only way to actually end
-            # an unattended run now.
-            if self._checkpoint(stop_event):
-                return
-            loop_pass += 1
+                if loop_pass == 1:
+                    self._log(f"[Macro] Starting run -- {len(tasks)} task(s) queued.")
+                else:
+                    self._log(f"[Macro] Task queue finished -- restarting from task 1 (pass {loop_pass}).")
+
+                for task_index, task in enumerate(tasks, start=1):
+                    if self._checkpoint(stop_event):
+                        return
+
+                    map_name = task.get("map")
+                    if not map_name:
+                        self._log(f"[Macro] Task {task_index}/{len(tasks)} has no map set -- skipping it.")
+                        continue
+
+                    # A disconnect/rejoin during a previous task (see
+                    # _attempt_rejoin) may have re-docked Roblox under a new
+                    # hwnd -- pick that up before starting the next task.
+                    if self._current_hwnd and wm.is_window(self._current_hwnd):
+                        hwnd = self._current_hwnd
+
+                    # A mid-task failure (a stuck battle, a missed click, ...)
+                    # doesn't kill the whole overnight run -- _run_task recovers to
+                    # the lobby and retries internally, only returning False when
+                    # stop_event actually fired.
+                    if not self._run_task(hwnd, stop_event, task, task_index, len(tasks), coords, scroll_power,
+                                            scroll_nudges, default_walk_paths, reward_region, stats_region, webhook):
+                        self._set_status(action="Idle")
+                        return
+
+                # The queue always loops back to task 1 once it finishes rather
+                # than going Idle -- Stop (F2) is the only way to actually end
+                # an unattended run now.
+                if self._checkpoint(stop_event):
+                    return
+                loop_pass += 1
+        finally:
+            vision.close_mss()
 
 
 

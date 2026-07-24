@@ -334,7 +334,23 @@ def load_template_gray(name: str, template_dir: str = UI_ASSETS_DIR) -> tuple:
 # would quietly run against whatever is overlapping the game instead of failing
 # loudly. Windows keeps the lazy detection -- there the game is a child window
 # inside ours and can't be occluded by a foreign window in the first place.
+from . import mss_manager
+
 _use_window_capture = sys.platform == "darwin"
+
+
+def _get_mss():
+    return mss_manager.get_mss()
+
+
+def close_mss() -> None:
+    """Closes the current thread's MSS instance."""
+    mss_manager.close_mss()
+
+
+def close_all_mss() -> None:
+    """Closes all active MSS instances across all threads."""
+    mss_manager.close_all_mss()
 
 
 def _capture_window_gray(hwnd: int, region: tuple = None):
@@ -426,7 +442,6 @@ def _screen_grab_gray(hwnd: int, region: tuple = None):
     flashes the display white on some GPU/fullscreen-optimization setups --
     which is why window-content capture (see capture_game_gray) is preferred
     now. Kept as the fallback for setups where PrintWindow renders black."""
-    import mss
     left, top, sx, sy = _window_geometry(hwnd)
     if region is not None:
         rx, ry, rw, rh = region
@@ -439,11 +454,15 @@ def _screen_grab_gray(hwnd: int, region: tuple = None):
         out_w, out_h = config.FIXED_WIN_W, config.FIXED_WIN_H
     if grab_w <= 0 or grab_h <= 0:
         return None
-    with mss.MSS() as sct:
+    try:
+        sct = _get_mss()
         shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
                           "width": int(round(grab_w)), "height": int(round(grab_h))})
-        bgr = np.array(shot)[:, :, :3]
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        close_mss()
+        raise
+    bgra = np.frombuffer(shot.raw, dtype=np.uint8).reshape(shot.height, shot.width, 4)
+    gray = cv2.cvtColor(bgra, cv2.COLOR_BGRA2GRAY)
     if gray.shape[:2] != (out_h, out_w):
         # Non-reference capture (Retina 2x, off-size window) -- normalize.
         # INTER_AREA: this is almost always a shrink, where it's the
@@ -500,7 +519,6 @@ def capture_game_bgr(hwnd: int, region: tuple = None) -> np.ndarray:
         if bgr is not None:
             return bgr
 
-    import mss
     left, top, sx, sy = _window_geometry(hwnd)
     if region is not None:
         rx, ry, rw, rh = region
@@ -513,10 +531,15 @@ def capture_game_bgr(hwnd: int, region: tuple = None) -> np.ndarray:
         out_w, out_h = config.FIXED_WIN_W, config.FIXED_WIN_H
     if grab_w <= 0 or grab_h <= 0:
         return None
-    with mss.MSS() as sct:
+    try:
+        sct = _get_mss()
         shot = sct.grab({"left": int(grab_left), "top": int(grab_top),
                           "width": int(round(grab_w)), "height": int(round(grab_h))})
-        bgr = np.array(shot)[:, :, :3]
+    except Exception:
+        close_mss()
+        raise
+    bgra = np.frombuffer(shot.raw, dtype=np.uint8).reshape(shot.height, shot.width, 4)
+    bgr = cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
     if bgr.shape[:2] != (out_h, out_w):
         bgr = cv2.resize(bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
     if not bgr.any():
@@ -822,18 +845,41 @@ def find_image_any(hwnd: int, names: tuple, region: tuple = None, threshold: flo
     for and none matched."""
     first_missing = None
     found_any_template = False
+    available_names = []
     for name in names:
         try:
-            match = find_image(hwnd, name, region, threshold, template_dir)
+            # Validate every candidate before taking a screenshot. The image
+            # data is cached, so the later matcher does not decode it again.
+            load_template_grays(name, template_dir)
         except TemplateNotFound as exc:
             if first_missing is None:
                 first_missing = exc
             continue
         found_any_template = True
-        if match is not None:
-            return match, name
+
+        available_names.append(name)
+
     if not found_any_template and first_missing is not None:
         raise first_missing
+    if not available_names:
+        return None, None
+
+    # All candidate names describe alternatives visible in the same UI state.
+    # Reusing one frame keeps their priority order intact while avoiding an
+    # extra screen capture and grayscale conversion for every missed option.
+    haystack = capture_game_gray(hwnd, region)
+    if haystack is None:
+        return None, None
+
+    for name in available_names:
+        match = find_in_gray_multiscale(haystack, name, template_dir, _effective_threshold(name, threshold))
+        if match is not None:
+            if region is not None:
+                match["x"] += region[0]
+                match["y"] += region[1]
+                match["cx"] += region[0]
+                match["cy"] += region[1]
+            return match, name
     return None, None
 
 

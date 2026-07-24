@@ -96,14 +96,20 @@ def get_pytesseract():
     )
 
 
+from . import mss_manager
+
+
 def capture_region(left: int, top: int, width: int, height: int) -> np.ndarray:
     """Screenshots a screen-space rect, returns it as a BGR numpy array
     (OpenCV's native order) ready for cv2 preprocessing."""
-    import mss
-    with mss.MSS() as sct:
+    try:
+        sct = mss_manager.get_mss()
         shot = sct.grab({"left": left, "top": top, "width": width, "height": height})
-        # mss gives BGRA; drop alpha, already BGR-ordered so no channel swap needed.
-        return np.array(shot)[:, :, :3]
+    except Exception:
+        mss_manager.close_mss()
+        raise
+    bgra = np.frombuffer(shot.raw, dtype=np.uint8).reshape(shot.height, shot.width, 4)
+    return cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
 
 
 def sample_color_matches(left: int, top: int, width: int, height: int,
