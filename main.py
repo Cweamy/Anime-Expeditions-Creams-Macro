@@ -86,6 +86,13 @@ GUI_HEIGHT_COMPACT = TITLEBAR_H + 380  # tall enough for the waiting screen's fu
 # expanding ping rings + tag + title + status + Skip + version badge) -- 280 clipped the emblem's
 # animation and the bottom rows
 
+# F7 "compact strip" size (see Api.enter_compact): a small always-on-top
+# control bar -- status readout + Start/Pause/Stop -- for when the full
+# dashboard is just in the way. Frameless window, so these are also the
+# client size the strip's HTML lays out into (see #compact-strip in the UI).
+GUI_WIDTH_STRIP = 360
+GUI_HEIGHT_STRIP = 54
+
 # ── macOS side-by-side geometry ─────────────────────────────────────────────
 # On Windows the game is a child window INSIDE ours, so one window size covers
 # both (GUI_*_FULL above). macOS can't embed another app's window at all (see
@@ -109,6 +116,9 @@ HOTKEY_DEFAULTS = {
     # right when a search fails shouldn't need clicking back through
     # Settings > General first.
     "image_manager": "f6",
+    # Collapses the whole dashboard to a small always-on-top strip (and back)
+    # -- for when the macro's running fine and the full UI is just clutter.
+    "toggle_compact": "f7",
 }
 
 # Stage-detail panel (shown after clicking a stage row on the Select Stage
@@ -333,6 +343,9 @@ class Api:
         # instantly re-attaching after an explicit Un-Attach.
         self.pinned_hwnd = None
         self.dock_suspended = False
+        # F7 compact-strip mode (see enter_compact/exit_compact): purely this
+        # window's own size + z-order, never touches Roblox's parenting.
+        self._compact = False
         # macOS side-by-side layout state (see set_panel_expanded): the panel
         # only starts trading width against the game once it has actually been
         # arranged, and the lock keeps the screen-switch resizes from
@@ -1318,6 +1331,90 @@ class Api:
             self.push_log(f"[Macro] Couldn't resize the panel: {exc}")
             measured = None
         self._mac_panel_width = measured if measured and measured > 0 else None
+
+    def enter_compact(self) -> None:
+        """F7 compact strip: shrink this window to a small always-on-top
+        control bar (status + Start/Pause/Stop) and get the game out from
+        under it.
+
+        Purely a UI convenience -- the run keeps going untouched. The game is
+        hidden exactly the way switching to the Settings screen hides it (a
+        supported mid-run flow: flicker-free window capture reads the window's
+        own contents whether it's visible or not), so nothing about the macro
+        loop changes. No undock, no reparent -- only this window's own size
+        and z-order, which is why it can't disturb Roblox.
+
+        The native SetWindowPos re-assert after pywebview's own resize/on_top
+        is the same belt-and-braces skip_waiting/_dock_watchdog already use:
+        pywebview 6.2.1 can silently drop a resize/on-top under some DPI or
+        minimized states."""
+        if not self._window:
+            return
+        self._compact = True
+        self.hide_game()
+        x, y = 40, 40
+        try:
+            screens = webview.screens
+            if screens:
+                x = max(0, int(screens[0].width) - GUI_WIDTH_STRIP - 24)
+                y = 24
+        except Exception:
+            pass
+        try:
+            self._window.on_top = True
+            self._window.resize(GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP)
+            self._window.move(x, y)
+        except Exception:
+            pass
+        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
+        if gui_hwnd and wm.is_window(gui_hwnd):
+            try:
+                wm.move_window(gui_hwnd, x, y, GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP)
+                wm.set_always_on_top(gui_hwnd, True)
+            except Exception:
+                pass
+
+    def exit_compact(self) -> None:
+        """Undo enter_compact: drop always-on-top and grow the window back to
+        full size. Game visibility is deliberately left to the JS side's
+        switchScreen (it knows which screen is being restored and reuses its
+        existing show/hide coordination)."""
+        if not self._window:
+            return
+        self._compact = False
+        try:
+            self._window.on_top = False
+        except Exception:
+            pass
+        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
+        if gui_hwnd and wm.is_window(gui_hwnd):
+            try:
+                wm.set_always_on_top(gui_hwnd, False)
+            except Exception:
+                pass
+        if sys.platform == "darwin":
+            # mac never uses the 1552px two-column size (no game inside the
+            # window); restore the side-by-side panel geometry instead, the
+            # same tested resize path every other mac navigation uses. The
+            # JS switchScreen that follows re-asserts expand/collapse.
+            layout = _mac_panel_layout()
+            with self._mac_geometry_lock:
+                width = layout["panel_w"] if self.docker.docked else layout["expanded_w"]
+                self._apply_panel_geometry(layout["x"], layout["y"], width, layout["panel_h"])
+            return
+        try:
+            self._window.resize(GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
+            self._window.move(0, 0)
+        except Exception:
+            pass
+        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
+        if gui_hwnd and wm.is_window(gui_hwnd):
+            try:
+                l, t, r, b = wm.get_window_rect_screen(gui_hwnd)
+                if (r - l, b - t) != (GUI_WIDTH_FULL, GUI_HEIGHT_FULL):
+                    wm.move_window(gui_hwnd, 0, 0, GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
+            except Exception:
+                pass
 
     def skip_waiting(self):
         # Lets the panel be used (config, etc.) before Roblox is even open.
@@ -2804,6 +2901,7 @@ def _launch_ui():
             "macro_pause": lambda: api.push_ui("togglePauseMacro"),
             "debug_screenshot": lambda: api.push_ui("saveDebugScreenshot"),
             "image_manager": lambda: api.push_ui("toggleImageManagerHotkey"),
+            "toggle_compact": lambda: api.push_ui("toggleCompactStrip"),
             # NOT routed through push_ui/JS: stopping has to win over
             # everything else regardless of what the UI thread is doing
             # (mid screen-switch animation, waiting on an evaluate_js round

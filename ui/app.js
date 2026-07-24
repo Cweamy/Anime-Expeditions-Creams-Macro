@@ -94,6 +94,10 @@ function tickTimers() {
 // Task screen: waiting / docked status
 // ---------------------------------------------------------------------------
 let hasAutoShownDashboard = false;
+// Compact strip (F7) state -- declared up here (not beside toggleCompactStrip)
+// because showDocked/switchScreen/restoreGameIfDashboard above all read it.
+let compactMode = false;
+let compactReturnScreen = 'dashboard';
 
 // Called from Python (main.py) the moment docking actually succeeds,
 // don't wait on the 1.5s status poll for a state this important to flip.
@@ -107,7 +111,7 @@ function showDocked() {
   if (!hasAutoShownDashboard) {
     hasAutoShownDashboard = true;
     switchScreen('dashboard');
-  } else if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
+  } else if (currentScreen === 'dashboard' && !compactMode && !isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
   }
   // Docking makes the native child window visible regardless of what the
@@ -157,7 +161,7 @@ function isBlockingOverlayOpen() {
 // blocking overlay is still up -- same logic dismissUpdateModal/
 // dismissScaleWarning already used individually.
 function restoreGameIfDashboard() {
-  if (currentScreen === 'dashboard' && !isBlockingOverlayOpen()) {
+  if (currentScreen === 'dashboard' && !compactMode && !isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.show_game(); } catch (e) {}
   }
 }
@@ -382,7 +386,9 @@ function switchScreen(name) {
       // prompt already hides Roblox for) could end up hidden behind Roblox
       // the moment docking happened to land after it was shown. The modal's
       // own dismiss handler is what restores show_game() once it closes.
-      if (name === 'dashboard' && !isBlockingOverlayOpen()) pywebview.api.show_game();
+      // Never reveal the game while the compact strip is up -- it would paint
+      // straight over the strip (native child window, always above the DOM).
+      if (name === 'dashboard' && !compactMode && !isBlockingOverlayOpen()) pywebview.api.show_game();
       else if (name !== 'dashboard') pywebview.api.hide_game();
 
       // macOS: hide_game() above is a no-op there (you cannot hide another
@@ -418,6 +424,35 @@ function toggleGameScreenHotkey() {
 }
 
 // ---------------------------------------------------------------------------
+// Compact strip (F7): collapse the whole dashboard to a small always-on-top
+// control bar and back. The window resize + always-on-top + hiding the game
+// out from under the strip is done by Api.enter_compact/exit_compact; this
+// side owns the DOM state (body.compact-mode) and restoring the right screen.
+// (compactMode / compactReturnScreen are declared near the top -- earlier
+// functions read them.)
+// ---------------------------------------------------------------------------
+async function toggleCompactStrip() {
+  if (!compactMode) {
+    compactMode = true;
+    compactReturnScreen = currentScreen;
+    // Add the class BEFORE the resize so the strip is what's on screen as the
+    // window shrinks, not the full dashboard squeezing into 360px first.
+    document.body.classList.add('compact-mode');
+    try { await pywebview.api.enter_compact(); } catch (e) {}
+  } else {
+    compactMode = false;
+    // Resize back to full FIRST, then drop the class -- reverse order, so the
+    // dashboard never flashes crammed into the strip's footprint.
+    try { await pywebview.api.exit_compact(); } catch (e) {}
+    document.body.classList.remove('compact-mode');
+    // Reuses switchScreen's own show/hide-game coordination to restore
+    // whatever screen was up when we collapsed (show_game is gated on
+    // !compactMode, which is now false again).
+    switchScreen(compactReturnScreen || 'dashboard');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Status polling
 // ---------------------------------------------------------------------------
 async function refreshStatus() {
@@ -433,6 +468,8 @@ async function refreshStatus() {
     document.getElementById('stat-current-repeat').textContent = status.current_repeat ?? '-';
     document.getElementById('stat-map').textContent = status.map ?? '-';
     document.getElementById('stat-action').textContent = status.action ?? '-';
+    const csAction = document.getElementById('compact-action');
+    if (csAction) csAction.textContent = status.action ?? 'Idle';
     document.getElementById('stat-last-run').textContent = status.last_run ?? '-';
     document.getElementById('stat-challenge').textContent = status.time_until_challenge ?? '-';
     document.getElementById('stat-mode').textContent = status.mode ?? '-';
@@ -495,10 +532,25 @@ function setMacroButtons(running, paused) {
     const label = document.getElementById('btn-macro-pause-label');
     if (label) label.textContent = paused ? 'Resume' : 'Pause';
   }
+  // Mirror the same state onto the compact strip's buttons.
+  const csStart = document.getElementById('cs-start');
+  const csPause = document.getElementById('cs-pause');
+  const csStop = document.getElementById('cs-stop');
+  const csDot = document.getElementById('cs-dot');
+  if (csStart) csStart.disabled = running;
+  if (csStop) csStop.disabled = !running;
+  if (csPause) {
+    csPause.disabled = !running;
+    csPause.classList.toggle('on', !!paused);
+    csPause.setAttribute('data-tooltip', paused ? 'Resume' : 'Pause');
+  }
+  if (csDot) csDot.className = 'cs-dot' + (running ? (paused ? ' paused' : ' running') : '');
 }
 
 async function startMacro() {
-  switchScreen('dashboard');
+  // From the compact strip, starting must NOT hop to the Dashboard (that
+  // would show_game() straight over the strip) -- stay collapsed.
+  if (!compactMode) switchScreen('dashboard');
   setMacroButtons(true, false);
   try {
     const result = await pywebview.api.start_macro();
@@ -618,6 +670,7 @@ let rebindingAction = null;
 // Esc during capture instead.
 const HOTKEY_DEFAULTS = {
   toggle_game: 'f4', skip_waiting: '', macro_start: 'f1', macro_stop: 'f2', macro_pause: 'f5', debug_screenshot: 'f3',
+  image_manager: 'f6', toggle_compact: 'f7',
 };
 
 // Reflects one hotkey's state into its button text and shows/hides its
@@ -699,6 +752,8 @@ async function resetHotkeys() {
     updateKeybindDisplay('macro_stop', hk.macro_stop || '');
     updateKeybindDisplay('macro_pause', hk.macro_pause || '');
     updateKeybindDisplay('debug_screenshot', hk.debug_screenshot || '');
+    updateKeybindDisplay('image_manager', hk.image_manager || '');
+    updateKeybindDisplay('toggle_compact', hk.toggle_compact || '');
   } catch (e) {}
 }
 
@@ -900,6 +955,7 @@ async function loadSettingsUI() {
     updateKeybindDisplay('macro_pause', hk.macro_pause || '');
     updateKeybindDisplay('debug_screenshot', hk.debug_screenshot || '');
     updateKeybindDisplay('image_manager', hk.image_manager || '');
+    updateKeybindDisplay('toggle_compact', hk.toggle_compact || '');
     updateDashboardHotkeys(hk);
   } catch (e) {}
   try {
