@@ -1332,6 +1332,41 @@ class Api:
             measured = None
         self._mac_panel_width = measured if measured and measured > 0 else None
 
+    def _resize_gui(self, x: int, y: int, w: int, h: int) -> tuple:
+        """Move+resize our own frameless window to (x, y, w, h) and return the
+        size it actually ended up at, as (width, height).
+
+        Mirrors the sequence skip_waiting/_dock_watchdog already use on this
+        exact window -- which is the ONLY resize path proven to take here:
+        pywebview's resize() can be silently dropped on a minimized/odd-DPI
+        window, and this window is created resizable=False (a FixedSingle
+        WinForms form), so a plain native SetWindowPos is reverted by the
+        form's own WM_WINDOWPOSCHANGING handling. restore() first, then
+        pywebview resize()+move(), then verify and fall back to a native
+        MoveWindow only if pywebview's was lost."""
+        measured = None
+        try:
+            self._window.restore()
+            time.sleep(0.15)
+            self._window.resize(w, h)
+            self._window.move(x, y)
+            time.sleep(0.25)
+        except Exception as exc:
+            self.push_log(f"[Compact] window resize call failed: {exc}")
+        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
+        if gui_hwnd and wm.is_window(gui_hwnd):
+            try:
+                l, t, r, b = wm.get_window_rect_screen(gui_hwnd)
+                measured = (r - l, b - t)
+                if measured != (w, h):
+                    wm.move_window(gui_hwnd, x, y, w, h)
+                    time.sleep(0.15)
+                    l, t, r, b = wm.get_window_rect_screen(gui_hwnd)
+                    measured = (r - l, b - t)
+            except Exception as exc:
+                self.push_log(f"[Compact] native resize failed: {exc}")
+        return measured
+
     def enter_compact(self) -> None:
         """F7 compact strip: shrink this window to a small always-on-top
         control bar (status + Start/Pause/Stop) and get the game out from
@@ -1342,37 +1377,38 @@ class Api:
         supported mid-run flow: flicker-free window capture reads the window's
         own contents whether it's visible or not), so nothing about the macro
         loop changes. No undock, no reparent -- only this window's own size
-        and z-order, which is why it can't disturb Roblox.
-
-        The native SetWindowPos re-assert after pywebview's own resize/on_top
-        is the same belt-and-braces skip_waiting/_dock_watchdog already use:
-        pywebview 6.2.1 can silently drop a resize/on-top under some DPI or
-        minimized states."""
+        and z-order, which is why it can't disturb Roblox."""
         if not self._window:
             return
         self._compact = True
-        self.hide_game()
-        x, y = 40, 40
         try:
-            screens = webview.screens
-            if screens:
-                x = max(0, int(screens[0].width) - GUI_WIDTH_STRIP - 24)
-                y = 24
-        except Exception:
-            pass
-        try:
-            self._window.on_top = True
-            self._window.resize(GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP)
-            self._window.move(x, y)
-        except Exception:
-            pass
+            self.hide_game()
+        except Exception as exc:
+            self.push_log(f"[Compact] couldn't hide the game: {exc}")
+        if sys.platform == "darwin":
+            # mac: no game inside the window, so just shrink the panel to the
+            # strip via the tested mac geometry path.
+            with self._mac_geometry_lock:
+                self._apply_panel_geometry(24, 24, GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP)
+            gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
+            if gui_hwnd and wm.is_window(gui_hwnd):
+                try:
+                    wm.set_always_on_top(gui_hwnd, True)
+                except Exception:
+                    pass
+            return
+        # Top-left corner: predictable, needs no screen-metrics call, and the
+        # strip is draggable to wherever the user wants it anyway.
+        measured = self._resize_gui(0, 0, GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP)
         gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
         if gui_hwnd and wm.is_window(gui_hwnd):
             try:
-                wm.move_window(gui_hwnd, x, y, GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP)
                 wm.set_always_on_top(gui_hwnd, True)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.push_log(f"[Compact] couldn't pin the strip on top: {exc}")
+        if measured != (GUI_WIDTH_STRIP, GUI_HEIGHT_STRIP):
+            self.push_log(f"[Compact] window would not shrink to the strip "
+                          f"(ended at {measured}) -- press F7 again to restore.")
 
     def exit_compact(self) -> None:
         """Undo enter_compact: drop always-on-top and grow the window back to
@@ -1382,10 +1418,6 @@ class Api:
         if not self._window:
             return
         self._compact = False
-        try:
-            self._window.on_top = False
-        except Exception:
-            pass
         gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
         if gui_hwnd and wm.is_window(gui_hwnd):
             try:
@@ -1402,19 +1434,7 @@ class Api:
                 width = layout["panel_w"] if self.docker.docked else layout["expanded_w"]
                 self._apply_panel_geometry(layout["x"], layout["y"], width, layout["panel_h"])
             return
-        try:
-            self._window.resize(GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
-            self._window.move(0, 0)
-        except Exception:
-            pass
-        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
-        if gui_hwnd and wm.is_window(gui_hwnd):
-            try:
-                l, t, r, b = wm.get_window_rect_screen(gui_hwnd)
-                if (r - l, b - t) != (GUI_WIDTH_FULL, GUI_HEIGHT_FULL):
-                    wm.move_window(gui_hwnd, 0, 0, GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
-            except Exception:
-                pass
+        self._resize_gui(0, 0, GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
 
     def skip_waiting(self):
         # Lets the panel be used (config, etc.) before Roblox is even open.
