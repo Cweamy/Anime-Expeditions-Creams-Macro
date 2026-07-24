@@ -352,10 +352,12 @@ let wasMacroRunning = false;
 function switchScreen(name) {
   // Navigating anywhere off the Dashboard drops out of the compact strip --
   // the strip is a Dashboard overlay, so leaving the Dashboard should restore
-  // the full UI rather than leave the strip stranded over another screen.
+  // the full UI (and the full window size) rather than leave the strip
+  // stranded over a trimmed window.
   if (compactMode && name !== 'dashboard') {
     compactMode = false;
     document.body.classList.remove('compact-mode');
+    try { pywebview.api.exit_compact(); } catch (e) {}
   }
   const changed = currentScreen !== name;
   currentScreen = name;
@@ -442,9 +444,13 @@ function toggleCompactStrip() {
     switchScreen('dashboard');
     compactMode = true;
     document.body.classList.add('compact-mode');
+    // Trim the window to just the game + strip (drops the empty side column
+    // and the log gap). Pure size change -- the game stays docked/clickable.
+    try { pywebview.api.enter_compact(); } catch (e) {}
   } else {
     compactMode = false;
     document.body.classList.remove('compact-mode');
+    try { pywebview.api.exit_compact(); } catch (e) {}
   }
 }
 

@@ -86,6 +86,16 @@ GUI_HEIGHT_COMPACT = TITLEBAR_H + 380  # tall enough for the waiting screen's fu
 # expanding ping rings + tag + title + status + Skip + version badge) -- 280 clipped the emblem's
 # animation and the bottom rows
 
+# F7 compact view: trim the window to EXACTLY the docked game plus the bottom
+# control strip, dropping the empty side-panel column and the log gap. Width
+# is the game's own width and height is titlebar + game + strip, so the game
+# is never clipped (only the empty margins are removed) or hidden -- it stays
+# visible and clickable, and docking is never touched. Strip height mirrors
+# #compact-strip's height in ui/style.css.
+COMPACT_STRIP_H = 50
+GUI_WIDTH_COMPACT_FIT = config.FIXED_WIN_W
+GUI_HEIGHT_COMPACT_FIT = TITLEBAR_H + config.FIXED_WIN_H + COMPACT_STRIP_H
+
 # ── macOS side-by-side geometry ─────────────────────────────────────────────
 # On Windows the game is a child window INSIDE ours, so one window size covers
 # both (GUI_*_FULL above). macOS can't embed another app's window at all (see
@@ -1321,6 +1331,58 @@ class Api:
             self.push_log(f"[Macro] Couldn't resize the panel: {exc}")
             measured = None
         self._mac_panel_width = measured if measured and measured > 0 else None
+
+    def _resize_gui_keep_pos(self, w: int, h: int) -> None:
+        """Resize our own frameless window to (w, h), keeping its current
+        top-left corner. Mirrors the sequence skip_waiting/_dock_watchdog use
+        on this exact window -- the only resize path proven to take here:
+        pywebview's resize() can be silently dropped on a minimized/odd-DPI
+        window, so restore() first, then verify and fall back to a native
+        MoveWindow if it was lost. Position is read back and preserved so the
+        window shrinks toward its bottom-right instead of jumping to (0,0)."""
+        gui_hwnd = self.gui_hwnd or WindowManager(GUI_TITLE).find()
+        x, y = 0, 0
+        if gui_hwnd and wm.is_window(gui_hwnd):
+            try:
+                l, t, _, _ = wm.get_window_rect_screen(gui_hwnd)
+                x, y = l, t
+            except Exception:
+                pass
+        try:
+            self._window.restore()
+            time.sleep(0.1)
+            self._window.resize(w, h)
+            time.sleep(0.2)
+        except Exception as exc:
+            self.push_log(f"[Compact] window resize failed: {exc}")
+        if gui_hwnd and wm.is_window(gui_hwnd):
+            try:
+                l, t, r, b = wm.get_window_rect_screen(gui_hwnd)
+                if (r - l, b - t) != (w, h):
+                    wm.move_window(gui_hwnd, x, y, w, h)
+            except Exception as exc:
+                self.push_log(f"[Compact] native resize failed: {exc}")
+
+    def enter_compact(self) -> None:
+        """F7 compact view: trim the window down to just the docked game plus
+        the bottom control strip (drops the empty side column + log gap). The
+        game is neither clipped (the window is only trimmed to the game's own
+        size) nor hidden nor undocked, so it stays visible and clickable and
+        the macro keeps clicking it exactly as before -- only this window's
+        outer size changes."""
+        if not self._window or sys.platform == "darwin":
+            # mac: the game sits BESIDE the panel, not inside the window, so
+            # there's no empty in-window column to trim -- the CSS-hidden
+            # panels are the whole effect there.
+            return
+        self._resize_gui_keep_pos(GUI_WIDTH_COMPACT_FIT, GUI_HEIGHT_COMPACT_FIT)
+
+    def exit_compact(self) -> None:
+        """Undo enter_compact: grow the window back to full size so the side
+        panel + log have room again."""
+        if not self._window or sys.platform == "darwin":
+            return
+        self._resize_gui_keep_pos(GUI_WIDTH_FULL, GUI_HEIGHT_FULL)
 
     def skip_waiting(self):
         # Lets the panel be used (config, etc.) before Roblox is even open.
