@@ -1833,15 +1833,23 @@ class Api:
                 "" if not missing else f"Missing: {', '.join(missing)} -- re-extract the release zip "
                                        f"keeping its folder structure, or re-add crops via the Image Manager.")
 
-        try:
-            from core import ocr
-            ocr.get_pytesseract()
-            tess_ok = True
-        except Exception:
-            tess_ok = False
-        add("Tesseract OCR engine", tess_ok,
-            "" if tess_ok else "Only stats/reward reading and Wait-for-Wave need it -- everything else "
-                               "works without. Install via Settings > General, or brew on macOS.")
+        # OCR (wave/stats reading): Windows' built-in engine is preferred and
+        # needs nothing installed; Tesseract is only the fallback. The check
+        # passes if EITHER is available.
+        from core import ocr_windows
+        if ocr_windows.is_available():
+            add("Text reading (OCR)", True, "using Windows' built-in OCR -- no install needed")
+        else:
+            try:
+                from core import ocr
+                ocr.get_pytesseract()
+                tess_ok = True
+            except Exception:
+                tess_ok = False
+            add("Text reading (OCR)", tess_ok,
+                "" if tess_ok else "Windows OCR unavailable and Tesseract not found -- only stats/reward "
+                                   "reading and Wait-for-Wave need it. Install Tesseract via Settings > "
+                                   "General, or brew on macOS.")
 
         overall = all(c["ok"] for c in checks)
         self.push_log(f"[Health] {'All checks passed.' if overall else 'Some checks need attention -- see above.'}")

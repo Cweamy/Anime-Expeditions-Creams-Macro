@@ -4,9 +4,15 @@ mss            # screen capture (Settings > Webhook > Debug Screenshot, core/rew
 requests       # multipart webhook uploads (core/webhook.py send_file)
 opencv-python  # reward-icon image preprocessing (core/rewards.py)
 numpy          # array handling for opencv/mss (core/rewards.py)
-pytesseract    # OCR wrapper (core/rewards.py) -- ALSO requires the separate Tesseract OCR
-               # engine binary, which pip cannot install: https://github.com/UB-Mannheim/tesseract/wiki
-               # (macOS: `brew install tesseract` instead)
+pytesseract    # OCR FALLBACK -- Windows uses the built-in Windows.Media.Ocr (see winsdk
+               # below); Tesseract is only used when that isn't available (older Windows,
+               # macOS). Its engine binary can't be pip-installed:
+               # https://github.com/UB-Mannheim/tesseract/wiki  (macOS: `brew install tesseract`)
+
+# Windows only -- the built-in Windows OCR (Windows.Media.Ocr) projection, the
+# PREFERRED OCR engine on Win10/11 (see core/ocr_windows.py). Ships in the
+# build, so users install nothing extra for wave/stats reading.
+winsdk; sys_platform == "win32"
 
 # macOS only -- the Quartz/Cocoa/Accessibility bindings the mac input and
 # window backends are built on (core/_input_mac.py, core/window_mac.py).

@@ -121,6 +121,12 @@ else:
     cmd.append(f"--icon={os.path.join(ROOT, 'logo.ico')}")
 for mod in HIDDEN_IMPORTS:
     cmd += [f"--hidden-import={mod}"]
+# winsdk (Windows OCR) is a namespace-package WinRT projection PyInstaller's
+# static analysis can't follow -- the winsdk.windows.* submodules are only
+# imported lazily inside core/ocr_windows.py, so they must be collected
+# explicitly or Windows OCR silently falls back to Tesseract in the build.
+if sys.platform != "darwin":
+    cmd += ["--collect-submodules=winsdk"]
 for src, dest in ADD_DATA:
     # --add-data's separator is ';' on Windows but ':' on POSIX -- exactly
     # what os.pathsep is. Hardcoded ';' was the mac CI build's first

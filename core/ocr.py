@@ -187,6 +187,32 @@ def score_text(text: str, valid_pattern) -> tuple:
     return (0, alnum)
 
 
+def _whitelist_from_config(base_config: str) -> str:
+    """Pull the tessedit_char_whitelist out of a Tesseract config string --
+    Windows OCR has no whitelist option, so its output is filtered to those
+    chars instead (same effect, applied after the fact)."""
+    m = re.search(r"tessedit_char_whitelist=(\S+)", base_config)
+    return m.group(1) if m else ""
+
+
+def ocr_mask(pytesseract, mask: np.ndarray, base_config: str = "", whitelist: str = None) -> str:
+    """One OCR pass over one prepared mask, engine-agnostic: Windows OCR
+    when available (core.ocr_windows), else Tesseract. Windows output is
+    filtered to the whitelist (explicit arg, or parsed from base_config)
+    so both engines yield the same character set; Tesseract uses the
+    config as-is. Callers do their own regex/scoring on the result."""
+    from core import ocr_windows
+    if ocr_windows.is_available():
+        text = ocr_windows.ocr_image(mask)
+        wl = whitelist if whitelist is not None else _whitelist_from_config(base_config)
+        if wl:
+            text = "".join(c for c in text if c in wl or c.isspace())
+        return text.strip()
+    if pytesseract is None:
+        return ""
+    return pytesseract.image_to_string(mask, config=base_config).strip()
+
+
 def ocr_best(pytesseract, cell_bgr: np.ndarray, base_config: str,
              psm_modes: tuple = (7, 8), valid_pattern=None) -> str:
     """Runs OCR against every candidate mask for this crop -- and, since the
@@ -200,12 +226,18 @@ def ocr_best(pytesseract, cell_bgr: np.ndarray, base_config: str,
     match is already the top score tier score_text can give, so nothing
     later in the sweep could beat it anyway.
     """
+    # Windows OCR ignores the psm segmentation modes (it has no equivalent),
+    # so there's nothing gained by looping them there -- one pass per mask.
+    from core import ocr_windows
+    use_windows = ocr_windows.is_available()
+    effective_psm = (psm_modes[0],) if use_windows else psm_modes
+
     best = ""
     best_score = (-1, -1)
     for mask in candidate_masks(cell_bgr):
-        for psm in psm_modes:
+        for psm in effective_psm:
             config = re.sub(r"--psm \d+", f"--psm {psm}", base_config)
-            text = pytesseract.image_to_string(mask, config=config).strip()
+            text = ocr_mask(pytesseract, mask, config)
             score = score_text(text, valid_pattern)
             if score > best_score:
                 best_score = score

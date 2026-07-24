@@ -103,7 +103,10 @@ def read_game_stats(region_bgr: np.ndarray) -> dict:
     (Settings > Debug > Game Stats) -- everything below assumes an even
     halving gets close enough to each quadrant, since _isolate_value then
     locates the actual value text precisely within whatever it's handed."""
-    pytesseract = get_pytesseract()  # raises TesseractNotAvailable early, before any work
+    # Windows OCR when available means no Tesseract needed at all; only
+    # fall back to (and require) Tesseract when Windows OCR isn't there.
+    from core import ocr_windows
+    pytesseract = None if ocr_windows.is_available() else get_pytesseract()
     h, w = region_bgr.shape[:2]
     mid_y, mid_x = h // 2, w // 2
 

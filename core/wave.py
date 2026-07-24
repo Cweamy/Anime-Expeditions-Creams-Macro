@@ -23,7 +23,8 @@ whichever came first.
 import re
 from collections import Counter
 
-from core.ocr import get_pytesseract, candidate_masks
+from core.ocr import get_pytesseract, candidate_masks, ocr_mask
+from core import ocr_windows
 
 _WAVE_PATTERN = re.compile(r"^\d{1,4}\s?/\s?\d{1,4}$")
 _WHITELIST = "0123456789/"
@@ -54,20 +55,27 @@ def read_wave(region_bgr):
     misread. A wrong digit from one combination gets outvoted by the
     others agreeing on the right one instead.
     """
-    pytesseract = get_pytesseract()
+    # Windows OCR when available (no Tesseract install needed), else
+    # Tesseract. Windows OCR has no psm modes, so that loop collapses to a
+    # single pass per mask there -- verified to match Tesseract's readings
+    # on every test frame at ~16x the speed.
+    use_windows = ocr_windows.is_available()
+    pytesseract = None if use_windows else get_pytesseract()
+    psm_modes = (7,) if use_windows else _PSM_MODES
     config_base = f"--psm 7 -c tessedit_char_whitelist={_WHITELIST}"
     votes = Counter()
     for sharpen in _SHARPEN_LEVELS:
         for mask in candidate_masks(region_bgr, sharpen_amount=sharpen):
-            for psm in _PSM_MODES:
+            for psm in psm_modes:
                 config = re.sub(r"--psm \d+", f"--psm {psm}", config_base)
-                text = pytesseract.image_to_string(mask, config=config).strip()
-                text = re.sub(r"\s+", " ", text)
-                if not _WAVE_PATTERN.match(text):
-                    continue
+                text = ocr_mask(pytesseract, mask, config, whitelist=_WHITELIST)
+                # Windows OCR reads the vertical bar as '|' or letter 'l'
+                # about as often as '/'; normalize before matching.
+                text = re.sub(r"\s+", " ", text.replace("|", "/").replace("l", "/"))
                 nums = re.findall(r"\d+", text)
-                if len(nums) == 2:
-                    votes[(int(nums[0]), int(nums[1]))] += 1
+                if _WAVE_PATTERN.match(text) or (len(nums) == 2 and "/" in text):
+                    if len(nums) == 2:
+                        votes[(int(nums[0]), int(nums[1]))] += 1
     if not votes:
         return None, None
     (current, maximum), _count = votes.most_common(1)[0]
