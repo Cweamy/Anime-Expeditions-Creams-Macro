@@ -1,12 +1,11 @@
 name: CI
 
-# Sanity-checks every push/PR: does every Python file still parse, does the
-# frontend JS still parse, and do the dependencies still resolve on Windows
-# (the only platform this macro actually targets -- pywebview's WebView2
-# backend, the `keyboard` global-hotkey hooks, and core/window.py's ctypes
-# calls are all Windows-only, so a Linux runner would give a false sense of
-# coverage). No test suite exists yet -- this is a "did I break the build"
-# gate, not a correctness gate.
+# Sanity-checks every push/PR: runs the unit test suite, verifies that every
+# Python file still parses, that the frontend JS still parses, and that
+# dependencies still resolve on Windows (the only platform this macro actually
+# targets -- pywebview's WebView2 backend, the `keyboard` global-hotkey hooks,
+# and core/window.py's ctypes calls are all Windows-only, so a Linux runner
+# would give a false sense of coverage).
 on:
   push:
     branches: [main]
@@ -31,6 +30,12 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit test suite
+        run: python -m pytest tests/ -v
 
       - name: Compile-check every Python file
         shell: bash
