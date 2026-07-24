@@ -4264,8 +4264,17 @@ async function importTemplates() {
     return;
   }
   const data = result.data || {};
-  const templates = data.templates && typeof data.templates === 'object' ? data.templates : null;
-  if (!templates) { addLog('[Macro Manager] Import failed: that file is not a template export.'); return; }
+  let templates = null;
+  if (data.templates && typeof data.templates === 'object') {
+    templates = data.templates;
+  } else if (Array.isArray(data.blocks)) {
+    const name = (typeof data.name === 'string' && data.name.trim()) ? data.name.trim() : 'imported_template';
+    templates = { [name]: { name, blocks: data.blocks } };
+  }
+  if (!templates || Object.keys(templates).length === 0) {
+    addLog('[Macro Manager] Import failed: that file is not a template export.');
+    return;
+  }
   let existing = [];
   try { existing = await pywebview.api.list_templates(); } catch (e) {}
   let added = 0;

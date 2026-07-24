@@ -14,10 +14,23 @@ def _safe_name(name: str) -> str:
     return cleaned or "template"
 
 
+def is_template_file(filename: str) -> bool:
+    """Verifica se o arquivo JSON e um template individual valido (contem 'blocks')."""
+    if not filename.endswith(".json"):
+        return False
+    path = os.path.join(TEMPLATES_DIR, filename)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return isinstance(data, dict) and "blocks" in data
+    except Exception:
+        return False
+
+
 def list_templates() -> list:
     if not os.path.isdir(TEMPLATES_DIR):
         return []
-    return sorted(f[:-5] for f in os.listdir(TEMPLATES_DIR) if f.endswith(".json"))
+    return sorted(f[:-5] for f in os.listdir(TEMPLATES_DIR) if is_template_file(f))
 
 
 def save_template(name: str, blocks: list) -> str:
@@ -33,7 +46,10 @@ def load_template(name: str) -> dict:
     path = os.path.join(TEMPLATES_DIR, f"{_safe_name(name)}.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            if isinstance(data, dict) and "blocks" in data:
+                return data
+            return {"name": name, "blocks": []}
     except (OSError, json.JSONDecodeError):
         return {"name": name, "blocks": []}
 
