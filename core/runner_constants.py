@@ -368,6 +368,14 @@ TEAM_PANEL_TIMEOUT = 5.0
 # loss, confirmed from a real report) -- retried instead, up to this many
 # attempts, before actually giving up and failing Pre Start over it.
 TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS = 3
+# Clicking a Loadout row makes the Confirm button SLIDE UP into place, and
+# it's still animating for a beat afterward -- searching for "confirm"
+# immediately finds it mid-slide, so the click lands where the button WAS a
+# fraction of a second ago instead of where it comes to rest, missing it
+# entirely (verified from a real test: a 2s wait here fixed it). Settle here
+# first so the button has stopped moving before it's located, so the found
+# position is the final one.
+TEAM_LOADOUT_CONFIRM_SETTLE = 2.0
 TEAM_LOADOUT_CLICK_1 = (800, 324)  # Loadout 1's row
 TEAM_LOADOUT_ROW_HEIGHT = 126
 TEAM_LOADOUT_MAX_SUPPORTED = 8

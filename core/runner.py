@@ -1612,6 +1612,10 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                            f'(attempt {attempt}/{TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS}).')
             self._mouse.click(left + row1_x, top + row_y)
             self._log(f"[Macro] Clicked Loadout {team_num}.")
+            # Let the Confirm button finish sliding up before locating it --
+            # otherwise it's found mid-animation and the click lands where it
+            # was, not where it settles (see TEAM_LOADOUT_CONFIRM_SETTLE).
+            time.sleep(TEAM_LOADOUT_CONFIRM_SETTLE)
             if self._checkpoint(stop_event):
                 return False
             try:
