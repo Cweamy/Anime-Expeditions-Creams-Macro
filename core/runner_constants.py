@@ -38,6 +38,14 @@ MAP_SELECT_RETRY_ATTEMPTS = 3
 # bad match doesn't end an unattended overnight run.
 TASK_RECOVERY_ATTEMPTS = 3
 
+# Fail-safe: losing the SAME map this many times in a row usually means
+# something's actually wrong (a bad team loadout, a stuck client, a map
+# that's genuinely too hard) rather than plain bad luck -- rather than just
+# keep feeding it more attempts, the run leaves the stage and forces a full
+# Roblox restart (the same deep-link rejoin a detected disconnect already
+# uses, see _attempt_rejoin) before retrying the task fresh.
+MAX_CONSECUTIVE_LOSSES_SAME_MAP = 3
+
 # The Story card's position on the gamemode-select screen (after Play) is
 # fixed -- unlike Play itself, nothing here needs to be found by image
 # search, just clicked. Raid's card sits somewhere else on the same panel;
@@ -353,6 +361,13 @@ AUTO_UPGRADE_CLICK_SETTLE = 0.6
 # then Loadout 1-3 are stacked rows at a fixed position. 4+ exist in
 # Creation's picker but aren't reachable yet without scrolling.
 TEAM_PANEL_TIMEOUT = 5.0
+# Clicking the Loadout row is what actually equips the team for the match --
+# if Confirm never shows up afterward (a dropped click, same flakiness class
+# as START_GAME_CLICK_RETRY_ATTEMPTS/SOLO_START_RETRY_ATTEMPTS), the run
+# must NOT just carry on into Start Game with no team applied (a guaranteed
+# loss, confirmed from a real report) -- retried instead, up to this many
+# attempts, before actually giving up and failing Pre Start over it.
+TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS = 3
 TEAM_LOADOUT_CLICK_1 = (800, 324)  # Loadout 1's row
 TEAM_LOADOUT_ROW_HEIGHT = 126
 TEAM_LOADOUT_MAX_SUPPORTED = 8

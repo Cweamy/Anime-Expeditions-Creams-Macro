@@ -114,6 +114,12 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # -- both reset alongside the battle block state in _play_one_match.
         self._expedition_extract_count = 0
         self._expedition_extract_accept_at = 1
+        # Consecutive-loss fail-safe (see MAX_CONSECUTIVE_LOSSES_SAME_MAP):
+        # how many losses in a row on _consecutive_loss_map so far -- reset
+        # to 0 on any win, or restarted at 1 for a new map, so only a real
+        # unbroken streak on the SAME map ever counts toward it.
+        self._consecutive_losses = 0
+        self._consecutive_loss_map = None
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -139,6 +145,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             self._expedition_camera_o_ms = 100.0
         self._current_hwnd = None
         self._left_stage_this_run = False
+        self._consecutive_losses = 0
+        self._consecutive_loss_map = None
         self._thread = threading.Thread(
             target=self._run,
             args=(hwnd_getter, get_tasks, self._stop_event, scroll_power, coords, scroll_nudges, default_walk_paths,
@@ -624,6 +632,24 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                     break
                 duration = self._format_duration(time.time() - battle_started)
 
+                # Consecutive-loss fail-safe: a genuine unbroken loss streak
+                # on THIS map (not just losses somewhere in the run) usually
+                # means something's actually wrong -- a bad loadout, a stuck
+                # client, a map that's too hard -- rather than plain bad
+                # luck, so it's worth a full Roblox restart instead of just
+                # keep feeding it more attempts. Any win, or a loss on a
+                # DIFFERENT map (Challenge/task interleaving can switch maps
+                # between repeats), resets the count.
+                if result == "loss" and self._consecutive_loss_map == map_name:
+                    self._consecutive_losses += 1
+                elif result == "loss":
+                    self._consecutive_loss_map = map_name
+                    self._consecutive_losses = 1
+                else:
+                    self._consecutive_losses = 0
+                    self._consecutive_loss_map = None
+                restart_needed = self._consecutive_losses >= MAX_CONSECUTIVE_LOSSES_SAME_MAP
+
                 is_last_repeat = repeat_index == repeat_total
                 # Challenge used to only ever get checked once, right at the
                 # very start of a Start press, before the Task Queue even
@@ -638,13 +664,46 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 challenge_wants_in = (not is_last_repeat) and self._challenge_has_ready_stage()
                 if not self._handle_match_result(hwnd, stop_event, task, result, duration,
                                                   reward_region, stats_region, webhook,
-                                                  repeat=(not is_last_repeat) and not challenge_wants_in):
+                                                  repeat=(not is_last_repeat) and not challenge_wants_in
+                                                  and not restart_needed):
                     if stop_event.is_set():
                         return False
                     task_failed = True
                     break
                 if self._checkpoint(stop_event):
                     return False
+
+                if restart_needed:
+                    self._log(f'[Macro] Lost {self._consecutive_losses}x in a row on "{map_name}" -- '
+                               f'restarting Roblox as a fail-safe.')
+                    screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "consecutive_loss_restart")
+                    self._send_event_webhook(
+                        webhook, task, "Consecutive Losses -- Restarting Roblox",
+                        f'Lost {self._consecutive_losses}x in a row on "{map_name}" -- restarting Roblox '
+                        f"before retrying.", 0xE05A6D, screenshot_path)
+                    self._consecutive_losses = 0
+                    self._consecutive_loss_map = None
+                    if not self._attempt_rejoin(hwnd, stop_event):
+                        if stop_event.is_set():
+                            return False
+                        task_failed = True
+                        break
+                    if self._current_hwnd and wm.is_window(self._current_hwnd):
+                        hwnd = self._current_hwnd
+                    if not is_last_repeat:
+                        # Leave Stage above already left the stage entirely
+                        # (repeat=False), and the restart just left the
+                        # lobby fresh too -- re-enter the task from scratch
+                        # exactly like the very first repeat did, same as
+                        # the Challenge-interleave case right below.
+                        if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords,
+                                                      scroll_power, scroll_nudges, webhook):
+                            if stop_event.is_set():
+                                return False
+                            task_failed = True
+                            break
+                        fresh_entry = True
+                    continue
 
                 if challenge_wants_in:
                     self._log(f'[Macro] Challenge stage ready -- pausing "{map_name}" to run it '
@@ -777,10 +836,9 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             elif stage in SPECIAL_STAGES_NO_DIFFICULTY:
                 self._log(f'[Macro] "{stage}" is locked to Hard in-game -- no difficulty click needed.')
             else:
-                # The stage-detail panel is still animating in right after
-                # the stage-row click -- clicking Normal/Hard immediately
-                # landed before the panel (and its toggle) had settled.
-                time.sleep(DIFFICULTY_CLICK_DELAY)
+                # _select_stage already settled (DIFFICULTY_CLICK_DELAY)
+                # right after its own double-click, so the panel/toggle is
+                # done animating in by the time we get here.
                 self._select_difficulty(hwnd, task.get("difficulty") or "Normal", coords)
         if self._checkpoint(stop_event):
             return False
@@ -1395,7 +1453,12 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # exact state it expects and produce exactly the kind of "it bugs
         # out" behavior this was reported as.
         if first_repeat:
-            self._apply_team_loadout(hwnd, stop_event, task)
+            if not self._apply_team_loadout(hwnd, stop_event, task):
+                if stop_event.is_set():
+                    return False
+                self._log("[Macro] Team Loadout didn't actually apply -- failing this match setup so it "
+                           "retries from the lobby instead of starting a round with no team equipped.")
+                return False
         else:
             self._log("[Macro] Repeat of the same stage -- skipping Team Loadout (already applied on entry).")
         if self._checkpoint(stop_event):
@@ -1412,38 +1475,48 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             return False
         return True
 
-    def _apply_team_loadout(self, hwnd, stop_event: threading.Event, task: dict) -> None:
+    def _apply_team_loadout(self, hwnd, stop_event: threading.Event, task: dict) -> bool:
         """Presses H to open the team-select panel, waits for it to
         actually open, clicks the task's Macro Operation template's
         configured Team Loadout slot (1-8 in Creation's picker, though only
         1-3 are positioned here -- 4+ need a scroll method not implemented
         yet), clicks Confirm, picks Include/Exclude for equipment, then
-        presses H again to close the panel. Best-effort like every other
-        Pre Start step: no team set, an out-of-range slot, or any of the
-        expected images never showing up all just skip (the rest of the
-        sequence included) with a log line instead of failing the run."""
+        presses H again to close the panel.
+
+        No team configured, an unrecognized/out-of-range slot number (a
+        template config problem retrying can't fix either) still just skip
+        with a log line and report success -- there was never a team to
+        apply. But once a team num IS valid, actually equipping it is not
+        optional: skipping a genuine failure (panel never opened, Confirm
+        never showed up) used to just log and move on, which silently
+        started the round with no team equipped -- a guaranteed loss
+        (confirmed from a real report). Those cases now report failure so
+        the caller (_run_prestart) fails this match setup instead of
+        starting it, sending the run back through the normal recover-to-
+        lobby-and-retry path rather than straight into a loss.
+        """
         macro_name = task.get("macro")
         if not macro_name:
-            return
+            return True
         from . import templates as tpl
         data = tpl.load_template(macro_name)
         blocks = data.get("blocks") or {}
         if isinstance(blocks, list):
-            return  # old-format template -- same as _run_prestart_blocks
+            return True  # old-format template -- same as _run_prestart_blocks
         team = blocks.get("team") or ""
         if not team:
-            return
+            return True
         equipment = blocks.get("equipment") if blocks.get("equipment") in ("include", "exclude") else "include"
 
         try:
             team_num = int(team)
         except (TypeError, ValueError):
             self._log(f'[Macro] Team Loadout "{team}" isn\'t a recognized slot number -- skipping.')
-            return
+            return True
         if not (1 <= team_num <= TEAM_LOADOUT_MAX_SUPPORTED):
             self._log(f'[Macro] Team Loadout {team_num} needs scrolling to reach (only 1-'
                        f'{TEAM_LOADOUT_MAX_SUPPORTED} are positioned so far) -- skipping.')
-            return
+            return True
 
         self._log(f"[Macro] Applying Team Loadout {team_num} (equipment: {equipment})...")
         self._set_status(action=f"Applying Team Loadout {team_num}...")
@@ -1453,14 +1526,14 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             team_match = vision.wait_for_image(hwnd, "team", timeout=TEAM_PANEL_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] Can't confirm the team panel opened: {exc}")
-            return
+            return False
         if team_match is None:
             if not stop_event.is_set():
                 self._log(f'[Macro] "team" not found within {TEAM_PANEL_TIMEOUT:.0f}s after pressing H -- '
-                           f'the team panel never opened, skipping Team Loadout.')
-            return
+                           f'the team panel never opened. Team Loadout {team_num} was NOT applied.')
+            return False
         try:
-            self._apply_team_loadout_panel(hwnd, stop_event, team_match, team_num, equipment)
+            return self._apply_team_loadout_panel(hwnd, stop_event, team_match, team_num, equipment)
         finally:
             # Every early-return inside the panel flow (scroll landing wrong,
             # Confirm/equipment images never showing up, a checkpoint stop)
@@ -1477,14 +1550,14 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             self._log("[Macro] Closed the Team Loadout panel.")
 
     def _apply_team_loadout_panel(self, hwnd, stop_event: threading.Event, team_match, team_num: int,
-                                    equipment: str) -> None:
+                                    equipment: str) -> bool:
         vision.click_match(self._mouse, hwnd, team_match)
         # The Loadout list animates in right after this click -- without a
         # settle, the very next click (the Loadout row itself) can land
         # before it's actually finished sliding into place.
         time.sleep(SETTLE_DELAY)
         if self._checkpoint(stop_event):
-            return
+            return False
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         row1_x, row1_y = self._cxy("team_loadout")  # Loadout 1's row (Settings > Debug > Macro Coordinates)
@@ -1501,7 +1574,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             self._mouse.drag(anchor_x, anchor_y, anchor_x, anchor_y + scroll_amount)
             time.sleep(TEAM_LOADOUT_SCROLL_SETTLE)
             if self._checkpoint(stop_event):
-                return
+                return False
 
         if team_num == 7:
             row_y = TEAM_LOADOUT_SLOT_7_Y
@@ -1521,30 +1594,53 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             row_y = row1_y + (team_num - 4) * int(self._coords["team_loadout_row_height"])
         else:
             row_y = row1_y + (team_num - 1) * int(self._coords["team_loadout_row_height"])
-        self._mouse.click(left + row1_x, top + row_y)
-        self._log(f"[Macro] Clicked Loadout {team_num}.")
-        if self._checkpoint(stop_event):
-            return
 
-        try:
-            confirm_match = vision.wait_for_image(hwnd, "confirm", timeout=TEAM_PANEL_TIMEOUT, stop_event=stop_event)
-        except vision.TemplateNotFound as exc:
-            self._log(f"[Macro] Can't confirm the Loadout Confirm button appeared: {exc}")
-            return
+        # Clicking the Loadout row is what actually equips the team --
+        # Confirm not showing up afterward used to just skip the rest of
+        # this sequence, which silently entered the match with the
+        # PREVIOUS match's team (or none) still equipped, a guaranteed
+        # loss. Retried here instead (re-clicking the row each attempt, not
+        # just re-waiting -- a dropped click is the likely cause, same as
+        # every other retried click site in this codebase), and only after
+        # every attempt fails does this actually give up.
+        confirm_match = None
+        for attempt in range(1, TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS + 1):
+            if self._checkpoint(stop_event):
+                return False
+            if attempt > 1:
+                self._log(f'[Macro] "confirm" didn\'t show up -- retrying Loadout {team_num} '
+                           f'(attempt {attempt}/{TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS}).')
+            self._mouse.click(left + row1_x, top + row_y)
+            self._log(f"[Macro] Clicked Loadout {team_num}.")
+            if self._checkpoint(stop_event):
+                return False
+            try:
+                confirm_match = vision.wait_for_image(
+                    hwnd, "confirm", timeout=TEAM_PANEL_TIMEOUT, stop_event=stop_event)
+            except vision.TemplateNotFound as exc:
+                self._log(f"[Macro] Can't confirm the Loadout Confirm button appeared: {exc}")
+                return False
+            if confirm_match is not None:
+                break
+            if stop_event.is_set():
+                return False
         if confirm_match is None:
-            if not stop_event.is_set():
-                self._log(f'[Macro] "confirm" not found within {TEAM_PANEL_TIMEOUT:.0f}s after picking the '
-                           f'loadout row -- stopping Team Loadout here.')
-            return
+            self._log(f'[Macro] "confirm" never showed up after {TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS} attempts -- '
+                       f'Team Loadout {team_num} was NOT applied.')
+            return False
         vision.click_match(self._mouse, hwnd, confirm_match)
         self._log("[Macro] Clicked Confirm.")
         if self._checkpoint(stop_event):
-            return
+            return False
 
         # Whichever of include.png/exclude.png matches the configured
         # choice -- optional like nav_disband and friends: if that specific
         # image hasn't been added yet, this just logs and moves on to
         # closing the panel instead of failing the whole sequence over it.
+        # The team itself is already equipped by this point (Confirm just
+        # landed) -- unlike a missing Confirm, a missing equipment choice
+        # doesn't leave the match with the wrong team, just the wrong
+        # equipment setting, so it stays best-effort.
         try:
             equip_match = vision.wait_for_image(hwnd, equipment, timeout=TEAM_PANEL_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound:
@@ -1561,6 +1657,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             time.sleep(0.5)
         elif not stop_event.is_set():
             self._log(f'[Macro] "{equipment}" option never showed up -- skipping the equipment choice.')
+        return True
 
 
 
@@ -2266,10 +2363,20 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         idx = order.index(stage)
         x = base[0]
         y = base[1] + idx * row_height
-        self._log(f'[Macro] Stage screen open -- clicking {label} "{stage}" at ({x}, {y}).')
+        self._log(f'[Macro] Stage screen open -- double-clicking {label} "{stage}" at ({x}, {y}).')
         self._set_status(action=f'Clicking {label} "{stage}"...')
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._mouse.click(left + x, top + y)
+        # A single click was sometimes not registering as the row's own
+        # "selected" state (confirmed from real reports on both Story and
+        # Raid) -- a double-click reliably does. The stage-detail panel
+        # (Story's difficulty toggle, or straight to the Select Stage
+        # confirm button for Raid/Infinite/Mastery, which have no
+        # difficulty toggle at all) then animates in, same as the map click
+        # before it -- settled here UNCONDITIONALLY, not just on the
+        # difficulty-click path, since Raid/locked stages used to go
+        # straight from this click into Select Stage with no wait at all.
+        self._mouse.double_click(left + x, top + y)
+        time.sleep(DIFFICULTY_CLICK_DELAY)
         return True
 
     def _ensure_lobby(self, hwnd, stop_event: threading.Event) -> bool:
