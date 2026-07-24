@@ -582,10 +582,23 @@ class Api:
     def set_macro_coord(self, key: str, value: int) -> dict:
         if key not in MACRO_COORD_DEFAULTS:
             return {"ok": False}
-        data = cfg.load()
-        data[key] = int(value)
-        cfg.save(data)
+        cfg.update({key: int(value)})  # atomic -- see cfg.update (fixes coords not saving)
         return {"ok": True}
+
+    def set_macro_coords(self, changes: dict) -> dict:
+        """Save several coordinate keys at ONCE (the picker sets x, y and
+        row-height together) -- one atomic write instead of three racing
+        ones, which is what was losing coordinates."""
+        clean = {}
+        for key, value in (changes or {}).items():
+            if key in MACRO_COORD_DEFAULTS:
+                try:
+                    clean[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+        if clean:
+            cfg.update(clean)
+        return {"ok": True, "saved": list(clean)}
 
     def reset_macro_coords(self) -> dict:
         data = cfg.load()
@@ -921,9 +934,7 @@ class Api:
         return paths.list_paths()
 
     def set_setting(self, key: str, value) -> dict:
-        data = cfg.load()
-        data[key] = value
-        cfg.save(data)
+        cfg.update({key: value})  # atomic -- see cfg.update (fixes settings not saving)
         if key == "action_delay_ms":
             # Applied live -- the runner's Mouse/Keyboard read this at
             # every action (see core.pacing), so a mid-run change takes

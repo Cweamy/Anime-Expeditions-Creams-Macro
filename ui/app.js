@@ -2496,6 +2496,18 @@ async function setMacroCoord(key, value) {
   try { await pywebview.api.set_macro_coord(key, n); } catch (e) {}
 }
 
+// Several coordinate keys in one atomic write (see set_macro_coords) -- the
+// picker sets x/y (and row-height) together, and separate calls raced and
+// lost keys. Values coerced to ints; NaN entries dropped.
+async function saveMacroCoords(changes) {
+  const clean = {};
+  for (const [k, v] of Object.entries(changes)) {
+    const n = parseInt(v);
+    if (!Number.isNaN(n)) clean[k] = n;
+  }
+  try { await pywebview.api.set_macro_coords(clean); } catch (e) {}
+}
+
 async function resetMacroCoords() {
   try { await pywebview.api.reset_macro_coords(); } catch (e) {}
   await loadMacroCoords();
@@ -3318,8 +3330,8 @@ function applyPlaceUnitPosition() {
         puState.coordFirst = { x: puState.markX, y: puState.markY };
         if (xEl) xEl.value = puState.markX;
         if (yEl) yEl.value = puState.markY;
-        setMacroCoord(`${p}_x`, puState.markX);
-        setMacroCoord(`${p}_y`, puState.markY);
+        // Bulk atomic save -- x and y in one write, no race (see set_macro_coords).
+        saveMacroCoords({ [`${p}_x`]: puState.markX, [`${p}_y`]: puState.markY });
         puState.coordStep = 1;
         readout.textContent = `Row 1 set (X ${puState.markX}, Y ${puState.markY}). Now click the SECOND row down.`;
         return;
@@ -3328,7 +3340,7 @@ function applyPlaceUnitPosition() {
       const h = Math.abs(puState.markY - puState.coordFirst.y);
       const hEl = document.getElementById(`coord-${puState.coordHeightKey}`);
       if (hEl) hEl.value = h;
-      setMacroCoord(puState.coordHeightKey, h);
+      saveMacroCoords({ [puState.coordHeightKey]: h });
       // Preview every derived row so the math is visible before you trust it.
       const rows = [];
       for (let i = 0; i < 7; i++) rows.push({ x: puState.coordFirst.x, y: puState.coordFirst.y + i * h, label: `${i + 1}` });
@@ -3342,8 +3354,7 @@ function applyPlaceUnitPosition() {
     const yEl = document.getElementById(`coord-${p}_y`);
     if (xEl) xEl.value = puState.markX;
     if (yEl) yEl.value = puState.markY;
-    setMacroCoord(`${p}_x`, puState.markX);
-    setMacroCoord(`${p}_y`, puState.markY);
+    saveMacroCoords({ [`${p}_x`]: puState.markX, [`${p}_y`]: puState.markY });
     readout.textContent = `X ${puState.markX}, Y ${puState.markY}`;
     return;
   }
