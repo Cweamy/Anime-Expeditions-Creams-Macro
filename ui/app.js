@@ -2803,7 +2803,22 @@ function renderWalkControls(b) {
     <button type="button" class="block-mod-btn ${isRecording ? 'on' : ''}" onclick="toggleRecordPath('${b.id}')">${isRecording ? 'Stop' : 'Record'}</button>
     <select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'path', this.value)">
       <option value="">Pick saved path...</option>${options}
-    </select>`;
+    </select>
+    ${sprintToggle(b)}`;
+}
+
+// Hold Left Shift for the whole walk -- for paths that only reach their spot
+// at sprint speed. Shared by both walk block types (see replay_events).
+function sprintToggle(b) {
+  return `<button type="button" class="block-mod-btn ${b.sprint ? 'on' : ''} tooltip-side" data-tooltip="Hold Left Shift while walking (sprint)" onclick="toggleSprint('${b.id}')">Sprint</button>`;
+}
+
+function toggleSprint(id) {
+  const loc = findBlockLocation(id);
+  if (!loc) return;
+  const block = creationPhases[loc.phase][loc.idx];
+  block.sprint = !block.sprint;
+  renderPhases();
 }
 
 // Walk Path block: Auto (the map's own default_walk_paths entry) or a
@@ -2824,7 +2839,7 @@ function renderWalkPathControls(b) {
       <button type="button" class="block-mod-btn ${isRecording ? 'on' : ''}" onclick="toggleRecordPath('${b.id}')">${isRecording ? 'Stop' : 'Record'}</button>
       <select class="block-input" style="width:auto;" onchange="setWalkPathPath('${b.id}', this.value)"><option value="">Pick saved path...</option>${options}</select>`;
   }
-  return modeSeg + customControls;
+  return modeSeg + customControls + sprintToggle(b);
 }
 
 function setWalkPathMode(id, mode) {
@@ -4097,6 +4112,7 @@ async function saveCurrentTemplate() {
     payload[phase] = creationPhases[phase].map(b => ({
       type: b.type, params: b.params, once: b.once, kind: b.kind, value: b.value, hotkey: b.hotkey,
       mode: b.mode, pathName: b.pathName, ignoreHighlight: b.ignoreHighlight, retryUntilPlaced: b.retryUntilPlaced,
+      sprint: b.sprint,
     }));
   });
   try {
@@ -4205,6 +4221,7 @@ function blockFromSaved(b) {
     block.mode = b.mode === 'custom' ? 'custom' : 'auto';
     block.pathName = b.pathName || '';
   }
+  if (b.type === 'walk_path' || b.type === 'walk') block.sprint = !!b.sprint;
   return block;
 }
 

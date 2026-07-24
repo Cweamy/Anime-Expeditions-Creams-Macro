@@ -192,7 +192,7 @@ def load_path(name: str) -> dict:
     return {"name": name, "events": []}
 
 
-def replay_events(events: list, keyboard, stop_event: threading.Event = None) -> None:
+def replay_events(events: list, keyboard, stop_event: threading.Event = None, sprint: bool = False) -> None:
     """Replays a recorded WASD event list through a Keyboard controller,
     sleeping between events to reproduce the original press/release timing
     (events are stored in recording order, each timestamped relative to
@@ -200,11 +200,19 @@ def replay_events(events: list, keyboard, stop_event: threading.Event = None) ->
     "Test Walking Path" to sanity-check a recorded path plays back the way
     it was walked, without needing a Custom Path block wired into a real run.
 
+    sprint=True holds Left Shift down for the WHOLE replay -- for maps whose
+    default walk was recorded/timed while sprinting (the path only reaches
+    its spot at sprint speed). Shift is released in the same finally as the
+    direction keys, so an interrupted replay never leaves it stuck.
+
     Always releases every watched key on the way out (including when
     stop_event cuts the replay short), so an interrupted test can't leave a
     direction stuck held down in the live game.
     """
+    from . import keys
     try:
+        if sprint:
+            keyboard.key_down(keys.VK_SHIFT)
         last_t = 0.0
         for ev in events:
             if stop_event is not None and stop_event.is_set():
@@ -223,3 +231,5 @@ def replay_events(events: list, keyboard, stop_event: threading.Event = None) ->
     finally:
         for vk in _WATCHED_KEYS.values():
             keyboard.key_up(vk)
+        if sprint:
+            keyboard.key_up(keys.VK_SHIFT)

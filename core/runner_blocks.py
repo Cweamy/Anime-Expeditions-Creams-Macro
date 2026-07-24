@@ -318,8 +318,9 @@ class BlockOps:
         if not events:
             self._log(f'{label}: path "{path_name}" has no recorded movement -- skipping.')
             return
-        walk_paths.replay_events(events, self._keyboard, stop_event)
-        self._log(f'{label}: walk finished.')
+        sprint = bool(block.get("sprint"))
+        walk_paths.replay_events(events, self._keyboard, stop_event, sprint=sprint)
+        self._log(f'{label}: walk finished{" (sprinting)" if sprint else ""}.')
 
     def _run_wait_wave_tick(self, hwnd, block: dict, block_num: int) -> bool:
         """Waits until the current wave has reached OR already passed the
@@ -594,8 +595,9 @@ class BlockOps:
         if not events:
             self._log(f'[Macro] Walk path "{path_name}" has no recorded movement -- skipping.')
             return
-        walk_paths.replay_events(events, self._keyboard, stop_event)
-        self._log("[Macro] Walk finished.")
+        sprint = bool(block.get("sprint"))
+        walk_paths.replay_events(events, self._keyboard, stop_event, sprint=sprint)
+        self._log(f'[Macro] Walk finished{" (sprinting)" if sprint else ""}.')
 
     def _release_quick_place_shift(self) -> None:
         if self._quick_place_shift_down:
