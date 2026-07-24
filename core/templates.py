@@ -15,7 +15,7 @@ def _safe_name(name: str) -> str:
 
 
 def is_template_file(filename: str) -> bool:
-    """Verifica se o arquivo JSON e um template individual valido (contem 'blocks' como lista)."""
+    """Check if the JSON file is a valid individual template (contains 'blocks' as a list)."""
     if not filename.endswith(".json"):
         return False
     path = os.path.join(TEMPLATES_DIR, filename)
