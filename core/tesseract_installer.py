@@ -15,6 +15,13 @@ import subprocess
 WINGET_PACKAGE_ID = "UB-Mannheim.TesseractOCR"
 INSTALL_TIMEOUT = 300.0  # winget downloads ~50MB -- generous for a slow connection
 
+# winget returns 0x8A15002B (unsigned: 2316632107) when the package is
+# already installed at its latest version and no update is available.
+# subprocess.run() on Windows reports this as either the unsigned uint32
+# or the signed int32 interpretation (-1978335189), depending on the
+# Python/OS combination -- both are checked.
+_NO_UPDATE_APPLICABLE = {0x8A15002B, -1978335189}
+
 
 def install_tesseract(log=None) -> bool:
     """Blocking -- run this off the UI thread. Returns whether the install
@@ -48,12 +55,17 @@ def install_tesseract(log=None) -> bool:
         return False
 
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
-    # winget returns 0 both for a fresh install AND for "already installed,
-    # nothing to do" -- either way tesseract.exe should now be reachable,
-    # so both count as success here.
-    if result.returncode != 0:
-        log(f"[Tesseract] winget install failed (exit {result.returncode}): {output or 'no output'}")
-        return False
 
-    log("[Tesseract] Installed successfully.")
-    return True
+    # winget returns 0 for a fresh install. 0x8A15002B means "already
+    # installed, no update available" -- tesseract.exe is already on disk,
+    # so that counts as success too.
+    if result.returncode == 0:
+        log("[Tesseract] Installed successfully.")
+        return True
+
+    if result.returncode in _NO_UPDATE_APPLICABLE:
+        log("[Tesseract] Already installed and up to date.")
+        return True
+
+    log(f"[Tesseract] winget install failed (exit {result.returncode}): {output or 'no output'}")
+    return False

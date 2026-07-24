@@ -5,26 +5,26 @@ from core import settings
 
 @pytest.fixture
 def mock_settings_file(tmp_path, monkeypatch):
-    # Redireciona SETTINGS_FILE para um diretório temporário isolado
+    # Isolate settings.json to a temporary directory for each test
     settings_path = str(tmp_path / "settings.json")
     monkeypatch.setattr(settings, "SETTINGS_FILE", settings_path)
     return settings_path
 
 
 def test_load_non_existent_file(mock_settings_file):
-    # Deve retornar um dicionário vazio se o arquivo de configurações não existir
+    # Returns an empty dict if the settings file does not exist yet
     assert settings.load() == {}
 
 
 def test_save_and_load_roundtrip(mock_settings_file):
-    # Deve salvar e carregar os dados das configurações corretamente
+    # Persists and reloads configuration data correctly
     data = {"theme": "dark", "action_delay_ms": 100}
     settings.save(data)
     assert settings.load() == data
 
 
 def test_update_merge(mock_settings_file):
-    # Deve mesclar novas chaves mantendo as existentes
+    # Merges new key-value pairs into existing settings
     settings.save({"theme": "dark", "action_delay_ms": 100})
     result = settings.update({"action_delay_ms": 200, "start_minimized": True})
 
@@ -34,7 +34,7 @@ def test_update_merge(mock_settings_file):
 
 
 def test_load_corrupted_json(mock_settings_file):
-    # Deve tratar erro de JSON corrombido retornando dicionário vazio sem quebrar
+    # Handles JSON parse errors gracefully by returning an empty dict
     with open(mock_settings_file, "w", encoding="utf-8") as f:
         f.write("{invalid json content")
 
@@ -42,7 +42,7 @@ def test_load_corrupted_json(mock_settings_file):
 
 
 def test_concurrent_updates(mock_settings_file):
-    # Deve garantir integridade nas atualizações concorrentes utilizando o lock interno
+    # Verifies thread safety during concurrent update() calls
     settings.save({"counter": 0})
 
     def worker(key, value):
@@ -58,6 +58,6 @@ def test_concurrent_updates(mock_settings_file):
         t.join()
 
     result = settings.load()
-    assert len(result) == 11  # counter + 10 novas chaves
+    assert len(result) == 11  # counter + 10 new keys
     for i in range(10):
         assert result[f"key_{i}"] == i
