@@ -3490,6 +3490,7 @@ async function refreshImageManagerData() {
   try {
     const result = await pywebview.api.list_vision_templates();
     imState.data = (result && result.ok) ? result.categories : [];
+    imState.defaultThreshold = (result && result.default_threshold) || 0.90;
   } catch (e) {
     imState.data = [];
   }
@@ -3575,6 +3576,43 @@ function renderImageLibrary() {
     head.appendChild(add);
     card.appendChild(head);
 
+    // Match-sensitivity row: a slider + readout for this name's threshold.
+    // Lower = looser (matches on setups where the button renders a bit
+    // differently), higher = stricter (fewer false matches). Saved and
+    // applied live via set_image_threshold; a Reset chip clears the
+    // override back to the global default.
+    const defaultT = imState.defaultThreshold ?? 0.90;
+    const curT = (n.threshold ?? defaultT);
+    const thr = document.createElement('div');
+    thr.className = 'im-card-threshold';
+    const thrLabel = document.createElement('span');
+    thrLabel.className = 'im-thr-label';
+    thrLabel.textContent = 'Match ≥';
+    const slider = document.createElement('input');
+    slider.type = 'range'; slider.min = '0.50'; slider.max = '1.00'; slider.step = '0.01';
+    slider.value = curT.toFixed(2); slider.className = 'im-thr-slider';
+    const val = document.createElement('span');
+    val.className = 'im-thr-val';
+    val.textContent = curT.toFixed(2);
+    if (Math.abs(curT - defaultT) > 1e-6) val.classList.add('custom');
+    const reset = document.createElement('span');
+    reset.className = 'im-thr-reset';
+    reset.textContent = 'default';
+    reset.title = `Reset to the default (${defaultT.toFixed(2)})`;
+    slider.addEventListener('input', () => {
+      val.textContent = Number(slider.value).toFixed(2);
+      val.classList.toggle('custom', Math.abs(Number(slider.value) - defaultT) > 1e-6);
+    });
+    slider.addEventListener('change', () => saveImageThreshold(n.name, Number(slider.value)));
+    reset.addEventListener('click', () => {
+      slider.value = defaultT.toFixed(2);
+      val.textContent = defaultT.toFixed(2);
+      val.classList.remove('custom');
+      saveImageThreshold(n.name, defaultT);
+    });
+    thr.appendChild(thrLabel); thr.appendChild(slider); thr.appendChild(val); thr.appendChild(reset);
+    card.appendChild(thr);
+
     const thumbs = document.createElement('div');
     thumbs.className = 'im-thumbs';
     for (const img of n.images) {
@@ -3637,6 +3675,19 @@ async function deleteTemplateImage(name, file, el) {
 // hop back. The modal stays open throughout (the game just paints over it
 // for a moment). prefillName comes from a card's "+" button -- straight to
 // cropping a new variant of that specific name.
+// Save a per-image match threshold (Image Manager slider). Updates imState
+// so the value survives a re-render without a full reload, and applies live.
+async function saveImageThreshold(name, value) {
+  try {
+    await pywebview.api.set_image_threshold(name, value);
+    for (const cat of imState.data || []) {
+      const entry = (cat.names || []).find(n => n.name === name);
+      if (entry) entry.threshold = value;
+    }
+    addLog(`[Image Manager] "${name}" match sensitivity set to ${Number(value).toFixed(2)}.`);
+  } catch (e) {}
+}
+
 async function startImageCapture(prefillName) {
   const returnScreen = currentScreen === 'dashboard' ? lastNonDashboardScreen : currentScreen;
   // See usePlaceUnitRobloxScreen -- the game must actually show during

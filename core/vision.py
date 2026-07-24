@@ -83,6 +83,40 @@ MAPS_DIR = os.path.join(constants.ASSETS_DIR, "maps")
 # noise to tolerate.
 DEFAULT_THRESHOLD = 0.90
 
+# Per-search-name threshold overrides (Settings > General > Image Manager --
+# the sensitivity slider on each name). Lets someone lower the bar for a
+# button that renders slightly differently on their setup so it still
+# matches, or raise it for one that false-matches, WITHOUT editing code or
+# touching the global default. Loaded from settings at startup (see main's
+# set_image_thresholds) and consulted by the find_* functions below whenever
+# the caller didn't pass an explicit threshold.
+_name_thresholds = {}
+
+
+def set_name_thresholds(mapping: dict) -> None:
+    """Replace the per-name threshold overrides (main loads these from
+    settings). Values outside a sane 0.1-1.0 band are ignored."""
+    global _name_thresholds
+    clean = {}
+    for name, val in (mapping or {}).items():
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            continue
+        if 0.1 <= v <= 1.0:
+            clean[str(name)] = v
+    _name_thresholds = clean
+
+
+def _effective_threshold(name: str, threshold: float) -> float:
+    """The threshold to actually use for `name`: a per-name override when the
+    caller left threshold at the default, otherwise the caller's explicit
+    value (an explicit non-default threshold always wins -- those are
+    deliberate, e.g. MAX_PLACEMENT_THRESHOLD)."""
+    if threshold == DEFAULT_THRESHOLD:
+        return _name_thresholds.get(name, DEFAULT_THRESHOLD)
+    return threshold
+
 # Some setups render this game's UI at a slightly different pixel size than
 # whatever a reference image was captured at, even at 100% Windows display
 # scale (confirmed against a real report: same 100% scale + a restart on
@@ -689,7 +723,7 @@ def find_image(hwnd: int, name: str, region: tuple = None, threshold: float = DE
     haystack = capture_game_gray(hwnd, region)
     if haystack is None:
         return None
-    match = find_in_gray_multiscale(haystack, name, template_dir, threshold)
+    match = find_in_gray_multiscale(haystack, name, template_dir, _effective_threshold(name, threshold))
     if match is None:
         return None
     if region is not None:
@@ -724,6 +758,7 @@ def find_bottommost_image(hwnd: int, name: str, region: tuple = None, threshold:
     haystack = capture_game_gray(hwnd, region)
     if haystack is None:
         return None
+    threshold = _effective_threshold(name, threshold)
     hh, hw = haystack.shape[:2]
     for template_gray, mask in templates:
         th, tw = template_gray.shape[:2]

@@ -303,6 +303,10 @@ class Api:
         if sys.platform != "darwin" and _cfg.get("flicker_free_capture", True):
             from core import vision
             vision.force_window_capture()
+        # Per-image match-threshold overrides (Image Manager sensitivity),
+        # applied before any search runs.
+        from core import vision as _vision
+        _vision.set_name_thresholds(_cfg.get("image_thresholds", {}))
         self.game_cutout = sys.platform != "darwin" and bool(_cfg.get("game_cutout", False))
         self.docker.cutout = self.game_cutout
         self._cutout_game_visible = False  # show_game/hide_game drive this; watchdog re-glues only while visible
@@ -1545,7 +1549,34 @@ class Api:
                     except OSError:
                         continue  # unreadable entry -- skip it rather than kill the whole listing
             categories.append({"key": key, "label": label, "names": names})
-        return {"ok": True, "categories": categories}
+        # Attach each name's current match threshold (its override, or the
+        # default) so the Image Manager can show/edit the sensitivity slider.
+        from core import vision
+        thresholds = cfg.load().get("image_thresholds", {})
+        default_t = vision.DEFAULT_THRESHOLD
+        for cat in categories:
+            for entry in cat["names"]:
+                entry["threshold"] = float(thresholds.get(entry["name"], default_t))
+        return {"ok": True, "categories": categories, "default_threshold": default_t}
+
+    def set_image_threshold(self, name: str, value) -> dict:
+        """Save a per-name match-threshold override (Image Manager slider)
+        and apply it live. value == the default (or None) clears the
+        override rather than storing a redundant entry."""
+        from core import vision
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return {"ok": False}
+        data = cfg.load()
+        thresholds = dict(data.get("image_thresholds", {}))
+        if abs(v - vision.DEFAULT_THRESHOLD) < 1e-6:
+            thresholds.pop(name, None)  # back to default -- don't persist it
+        else:
+            thresholds[name] = max(0.5, min(1.0, v))
+        cfg.update({"image_thresholds": thresholds})
+        vision.set_name_thresholds(thresholds)  # live, no restart
+        return {"ok": True, "threshold": thresholds.get(name, vision.DEFAULT_THRESHOLD)}
 
     def capture_image_search_screen(self) -> dict:
         # The Capture button: one frozen screenshot of the docked Roblox
