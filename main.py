@@ -293,7 +293,17 @@ class Api:
         # -- see core/dock.py's cutout notes. Captures must read the game's
         # own window contents in this mode (the screen shows our solid GUI
         # whenever the hole is closed), hence force_window_capture.
-        self.game_cutout = sys.platform != "darwin" and bool(cfg.load().get("game_cutout", False))
+        _cfg = cfg.load()
+        # Flicker-free capture: read the game via PrintWindow (its own backing
+        # store) instead of a screen BitBlt, which flashes the display white
+        # on some GPU/fullscreen-optimization setups. Default ON on Windows
+        # (the fix); the capture layer auto-falls-back to screen grab if
+        # PrintWindow renders black on a given setup (see
+        # vision.capture_game_gray). macOS already always uses window capture.
+        if sys.platform != "darwin" and _cfg.get("flicker_free_capture", True):
+            from core import vision
+            vision.force_window_capture()
+        self.game_cutout = sys.platform != "darwin" and bool(_cfg.get("game_cutout", False))
         self.docker.cutout = self.game_cutout
         self._cutout_game_visible = False  # show_game/hide_game drive this; watchdog re-glues only while visible
         # NOTE for future attempts: a LITERAL see-through slot was tried two
@@ -559,6 +569,7 @@ class Api:
             # dismissed either way, so it never reappears.
             "subscribe_prompted": data.get("subscribe_prompted", False),
             "game_cutout": data.get("game_cutout", False),
+            "flicker_free_capture": data.get("flicker_free_capture", True),
         }
 
     def get_tasks(self) -> list:

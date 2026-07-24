@@ -352,11 +352,46 @@ def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
     global _use_window_capture
     if _use_window_capture:
         gray = _capture_window_gray(hwnd, region)
-        if gray is not None:
+        if gray is not None and gray.any():
             return gray
-        # window path failed this tick -- fall through to the screen grab
-        # rather than returning nothing at all.
+        # Window capture came back black (or failed). Could be a genuine
+        # black moment (loading screen) OR a PrintWindow-dead setup. Check a
+        # screen grab: if IT has pixels, this setup can't use window capture
+        # -- switch back to screen grab permanently (the mirror of the
+        # switch below, so the flicker-free default is self-correcting).
+        screen_gray = _screen_grab_gray(hwnd, region)
+        if screen_gray is not None and screen_gray.any():
+            _use_window_capture = False
+            print("[vision] Window capture is coming back black but the screen grab renders -- "
+                  "this setup can't use window capture, switching to screen capture for this session "
+                  "(the screen may flicker; that's the trade-off).")
+            return screen_gray
+        return screen_gray if screen_gray is not None else gray
 
+    screen_gray = _screen_grab_gray(hwnd, region)
+    if screen_gray is not None and not screen_gray.any():
+        # Every pixel zero -- either a genuinely black moment (loading
+        # screens do that, harmless to double-check) or the dead-BitBlt
+        # NVIDIA case (see _use_window_capture). The tiebreaker is whether
+        # the window-content capture of this same moment has real pixels:
+        # if yes, the screen-grab path is dead on this setup -- adopt the
+        # window path for the rest of the session.
+        window_gray = _capture_window_gray(hwnd, region)
+        if window_gray is not None and window_gray.any():
+            _use_window_capture = True
+            print("[vision] Screen captures are coming back black but the window itself renders "
+                  "(BitBlt-dead setup, common with NVIDIA GPU scheduling/fullscreen optimizations) -- "
+                  "switching to window-content capture for this session.")
+            return window_gray
+    return screen_gray
+
+
+def _screen_grab_gray(hwnd: int, region: tuple = None):
+    """The mss screen-region grab (BitBlt), normalized to reference space.
+    The DEFAULT capture path historically, but the screen BitBlt is what
+    flashes the display white on some GPU/fullscreen-optimization setups --
+    which is why window-content capture (see capture_game_gray) is preferred
+    now. Kept as the fallback for setups where PrintWindow renders black."""
     import mss
     left, top, sx, sy = _window_geometry(hwnd)
     if region is not None:
@@ -380,21 +415,6 @@ def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
         # INTER_AREA: this is almost always a shrink, where it's the
         # recommended anti-aliasing choice (see _scaled_templates).
         gray = cv2.resize(gray, (out_w, out_h), interpolation=cv2.INTER_AREA)
-
-    if not gray.any():
-        # Every pixel zero -- either a genuinely black moment (loading
-        # screens do that, harmless to double-check) or the dead-BitBlt
-        # NVIDIA case (see _use_window_capture). The tiebreaker is whether
-        # the window-content capture of this same moment has real pixels:
-        # if yes, the screen-grab path is dead on this setup -- adopt the
-        # window path for the rest of the session.
-        window_gray = _capture_window_gray(hwnd, region)
-        if window_gray is not None and window_gray.any():
-            _use_window_capture = True
-            print("[vision] Screen captures are coming back black but the window itself renders "
-                  "(BitBlt-dead setup, common with NVIDIA GPU scheduling/fullscreen optimizations) -- "
-                  "switching to window-content capture for this session.")
-            return window_gray
     return gray
 
 

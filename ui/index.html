@@ -814,6 +814,17 @@
                off-center Continue means Extract is offered at the mirrored
                position -- fast, template-free) vs the original per-image
                template searches. See core/runner.py's EXP_COLOR_* block. -->
+          <!-- Windows only, applies at next launch: capture the game via
+               PrintWindow instead of a screen BitBlt, which flashes the
+               display white on some GPU setups. Default on. -->
+          <div class="setting-row" style="padding: 14px;" data-win-only>
+            <div>
+              <div class="setting-label">Flicker-Free Capture</div>
+              <div class="setting-desc">Read the game from its own window instead of grabbing the screen -- stops the white screen-flashing some setups get while the macro runs. Leave this on unless image detection stops working, then turn it off and restart. Applies after restarting the macro.</div>
+            </div>
+            <button id="toggle-flicker-free" class="toggle-switch" onclick="toggleSetting('flicker_free_capture', this)"></button>
+          </div>
+
           <!-- Windows-only, applies at next launch: Roblox glued BEHIND a
                literal hole cut in the GUI over the game slot instead of
                being reparented inside it -- see core/dock.py's cutout notes. -->

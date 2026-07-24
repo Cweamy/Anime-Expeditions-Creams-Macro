@@ -852,6 +852,12 @@ async function loadSettingsUI() {
     if (expColorEl) expColorEl.classList.toggle('on', s.expedition_color_buttons !== false);
     const expOEl = document.getElementById('setting-expedition-o-ms');
     if (expOEl) expOEl.value = s.expedition_camera_o_ms ?? 100;
+    const flickerEl = document.getElementById('toggle-flicker-free');
+    if (flickerEl) {
+      // Default on -- absent key means enabled.
+      flickerEl.classList.toggle('on', s.flicker_free_capture !== false);
+      if (IS_MAC) flickerEl.closest('.setting-row').style.display = 'none';
+    }
     const cutoutEl = document.getElementById('toggle-game-cutout');
     if (cutoutEl) {
       cutoutEl.classList.toggle('on', !!s.game_cutout);
