@@ -15,14 +15,16 @@ def _safe_name(name: str) -> str:
 
 
 def is_template_file(filename: str) -> bool:
-    """Verifica se o arquivo JSON e um template individual valido (contem 'blocks')."""
+    """Verifica se o arquivo JSON e um template individual valido (contem 'blocks' como lista)."""
     if not filename.endswith(".json"):
         return False
     path = os.path.join(TEMPLATES_DIR, filename)
+    if not os.path.isfile(path):
+        return False
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return isinstance(data, dict) and "blocks" in data
+            return isinstance(data, dict) and isinstance(data.get("blocks"), list)
     except Exception:
         return False
 
@@ -47,7 +49,7 @@ def load_template(name: str) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            if isinstance(data, dict) and "blocks" in data:
+            if isinstance(data, dict) and isinstance(data.get("blocks"), list):
                 return data
             return {"name": name, "blocks": []}
     except (OSError, json.JSONDecodeError):

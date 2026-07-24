@@ -4279,7 +4279,7 @@ async function importTemplates() {
   try { existing = await pywebview.api.list_templates(); } catch (e) {}
   let added = 0;
   for (const [name, t] of Object.entries(templates)) {
-    if (existing.includes(name) || !t || t.blocks == null) continue;
+    if (existing.includes(name) || !t || !Array.isArray(t.blocks)) continue;
     try { await pywebview.api.save_template(name, t.blocks); added++; } catch (e) {}
   }
   await refreshTemplateList();

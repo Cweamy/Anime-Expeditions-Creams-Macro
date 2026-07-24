@@ -51,6 +51,15 @@ class TestTemplatesValidation(unittest.TestCase):
         loaded = templates.load_template("invalid_template")
         self.assertEqual(loaded, {"name": "invalid_template", "blocks": []})
 
+    def test_load_template_rejects_non_list_blocks(self):
+        bad_path = os.path.join(self.test_dir, "bad_blocks.json")
+        with open(bad_path, "w", encoding="utf-8") as f:
+            json.dump({"name": "bad_blocks", "blocks": "not_a_list"}, f)
+
+        self.assertNotIn("bad_blocks", templates.list_templates())
+        loaded = templates.load_template("bad_blocks")
+        self.assertEqual(loaded, {"name": "bad_blocks", "blocks": []})
+
 
 if __name__ == "__main__":
     unittest.main()
