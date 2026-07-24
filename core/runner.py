@@ -1825,6 +1825,17 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             other_windows = wm.list_roblox_windows()
         except Exception:
             other_windows = []
+        # In cutout mode our OWN Roblox stays a top-level window, so it shows up
+        # in list_roblox_windows and this guard tripped on our own game (a
+        # rejoin would then never fire). Exclude the window we're farming
+        # (list_roblox_windows returns dicts) so only GENUINELY other Roblox
+        # windows (alt accounts) block a rejoin.
+        try:
+            _cur = self._hwnd_getter() if self._hwnd_getter else hwnd
+        except Exception:
+            _cur = hwnd
+        other_windows = [w for w in other_windows
+                         if (w.get("hwnd") if isinstance(w, dict) else w) not in (hwnd, _cur)]
         if other_windows:
             self._log("[Macro] Not attempting a deep-link rejoin -- other Roblox windows are open and it "
                        "would close them. Stopping instead.")

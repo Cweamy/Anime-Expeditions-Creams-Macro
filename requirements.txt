@@ -14,6 +14,13 @@ pytesseract    # OCR FALLBACK -- Windows uses the built-in Windows.Media.Ocr (se
 # build, so users install nothing extra for wave/stats reading.
 winsdk; sys_platform == "win32"
 
+# Windows only -- Windows.Graphics.Capture backend (core/wgc_capture.py). Reads
+# the game window's composed frames, which return REAL pixels where the mss/
+# BitBlt and PrintWindow paths come back BLACK on hardware-accelerated /
+# flip-model Roblox (the "every image search fails but the game is on screen"
+# reports). Prebuilt wheels, no compiler needed.
+windows-capture; sys_platform == "win32"
+
 # macOS only -- the Quartz/Cocoa/Accessibility bindings the mac input and
 # window backends are built on (core/_input_mac.py, core/window_mac.py).
 # Environment markers keep these out of Windows installs entirely.

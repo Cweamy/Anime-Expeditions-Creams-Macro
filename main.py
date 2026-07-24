@@ -320,7 +320,12 @@ class Api:
         # applied before any search runs.
         from core import vision as _vision
         _vision.set_name_thresholds(_cfg.get("image_thresholds", {}))
-        self.game_cutout = sys.platform != "darwin" and bool(_cfg.get("game_cutout", False))
+        # WGC capture (see core/wgc_capture.py) finds the game window by title,
+        # so it needs Roblox to stay a top-level window -- i.e. cutout mode, not
+        # the child-reparent dock. Forced on for Windows here so the black-frame
+        # fix works out of the box; a maintainer may prefer to gate this behind
+        # a "use_wgc_capture" setting instead of always forcing cutout.
+        self.game_cutout = sys.platform != "darwin"
         self.docker.cutout = self.game_cutout
         self._cutout_game_visible = False  # show_game/hide_game drive this; watchdog re-glues only while visible
         # NOTE for future attempts: a LITERAL see-through slot was tried two

@@ -383,6 +383,30 @@ def capture_game_gray(hwnd: int, region: tuple = None) -> np.ndarray:
     if THAT has real pixels for the same moment, all future captures
     switch to it for the rest of the session.
     """
+    # Windows.Graphics.Capture path (see core/wgc_capture.py): reads the
+    # window's composed frames and returns REAL pixels where BitBlt/PrintWindow
+    # both come back BLACK on hardware-accelerated / flip-model Roblox (the
+    # "every image search fails but the game is clearly on screen" reports).
+    # Cached background frame, normalized to reference dims and cropped to
+    # `region` exactly like the paths below. Falls through to the original
+    # capture on any miss (no frame yet, WGC unavailable), so nothing regresses
+    # on setups that never needed it. NOTE: WGC finds the window by title, so it
+    # requires the game to be a top-level window (cutout mode).
+    try:
+        from . import wgc_capture
+        _bgr = wgc_capture.get_grabber().frame()
+    except Exception:
+        _bgr = None
+    if _bgr is not None:
+        _gray = cv2.cvtColor(_bgr, cv2.COLOR_BGR2GRAY)
+        if _gray.shape[:2] != (config.FIXED_WIN_H, config.FIXED_WIN_W):
+            _gray = cv2.resize(_gray, (config.FIXED_WIN_W, config.FIXED_WIN_H),
+                               interpolation=cv2.INTER_AREA)
+        if region is not None:
+            rx, ry, rw, rh = (int(v) for v in region)
+            _gray = _gray[max(0, ry):ry + rh, max(0, rx):rx + rw]
+        return _gray
+
     global _use_window_capture
     if _use_window_capture:
         gray = _capture_window_gray(hwnd, region)
