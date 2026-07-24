@@ -1468,6 +1468,28 @@
     </div>
   </div>
 
+  <!-- ============ One-time subscribe prompt ============
+       Shown once per install (settings.subscribe_prompted, see app.js
+       showSubscribePrompt) -- the creator asking users to subscribe, with a
+       clear opt-out so it's never shown again either way. -->
+  <div id="subscribe-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-panel" style="width: 440px; max-width: 92vw;">
+      <div class="modal-head">
+        <span class="modal-title">Enjoying the macro?</span>
+      </div>
+      <div class="modal-body">
+        <p class="text-xs" style="color: var(--text-dim); line-height: 1.8; margin-bottom: 16px;">
+          This macro is free. If it's saving you time, subscribing to the creator's YouTube channel is a
+          big help -- it's the only thing asked in return. You'll only ever see this once.
+        </p>
+        <div class="flex items-center gap-2" style="justify-content: flex-end;">
+          <button type="button" class="rec-stop-btn" onclick="closeSubscribePrompt()">Maybe later</button>
+          <button type="button" class="pu-set-btn" onclick="subscribeAndClose()">Subscribe on YouTube</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============ Path-recording pop-out ============
        Floating pill shown while a walk path is being recorded (see
        toggleRecordPath). Recording jumps the UI to the Dashboard so the

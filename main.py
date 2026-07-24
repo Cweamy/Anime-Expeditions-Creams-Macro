@@ -552,6 +552,10 @@ class Api:
             # False until the welcome checklist's "Get Started" -- the UI
             # shows it exactly once per install (see app.js showOnboarding).
             "onboarding_done": data.get("onboarding_done", False),
+            # One-time "subscribe to the creator's channel" prompt (see
+            # app.js showSubscribePrompt) -- flips true the moment it's
+            # dismissed either way, so it never reappears.
+            "subscribe_prompted": data.get("subscribe_prompted", False),
             "game_cutout": data.get("game_cutout", False),
         }
 
@@ -1848,6 +1852,15 @@ class Api:
         # latest-release page, where the full zip lives.
         import webbrowser
         webbrowser.open(updater.RELEASES_PAGE_URL)
+        return {"ok": True}
+
+    YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@Cweamya/videos"
+
+    def open_youtube_channel(self) -> dict:
+        # The one-time subscribe prompt's button -- opens the creator's
+        # channel in the default browser.
+        import webbrowser
+        webbrowser.open(self.YOUTUBE_CHANNEL_URL)
         return {"ok": True}
 
     def export_failure_report(self) -> dict:

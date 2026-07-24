@@ -147,7 +147,7 @@ function isBlockingOverlayOpen() {
     const el = document.getElementById(id);
     return el && el.style.display !== 'none' && el.style.display !== '';
   };
-  if (['update-modal', 'scale-warning-modal', 'onboarding-modal'].some(isOpen)) return true;
+  if (['update-modal', 'scale-warning-modal', 'onboarding-modal', 'subscribe-modal'].some(isOpen)) return true;
   if (!captureDanceActive && ['im-modal', 'pu-modal', 'path-name-modal'].some(isOpen)) return true;
   return false;
 }
@@ -859,7 +859,11 @@ async function loadSettingsUI() {
       // offering a switch that can't do anything there.
       if (IS_MAC) cutoutEl.closest('.setting-row').style.display = 'none';
     }
+    // Onboarding first (once), then the subscribe prompt (once) -- if both
+    // are pending on a fresh install, the subscribe prompt waits until
+    // onboarding is dismissed rather than stacking on top of it.
     if (!s.onboarding_done) showOnboarding();
+    else if (!s.subscribe_prompted) showSubscribePrompt();
     if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {
       // First load since the base/accent split -- migrate the old value
       // once, then persist the split so this branch never runs again.
@@ -1282,6 +1286,30 @@ async function closeOnboarding() {
   document.getElementById('onboarding-modal').style.display = 'none';
   try { await pywebview.api.set_setting('onboarding_done', true); } catch (e) {}
   restoreGameIfDashboard();
+  // Chain the one-time subscribe prompt after onboarding on a fresh install.
+  try {
+    const s = await pywebview.api.get_settings();
+    if (!s.subscribe_prompted) { showSubscribePrompt(); return; }
+  } catch (e) {}
+}
+
+// One-time subscribe prompt (see #subscribe-modal). Shown once per install;
+// dismissing it EITHER way sets the flag so it never returns. Same game-hide
+// dance as the other startup modals (the docked game paints over DOM).
+function showSubscribePrompt() {
+  document.getElementById('subscribe-modal').style.display = 'flex';
+  try { window.pywebview && pywebview.api.hide_game(); } catch (e) {}
+}
+
+async function closeSubscribePrompt() {
+  document.getElementById('subscribe-modal').style.display = 'none';
+  try { await pywebview.api.set_setting('subscribe_prompted', true); } catch (e) {}
+  restoreGameIfDashboard();
+}
+
+async function subscribeAndClose() {
+  try { await pywebview.api.open_youtube_channel(); } catch (e) {}
+  await closeSubscribePrompt();
 }
 
 // Settings > Debug > "Health Check" -- backend runs every environment probe;
