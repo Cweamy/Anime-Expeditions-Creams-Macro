@@ -104,11 +104,66 @@ def _mac_icns_path():
     return None
 
 
+def _windows_version_file():
+    """Write a PyInstaller version-info resource (Windows only) built from
+    VERSION, returning its path.
+
+    Antivirus heuristics score a bare, metadata-less PyInstaller exe more
+    suspiciously than one carrying real version info (CompanyName,
+    ProductName, a version, copyright) -- a signed-looking, properly-
+    described binary reads as legitimate software, an anonymous one as a
+    possible dropper. This is the single most effective FREE reduction of
+    single-vendor false positives (like Bkav's W32.Malware.* heuristic);
+    the durable cross-vendor fix is code-signing, which needs a cert.
+
+    Returns None on any failure (build proceeds with no version resource,
+    the old behavior) -- metadata is never worth a broken release."""
+    try:
+        with open(os.path.join(ROOT, "VERSION"), encoding="utf-8") as f:
+            ver = f.read().strip()
+        parts = [int(p) for p in ver.split(".")][:3]
+        while len(parts) < 3:
+            parts.append(0)
+        maj, minr, pat = parts
+        tup = f"({maj}, {minr}, {pat}, 0)"
+        info = f"""VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers={tup}, prodvers={tup},
+    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+      StringStruct('CompanyName', "Cream's Macro"),
+      StringStruct('FileDescription', "Anime Expeditions Macro"),
+      StringStruct('FileVersion', "{ver}"),
+      StringStruct('InternalName', "{EXE_NAME}"),
+      StringStruct('OriginalFilename', "{EXE_NAME}.exe"),
+      StringStruct('ProductName', "Cream's Macro - Anime Expeditions"),
+      StringStruct('ProductVersion', "{ver}"),
+      StringStruct('LegalCopyright', "Cream's Macro"),
+    ])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"""
+        out = os.path.join(ROOT, "build", "version_info.txt")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(info)
+        return out
+    except Exception as exc:
+        print(f"Couldn't write the version-info resource ({exc}) -- building without it.")
+        return None
+
+
 cmd = [
     sys.executable, "-m", "PyInstaller",
     "--onefile",
     "--windowed",  # no console window (macOS: also produces the .app bundle)
     "--noconfirm",
+    # Never UPX-compress: a packed binary is a strong AV heuristic trigger,
+    # and this makes the build deterministic whether or not the runner
+    # happens to have UPX on PATH (PyInstaller uses it automatically if so).
+    "--noupx",
     f"--name={EXE_NAME}",
     "--distpath=dist",
     "--workpath=build",
@@ -119,6 +174,9 @@ if sys.platform == "darwin":
         cmd.append(f"--icon={icns}")
 else:
     cmd.append(f"--icon={os.path.join(ROOT, 'logo.ico')}")
+    version_file = _windows_version_file()  # AV-friendly metadata, Windows only
+    if version_file:
+        cmd.append(f"--version-file={version_file}")
 for mod in HIDDEN_IMPORTS:
     cmd += [f"--hidden-import={mod}"]
 # winsdk (Windows OCR) is a namespace-package WinRT projection PyInstaller's
