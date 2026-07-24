@@ -28,6 +28,8 @@ Either way: main.Api.apply_update stages the update, launches the relaunch
 helper detached, THEN closes the app -- the helper doesn't touch any files
 until this process (and its file handles) are actually gone.
 """
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -73,7 +75,7 @@ VERSION_FILE = os.path.join(constants.BUNDLE_DIR, "VERSION")
 # names) for the source-update path -- everything a user's own run
 # generates or owns, never something an update should overwrite.
 _EXCLUDE_DIRS = ["debug", "Paths", "Templates", "__pycache__", ".git", "item_icons"]
-_EXCLUDE_FILES = ["settings.json", "*.log"]
+_EXCLUDE_FILES = ["settings.json", "*.log", "assets_manifest.json"]
 
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -214,6 +216,18 @@ def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> st
     src_root = entries[0] if len(entries) == 1 and os.path.isdir(entries[0]) else extract_dir
     log(f"[Update] Extracted to {src_root}.")
 
+    # Done here in Python, live, rather than left entirely to the detached
+    # helper's plain add-only robocopy/rsync pass -- Assets images aren't
+    # locked the way the running app's own source files are, so there's no
+    # need to wait for process exit, and only Python can apply the
+    # manifest/hash check that tells a genuine fix apart from a user's own
+    # edit (see _merge_assets_dir). The helper's own Assets pass still runs
+    # afterward as a dumb add-only backup for anything this missed.
+    try:
+        _merge_assets_dir(os.path.join(src_root, "Assets"), os.path.join(app_dir, "Assets"), log)
+    except Exception as exc:
+        log(f"[Update] Assets merge skipped ({exc}) -- existing Assets folder left as-is.")
+
     helper_path = os.path.join(tmp_root, "apply_update.bat")
     _write_source_helper_script(helper_path, src_root, app_dir, tmp_root)
     return helper_path
@@ -291,52 +305,170 @@ nohup ./run.sh >/dev/null 2>&1 &
 # Assets (the user-editable reference-image folder shipped BESIDE the exe,
 # not inside it -- see build_pyinstaller.py / release.yml / core.constants.
 # ASSETS_DIR). Sourced from the release zip's Assets/ entries (no separate
-# Assets.zip asset anymore -- see RELEASE_ZIP_NAME). Add-only on purpose,
-# everywhere: an update may bring in reference images that are NEW in a
-# release (a new macro step's button crop, a new map's name label), but
-# never overwrites a file already on disk -- those are exactly the
-# user-replaced/user-added variants the loose folder exists to protect.
-# Trade-off, accepted: a release that FIXES an existing image won't
-# propagate over a local copy -- delete the local file/folder and update
-# again to take the shipped one. The source-update path enforces the same
-# policy via robocopy /XC /XN /XO (see _write_source_helper_script).
+# Assets.zip asset anymore -- see RELEASE_ZIP_NAME). Add-only for anything
+# genuinely new (a new macro step's button crop, a new map's name label),
+# same everywhere: an update never overwrites a file already on disk unless
+# it can PROVE that file is still exactly what an update last put there
+# (see ASSETS_MANIFEST_FILE below) -- otherwise it's a user-replaced/
+# user-added variant and the whole point of the loose folder is to protect
+# it. The source-update path enforces the same never-touch-unproven-files
+# policy via robocopy /XC /XN /XO (see _write_source_helper_script), backed
+# by the same manifest-aware pass in _merge_assets_dir below.
 # ---------------------------------------------------------------------------
+
+# Every relative Assets path this install has ever written itself, mapped to
+# the sha256 of exactly what it wrote -- NOT touched for anything this app
+# didn't write (a pre-existing file skipped as "unproven" stays unproven
+# forever, never retroactively marked safe just because we looked at it).
+# Lives beside settings.json in APP_DIR, not inside Assets itself: it's this
+# install's own bookkeeping, not something a release ships or a user should
+# ever need to open.
+ASSETS_MANIFEST_FILE = os.path.join(constants.APP_DIR, "assets_manifest.json")
+
+
+def _load_assets_manifest() -> dict:
+    try:
+        with open(ASSETS_MANIFEST_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}  # missing/corrupt -- every existing file is then "unproven", the safe default
+
+
+def _save_assets_manifest(manifest: dict) -> None:
+    # Same atomic-write shape as core.settings.save -- a crash mid-write
+    # must never leave a half-written manifest that then reads as "empty"
+    # (which would just make every tracked file look unproven again, not
+    # dangerous, but pointless data loss) or as corrupt JSON.
+    try:
+        tmp = ASSETS_MANIFEST_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, sort_keys=True)
+        os.replace(tmp, ASSETS_MANIFEST_FILE)
+    except OSError:
+        pass  # best-effort -- worst case, the next update re-treats these as unproven
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _assets_rel_parts(filename: str):
+    """Shared by the zip and directory-tree merges: strips a zip/tree entry
+    down to its path relative to Assets/ (see _extract_assets_zip_addonly's
+    old docstring for the "Assets at the root or one wrapper folder down"
+    and zip-slip reasoning), or None if this entry isn't an Assets file at
+    all. item_icons/ is runtime-fetched wiki icon cache (core.rewards),
+    never actually shipped in a release, but skipped defensively anyway in
+    case that ever changes -- same exclusion the robocopy/rsync passes use."""
+    parts = filename.replace("\\", "/").split("/")
+    asset_idx = next((i for i, p in enumerate(parts[:2]) if p.lower() == "assets"), None)
+    if asset_idx is None or len(parts) < asset_idx + 2:
+        return None
+    parts = parts[asset_idx + 1:]
+    if any(p in ("", ".", "..") for p in parts) or ":" in parts[0]:
+        return None
+    if parts[0] == "item_icons":
+        return None
+    return parts
+
 
 def _extract_assets_zip_addonly(zip_path: str, log) -> int:
     """Extracts the Assets/ entries of a release zip into constants.
-    ASSETS_DIR, skipping every file that already exists (see the add-only
-    policy note above). ONLY entries rooted at "Assets/..." are touched --
-    the release zip also carries the app exe at its root, which must never
-    end up inside the Assets folder -- and any entry that would escape the
-    folder (absolute paths / "..") is refused outright, since zip filenames
-    are ultimately untrusted input. Returns how many files were actually
-    written."""
+    ASSETS_DIR (see the Assets policy note above). A file that doesn't
+    exist yet is always added. A file that DOES already exist only gets
+    overwritten when the manifest proves it's exactly what THIS app last
+    wrote there (untouched since) -- anything untracked, or whose on-disk
+    hash has drifted from that, is left alone as a user's own edit/
+    replacement. Returns how many files were actually written (added +
+    refreshed)."""
+    manifest = _load_assets_manifest()
     added = 0
+    refreshed = 0
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             if info.is_dir():
                 continue
-            parts = info.filename.replace("\\", "/").split("/")
-            # "Assets" at the root (Windows zips) or one wrapper folder
-            # down ("package/Assets/..." -- the mac zips up to v0.6.2, see
-            # _download_release_update_mac's prefix note; this check's
-            # root-only version made the mac Assets merge a silent no-op).
-            asset_idx = next((i for i, p in enumerate(parts[:2]) if p.lower() == "assets"), None)
-            if asset_idx is None or len(parts) < asset_idx + 2:
-                continue  # the exe/bundle (or anything else) -- not an Assets file
-            parts = parts[asset_idx + 1:]
-            if any(p in ("", ".", "..") for p in parts) or ":" in parts[0]:
+            parts = _assets_rel_parts(info.filename)
+            if parts is None:
                 continue
+            rel_key = "/".join(parts)
             dest = os.path.join(constants.ASSETS_DIR, *parts)
             if os.path.exists(dest):
-                continue  # user's file (or an unchanged shipped one) -- never overwrite
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with zf.open(info) as src, open(dest, "wb") as out:
-                out.write(src.read())
-            added += 1
-    if added:
-        log(f"[Update] Added {added} new Assets file(s) (existing files left untouched).")
-    return added
+                last_shipped = manifest.get(rel_key)
+                if last_shipped is None or _sha256_file(dest) != last_shipped:
+                    continue  # untracked, or edited/replaced since -- never overwrite
+                data = zf.read(info)
+                new_hash = _sha256_bytes(data)
+                if new_hash == last_shipped:
+                    continue  # unchanged in this release -- nothing to do
+                with open(dest, "wb") as out:
+                    out.write(data)
+                manifest[rel_key] = new_hash
+                refreshed += 1
+            else:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                data = zf.read(info)
+                with open(dest, "wb") as out:
+                    out.write(data)
+                manifest[rel_key] = _sha256_bytes(data)
+                added += 1
+    _save_assets_manifest(manifest)
+    if added or refreshed:
+        extra = f", refreshed {refreshed} unedited file(s) with fixes" if refreshed else ""
+        log(f"[Update] Added {added} new Assets file(s){extra} (edited/replaced files left untouched).")
+    return added + refreshed
+
+
+def _merge_assets_dir(src_assets_dir: str, dest_assets_dir: str, log) -> int:
+    """Directory-tree twin of _extract_assets_zip_addonly for the
+    source-update path, where the new release already sits on disk (an
+    extracted zip, not read entry-by-entry) -- same manifest/hash policy,
+    see that function's docstring. Runs from Python BEFORE the detached
+    robocopy/rsync helper script does its own (plain add-only, hash-blind)
+    Assets pass, so this is what actually delivers fixes to untouched
+    files; the helper's own pass is just a backup net for anything this
+    step didn't reach."""
+    if not os.path.isdir(src_assets_dir):
+        return 0
+    manifest = _load_assets_manifest()
+    added = 0
+    refreshed = 0
+    for root, dirs, files in os.walk(src_assets_dir):
+        dirs[:] = [d for d in dirs if d != "item_icons"]
+        for name in files:
+            src_file = os.path.join(root, name)
+            rel = os.path.relpath(src_file, src_assets_dir)
+            rel_key = rel.replace(os.sep, "/")
+            dest = os.path.join(dest_assets_dir, rel)
+            if os.path.exists(dest):
+                last_shipped = manifest.get(rel_key)
+                if last_shipped is None or _sha256_file(dest) != last_shipped:
+                    continue
+                new_hash = _sha256_file(src_file)
+                if new_hash == last_shipped:
+                    continue
+                shutil.copy2(src_file, dest)
+                manifest[rel_key] = new_hash
+                refreshed += 1
+            else:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copy2(src_file, dest)
+                manifest[rel_key] = _sha256_file(src_file)
+                added += 1
+    _save_assets_manifest(manifest)
+    if added or refreshed:
+        extra = f", refreshed {refreshed} unedited file(s) with fixes" if refreshed else ""
+        log(f"[Update] Added {added} new Assets file(s){extra} (edited/replaced files left untouched).")
+    return added + refreshed
 
 
 def _get_release_zip_with_fallback(release_zip_url: str, log):
