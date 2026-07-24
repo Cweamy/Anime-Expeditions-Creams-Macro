@@ -2254,6 +2254,11 @@ const BLOCK_TYPES = {
   // applyPlaceUnitPosition writes params.x/y for whichever block opened
   // it, so the picker needed no changes to support this).
   click:              { label: 'Click',             group: 'Setup',  color: 'var(--rose)',  params: [{ key: 'x', type: 'number', placeholder: 'x', default: 0 }, { key: 'y', type: 'number', placeholder: 'y', default: 0 }] },
+  // Presses a keyboard key at this point (an ability, interact, menu key --
+  // anything no dedicated block covers). Bespoke controls: a key-capture
+  // button + an optional hold time. See renderSendKeyControls / the runner's
+  // _run_send_key_tick.
+  send_key:           { label: 'Send Key',          group: 'Setup',  color: 'var(--brand)', params: [{ key: 'hold_ms', type: 'number', placeholder: 'hold ms', default: 0 }] },
 };
 
 // Two phases: Pre Start (walk to your spot, place starter units, flip any
@@ -2268,7 +2273,7 @@ const PHASE_ALLOWED = {
   // pinned block -- every routine always has exactly one in Pre Start
   // (synthesized on new/load, never removable), so offering it as an
   // addable block would only create duplicates.
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'click', 'wait_ms'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'click', 'wait_ms', 'send_key'],
   battle: Object.keys(BLOCK_TYPES).filter(t => t !== 'walk_path'),
 };
 
@@ -2326,6 +2331,7 @@ function addBlock(type, phase, atIndex) {
   if (type === 'place_unit') { block.hotkey = ''; }
   if (type === 'walk') { block.params.path = ''; }
   if (type === 'walk_path') { block.mode = 'auto'; block.pathName = ''; }
+  if (type === 'send_key') { block.key = ''; }
   if (type === 'upgrade_unit') { block.params.index = ''; block.params.times = 1; }
   if (type === 'auto_upgrade_unit') { block.params.index = ''; block.params.priority = 1; }
   if (type === 'sell_unit') { block.params.index = ''; }
@@ -2825,6 +2831,17 @@ function renderClickControls(b) {
   return x + y + set;
 }
 
+// Send Key block: capture a key (stored in b.key, reusing the same keybind
+// capture the Place Unit hotkey uses) + an optional hold time in ms (0 = a
+// quick tap). See the runner's _run_send_key_tick.
+function renderSendKeyControls(b) {
+  const field = (label, inner) => `
+    <label class="blk-field"><span class="blk-field-label">${label}</span>${inner}</label>`;
+  const key = field('Key', `<button type="button" class="keybind-btn" onclick="startBlockHotkeyCapture('${b.id}', 'key', this)">${b.key ? b.key.toUpperCase() : 'Set key'}</button>`);
+  const hold = field('Hold (ms)', `<input class="block-input" type="number" min="0" style="width:70px;" value="${b.params.hold_ms ?? 0}" oninput="updateBlockParam('${b.id}', 'hold_ms', this.value)" title="0 = quick tap; higher = hold the key that long">`);
+  return key + hold;
+}
+
 // Walk block: dropdown of the same recorded paths the pinned Walk Path row
 // offers -- mid-battle repositioning reuses the exact same recordings --
 // plus its own Record button, which drops the freshly saved path straight
@@ -2946,10 +2963,12 @@ function renderBlockRow(b, phase) {
   // place_unit and click render ALL their fields bespoke (labeled X/Y +
   // the Set picker button) -- the generic anonymous param inputs would
   // duplicate them.
-  const inputs = (b.type === 'place_unit' || b.type === 'click') ? '' : def.params.map(p => renderParamInput(b, p)).join('');
+  const inputs = (b.type === 'place_unit' || b.type === 'click' || b.type === 'send_key')
+    ? '' : def.params.map(p => renderParamInput(b, p)).join('');
   const extra = b.type === 'setting_change' ? renderSettingControls(b)
     : b.type === 'place_unit' ? renderPlaceUnitControls(b)
     : b.type === 'click' ? renderClickControls(b)
+    : b.type === 'send_key' ? renderSendKeyControls(b)
     : b.type === 'walk' ? renderWalkControls(b)
     : b.type === 'walk_path' ? renderWalkPathControls(b)
     : b.type === 'upgrade_unit' ? renderUpgradeControls(b)
@@ -4195,7 +4214,7 @@ async function saveCurrentTemplate() {
     payload[phase] = creationPhases[phase].map(b => ({
       type: b.type, params: b.params, once: b.once, kind: b.kind, value: b.value, hotkey: b.hotkey,
       mode: b.mode, pathName: b.pathName, ignoreHighlight: b.ignoreHighlight, retryUntilPlaced: b.retryUntilPlaced,
-      sprint: b.sprint,
+      sprint: b.sprint, key: b.key,
     }));
   });
   try {
@@ -4305,6 +4324,7 @@ function blockFromSaved(b) {
     block.pathName = b.pathName || '';
   }
   if (b.type === 'walk_path' || b.type === 'walk') block.sprint = !!b.sprint;
+  if (b.type === 'send_key') block.key = b.key || '';
   return block;
 }
 

@@ -127,6 +127,10 @@ class BlockOps:
                 self._run_click_block(hwnd, stop_event, block, self._battle_block_index + 1)
                 done = True
                 self._battle_block_state = {}
+            elif btype == "send_key":
+                self._run_send_key_tick(block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
             else:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
                            f'("{btype}") -- not runnable in Battle yet.')
@@ -542,6 +546,8 @@ class BlockOps:
                     self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
                 elif btype == "wait_ms":
                     self._run_wait_ms_tick(stop_event, block, i, phase_label="Pre Start")
+                elif btype == "send_key":
+                    self._run_send_key_tick(block, i, phase_label="Pre Start")
                 else:
                     self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
                 time.sleep(0.2)  # brief gap between blocks so the game UI can settle
@@ -1028,6 +1034,37 @@ class BlockOps:
         if vk is None:
             return None
         return (vk, hold_seconds)
+
+    def _run_send_key_tick(self, block: dict, block_num: int, phase_label: str = "Battle") -> None:
+        """Send Key block: press (or hold) one keyboard key at this point in
+        the sequence -- for any in-game key action no dedicated block covers
+        (an ability, an interact key, a menu toggle). The key is captured in
+        Creation (block["key"]); an optional hold_ms > 0 holds it that long
+        instead of a quick tap. Blacklisted keys (Win/Meta, which could yank
+        focus off Roblox) are refused, same as the Setting block's custom
+        key. Never a movement key by design -- use a Walk block for pathing."""
+        key_name = (block.get("key") or "").strip()
+        params = block.get("params") or {}
+        if not key_name:
+            self._log(f'{phase_label} block #{block_num} (Send Key): no key set -- skipping.')
+            return
+        if key_name.lower() in self._BLACKLISTED_KEY_NAMES:
+            self._log(f'{phase_label} block #{block_num} (Send Key): "{key_name}" is blacklisted -- skipping.')
+            return
+        vk = keys.key_name_to_vk(key_name)
+        if vk is None:
+            self._log(f'{phase_label} block #{block_num} (Send Key): key "{key_name}" isn\'t recognized -- skipping.')
+            return
+        try:
+            hold_ms = max(0, int(params.get("hold_ms") or 0))
+        except (TypeError, ValueError):
+            hold_ms = 0
+        if hold_ms > 0:
+            self._log(f'{phase_label} block #{block_num} (Send Key): holding "{key_name}" for {hold_ms}ms.')
+            self._keyboard.tap(vk, hold=hold_ms / 1000.0)
+        else:
+            self._log(f'{phase_label} block #{block_num} (Send Key): pressing "{key_name}".')
+            self._keyboard.tap(vk)
 
     def _run_setting_block(self, hwnd, stop_event: threading.Event, block: dict, index: int) -> None:
         name = (block.get("params") or {}).get("name") or f"#{index}"
