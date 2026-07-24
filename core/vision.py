@@ -822,18 +822,41 @@ def find_image_any(hwnd: int, names: tuple, region: tuple = None, threshold: flo
     for and none matched."""
     first_missing = None
     found_any_template = False
+    available_names = []
     for name in names:
         try:
-            match = find_image(hwnd, name, region, threshold, template_dir)
+            # Validate every candidate before taking a screenshot. The image
+            # data is cached, so the later matcher does not decode it again.
+            load_template_grays(name, template_dir)
         except TemplateNotFound as exc:
             if first_missing is None:
                 first_missing = exc
             continue
         found_any_template = True
-        if match is not None:
-            return match, name
+
+        available_names.append(name)
+
     if not found_any_template and first_missing is not None:
         raise first_missing
+    if not available_names:
+        return None, None
+
+    # All candidate names describe alternatives visible in the same UI state.
+    # Reusing one frame keeps their priority order intact while avoiding an
+    # extra screen capture and grayscale conversion for every missed option.
+    haystack = capture_game_gray(hwnd, region)
+    if haystack is None:
+        return None, None
+
+    for name in available_names:
+        match = find_in_gray_multiscale(haystack, name, template_dir, _effective_threshold(name, threshold))
+        if match is not None:
+            if region is not None:
+                match["x"] += region[0]
+                match["y"] += region[1]
+                match["cx"] += region[0]
+                match["cy"] += region[1]
+            return match, name
     return None, None
 
 

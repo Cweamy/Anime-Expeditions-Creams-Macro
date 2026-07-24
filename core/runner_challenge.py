@@ -28,13 +28,11 @@ class ChallengeOps:
         map-CARD search) in turn. Returns the matched map name, or None if
         none of them were found (not yet on a recognizable Challenge screen,
         or the wrong screen entirely)."""
-        for map_name in CHALLENGE_STORY_MAPS:
-            try:
-                match = vision.find_image(hwnd, map_name)
-            except vision.TemplateNotFound:
-                continue
-            if match is None:
-                continue
+        try:
+            match, map_name = vision.find_image_any(hwnd, CHALLENGE_STORY_MAPS)
+        except vision.TemplateNotFound:
+            return None
+        if match is not None:
             debug_path = self._debug_save(hwnd, map_name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f'[Macro] Challenge map detected: "{map_name}" (score {match["score"]:.2f}).{suffix}')
