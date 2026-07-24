@@ -30,6 +30,15 @@ class Keyboard:
     def key_up(self, vk: int) -> None:
         backend.key_up(vk)
 
+    # Movement/action keys by NAME ("w"/"a"/"s"/"d"/"i"/"o"), sent by fixed
+    # physical position so walk paths work on any keyboard layout (AZERTY,
+    # QWERTZ, ...), not just QWERTY -- see the backend move_key_* functions.
+    def move_key_down(self, name: str) -> None:
+        backend.move_key_down(name)
+
+    def move_key_up(self, name: str) -> None:
+        backend.move_key_up(name)
+
     def tap(self, vk: int, hold: float = 0.03, pace: bool = True) -> None:
         self.key_down(vk)
         time.sleep(hold)

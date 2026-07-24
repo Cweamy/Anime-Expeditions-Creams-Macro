@@ -177,3 +177,28 @@ def is_key_down(vk: int) -> bool:
     if mac_code is None:
         return False
     return bool(Quartz.CGEventSourceKeyState(Quartz.kCGEventSourceStateHIDSystemState, mac_code))
+
+
+# Layout-independent movement keys -- see _input_win's counterparts for the
+# rationale. On macOS this is a non-issue: CGEvent keycodes ARE physical
+# positions (kVK_ANSI_W is the physical W key on every layout), so these
+# just route the movement key names through the existing VK path.
+_MOVE_VKS = {"w": ord("W"), "a": ord("A"), "s": ord("S"), "d": ord("D"),
+             "i": ord("I"), "o": ord("O")}
+
+
+def move_key_down(name: str) -> None:
+    vk = _MOVE_VKS.get(name)
+    if vk is not None:
+        key_down(vk)
+
+
+def move_key_up(name: str) -> None:
+    vk = _MOVE_VKS.get(name)
+    if vk is not None:
+        key_up(vk)
+
+
+def is_move_key_down(name: str) -> bool:
+    vk = _MOVE_VKS.get(name)
+    return is_key_down(vk) if vk is not None else False

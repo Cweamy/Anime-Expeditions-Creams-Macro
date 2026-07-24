@@ -94,3 +94,46 @@ def is_key_down(vk: int) -> bool:
     # GetAsyncKeyState reads real physical key state regardless of which
     # window has focus -- see core.paths' recorder for why that matters.
     return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+# ── Layout-independent movement/action keys ────────────────────────────────
+# The walk keys are sent by their FIXED hardware scancode (Set 1 physical
+# positions), NOT via MapVirtualKey like key_down does -- MapVirtualKey is
+# keyboard-layout-dependent, so on an AZERTY layout VK_W maps to the scancode
+# of AZERTY's 'W' key, a DIFFERENT physical position than the WASD cluster
+# Roblox binds movement to (an AZERTY player presses the physical ZQSD keys,
+# same positions as QWERTY WASD). Sending the fixed scancode hits that same
+# physical cluster on every layout. On US QWERTY these scancodes are exactly
+# what MapVirtualKey already returned, so QWERTY behavior is unchanged.
+_MOVE_SCANCODES = {"w": 0x11, "a": 0x1E, "s": 0x1F, "d": 0x20, "i": 0x17, "o": 0x18}
+MAPVK_VSC_TO_VK = 1
+
+
+def move_key_down(name: str) -> None:
+    scan = _MOVE_SCANCODES.get(name)
+    if scan is None:
+        return
+    si.send_keyboard_input(si.KeyBdInput(wVk=0, wScan=scan, dwFlags=si.KEYEVENTF_SCANCODE, time=0, dwExtraInfo=0))
+
+
+def move_key_up(name: str) -> None:
+    scan = _MOVE_SCANCODES.get(name)
+    if scan is None:
+        return
+    si.send_keyboard_input(si.KeyBdInput(
+        wVk=0, wScan=scan, dwFlags=si.KEYEVENTF_SCANCODE | si.KEYEVENTF_KEYUP, time=0, dwExtraInfo=0))
+
+
+def is_move_key_down(name: str) -> bool:
+    # Detect the PHYSICAL movement key regardless of layout: map its fixed
+    # scancode to whatever VK sits at that position on the CURRENT layout,
+    # then poll that. On AZERTY the physical-W position isn't VK_W, so
+    # watching VK_W (as the old recorder did) missed the player's real
+    # presses -- this catches them.
+    scan = _MOVE_SCANCODES.get(name)
+    if scan is None:
+        return False
+    vk = ctypes.windll.user32.MapVirtualKeyW(scan, MAPVK_VSC_TO_VK)
+    if not vk:
+        return False
+    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)

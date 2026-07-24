@@ -88,8 +88,11 @@ class _Recorder:
     def _poll_loop(self, stop_event: threading.Event) -> None:
         held = {key: False for key in _WATCHED_KEYS}
         while not stop_event.is_set():
-            for key, vk in _WATCHED_KEYS.items():
-                is_down = _input_backend.is_key_down(vk)
+            for key in _WATCHED_KEYS:
+                # By PHYSICAL position, not VK -- so an AZERTY/QWERTZ player's
+                # movement presses are captured (on those layouts the physical
+                # W position isn't VK_W). See _input_backend.is_move_key_down.
+                is_down = _input_backend.is_move_key_down(key)
                 if is_down != held[key]:
                     # The clock starts at the FIRST key transition, not at
                     # start(): however long the player fumbles between clicking
@@ -221,15 +224,18 @@ def replay_events(events: list, keyboard, stop_event: threading.Event = None, sp
             if delay > 0:
                 time.sleep(delay)
             last_t = ev["t"]
-            vk = _WATCHED_KEYS.get(ev["key"])
-            if vk is None:
+            name = ev["key"]
+            if name not in _WATCHED_KEYS:
                 continue
+            # By physical position (move_key_*), so the same recorded path
+            # walks correctly on any keyboard layout, not just the one it was
+            # recorded on.
             if ev["state"] == "down":
-                keyboard.key_down(vk)
+                keyboard.move_key_down(name)
             else:
-                keyboard.key_up(vk)
+                keyboard.move_key_up(name)
     finally:
-        for vk in _WATCHED_KEYS.values():
-            keyboard.key_up(vk)
+        for name in _WATCHED_KEYS:
+            keyboard.move_key_up(name)
         if sprint:
             keyboard.key_up(keys.VK_SHIFT)
