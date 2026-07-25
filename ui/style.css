@@ -944,6 +944,9 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 
 /* ---- Challenge screen: per-map rows (reuses .task-card as the row shell) ---- */
 .challenge-map-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+/* Per-slot manual cooldown button -- compact so it sits inline with the
+   enable toggle without crowding the count field. */
+.challenge-cooldown-btn { font-size: 10px; padding: 3px 9px; flex-shrink: 0; }
 .challenge-count-group {
   display: flex; align-items: center; gap: 4px; flex-shrink: 0;
   font-size: 11px; font-weight: 700; color: var(--text-muted);

@@ -2202,12 +2202,21 @@ function renderChallengeScreen() {
       const statusChip = atCap ? '<span class="challenge-cap-chip">Capped</span>'
         : info.ready ? '<span class="challenge-ready-chip">Ready</span>'
         : '<span class="challenge-cap-chip" style="color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 14%, transparent); border-color: color-mix(in srgb, var(--text-muted) 35%, transparent);">Played this window</span>';
+      // Manual cooldown control -- put a Ready slot on cooldown (skip it until
+      // the next :00/:30 window, no daily play used), or clear a cooldown to
+      // make it Ready now. Hidden when Capped: the daily cap is the blocker
+      // there, not the window cooldown.
+      const cooldownBtn = atCap ? ''
+        : info.ready
+          ? `<button class="task-toolbar-btn challenge-cooldown-btn" onclick="setChallengeStageCooldown('${slot}', true)" title="Skip this slot until the next :00 / :30 window -- doesn't use a daily play">Set on cooldown</button>`
+          : `<button class="task-toolbar-btn challenge-cooldown-btn" onclick="setChallengeStageCooldown('${slot}', false)" title="Make this slot Ready again right now">Clear cooldown</button>`;
       return `
         <div class="task-card" style="--tqc: ${atCap ? 'var(--rose)' : 'var(--amber)'}; cursor: default;">
           <div class="tq-text" style="min-width: 0;">
             <div class="tq-title">Regular Challenge #${slot} ${statusChip}</div>
             <div class="challenge-map-row">
               <button class="toggle-switch ${info.enabled ? 'on' : ''}" onclick="toggleChallengeStage('${slot}', this)"></button>
+              ${cooldownBtn}
               <span class="flex-1"></span>
               <div class="challenge-count-group">
                 <input type="number" class="block-input" min="0" style="width: 52px;" value="${info.count}"
@@ -2272,6 +2281,11 @@ async function setChallengeMapMacro(map, value) {
 async function setChallengeStageCount(stage, value) {
   const count = Math.max(0, parseInt(value, 10) || 0);
   try { await pywebview.api.set_challenge_stage_count(stage, count); } catch (e) {}
+  await refreshChallengeScreen();
+}
+
+async function setChallengeStageCooldown(stage, onCooldown) {
+  try { await pywebview.api.set_challenge_stage_cooldown(stage, onCooldown); } catch (e) {}
   await refreshChallengeScreen();
 }
 

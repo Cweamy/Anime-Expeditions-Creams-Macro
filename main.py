@@ -823,6 +823,26 @@ class Api:
         cfg.save(data)
         return {"ok": True}
 
+    def set_challenge_stage_cooldown(self, stage: str, on_cooldown: bool) -> dict:
+        # Challenge screen's per-slot "Set on cooldown" / "Clear cooldown"
+        # button. on_cooldown=True marks the slot played for THIS :00/:30
+        # window (so the runner skips it until the next window) WITHOUT
+        # bumping the daily count -- e.g. you already ran this challenge by
+        # hand, or just want to skip it this window without disabling it.
+        # on_cooldown=False clears that (last_played_at=0) so it's Ready
+        # again right now. Same "ready = last_played_at < window_start" rule
+        # get_challenge_settings computes, just driven by hand here.
+        if stage not in CHALLENGE_STAGE_SLOTS:
+            return {"ok": False, "reason": "bad_stage"}
+        data = cfg.load()
+        challenge = self.get_challenge_settings()
+        challenge["stages"][stage]["last_played_at"] = time.time() if on_cooldown else 0
+        data["challenge"] = challenge
+        cfg.save(data)
+        self.push_log(f"[Challenge] Slot #{stage} "
+                       f"{'set on cooldown until the next window' if on_cooldown else 'cleared -- Ready now'}.")
+        return {"ok": True}
+
     def set_challenge_map_macro(self, map_name: str, macro: str) -> dict:
         if map_name not in CHALLENGE_STORY_MAPS:
             return {"ok": False, "reason": "bad_map"}
