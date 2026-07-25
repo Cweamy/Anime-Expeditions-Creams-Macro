@@ -1864,7 +1864,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             if not current_hwnd or not wm.is_window(current_hwnd):
                 continue
             try:
-                match, _ = vision.find_image_any(current_hwnd, NAV_PLAY_IMAGE_NAMES, region=NAV_PLAY_REGION)
+                match, _ = vision.find_image_any(current_hwnd, NAV_PLAY_IMAGE_NAMES)
             except vision.TemplateNotFound:
                 match = None
             if match is not None:
@@ -2405,7 +2405,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._set_status(action="Checking lobby...")
         try:
             match, _ = vision.wait_for_image_any(
-                hwnd, NAV_PLAY_IMAGE_NAMES, region=NAV_PLAY_REGION,
+                hwnd, NAV_PLAY_IMAGE_NAMES,
                 timeout=LOBBY_CHECK_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] Can't check the lobby: {exc}")
@@ -2428,7 +2428,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
     def _click_play(self, hwnd, stop_event: threading.Event) -> bool:
         self._set_status(action="Clicking Play...")
         try:
-            match, name = vision.find_image_any(hwnd, NAV_PLAY_IMAGE_NAMES, region=NAV_PLAY_REGION)
+            match, name = vision.find_image_any(hwnd, NAV_PLAY_IMAGE_NAMES)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] {exc}")
             return False

@@ -5,19 +5,13 @@ read one namespace. Import via star (underscore-prefixed mask functions
 need naming explicitly -- star imports skip them).
 """
 
-# Nav > Play button, in the docked game window's own client coordinates
-# (top-left of the docked Roblox window == (0, 0), same convention as every
-# other fixed region in this codebase, e.g. main.REWARD_SCROLLBAR_PROBE).
-# Padded well past the button's own ~58x58 footprint (was searched at
-# exactly that size, with zero margin for the button being even a few
-# pixels off from where this assumed it'd be -- matchTemplate needs the
-# whole template to fit inside the search region, so a template this size
-# with no padding had nowhere to "look around" at all) -- template matching
-# already scans every position within whatever region it's given, so a
-# bigger region is a wider/fuzzier scan for free, not a slower or less
-# precise one; the score threshold (see vision.DEFAULT_THRESHOLD) is what
-# actually decides what counts as a match, not the region size.
-NAV_PLAY_REGION = (44, 404, 118, 118)
+# Nav > Play button: searched FULL-WINDOW now (no fixed region). It used to
+# be boxed to the left nav strip (NAV_PLAY_REGION) as a speed/false-match
+# optimization, but that assumed the button always lands in one exact spot --
+# a layout shift (different window size, cutout mode, a game UI update) could
+# put it outside the box and make every lobby check fail. Full-window is a
+# wider scan but template matching still only accepts a real match by score
+# (see vision.DEFAULT_THRESHOLD), so it's more robust for the same result.
 
 # Recovery after a failed map search (see _spam_back_until_gone): repeatedly
 # click Back until it's no longer found, rather than leaving the run stuck
