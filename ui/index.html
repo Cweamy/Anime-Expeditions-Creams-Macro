@@ -1635,9 +1635,11 @@
       </div>
       <div class="modal-body">
 
-        <!-- Toolbar: category tabs + name filter + folder/capture actions.
-             Visible in BOTH views -- the active tab is also what a saved
-             crop's category is, so it stays switchable while cropping. -->
+        <!-- Toolbar: badge legend + name filter + folder/capture actions.
+             The old UI/Maps tabs are gone -- both folders are shown together
+             in one badged list (renderImageLibrary), so a saved crop's folder
+             comes from the card it was started from (or the typed name), never
+             a tab that could be left on the wrong one. -->
         <div class="flex items-center gap-2 flex-wrap" style="margin-bottom: 10px;">
           <div id="im-category-tabs" class="flex items-center gap-1"></div>
           <input id="im-filter" class="block-input" style="width: 150px;" type="text"

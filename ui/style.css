@@ -1382,6 +1382,23 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   transition: color 0.15s, background 0.15s;
 }
 .im-card-add:hover { color: var(--brand); background: color-mix(in srgb, var(--brand) 14%, transparent); }
+/* Combined Image Manager: the two folders (UI buttons / map-select cards) are
+   shown in ONE list now instead of separate tabs, so each card carries a badge
+   saying where it's used -- and the same legend sits by the filter. */
+.im-legend {
+  display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  font-size: 10px; color: var(--text-muted);
+}
+.im-badge {
+  font-size: 8px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 999px; flex-shrink: 0; line-height: 1;
+}
+.im-badge-ui { color: var(--brand); background: color-mix(in srgb, var(--brand) 16%, transparent); }
+.im-badge-map { color: var(--amber); background: color-mix(in srgb, var(--amber) 16%, transparent); }
+/* One-line "what this image is for" under the card head (see IMAGE_DESCRIPTIONS). */
+.im-card-desc {
+  font-size: 9.5px; line-height: 1.35; color: var(--text-muted); margin: -2px 0 8px;
+}
 .im-thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
 .im-thumb { position: relative; }
 /* Checkerboard behind each crop -- reference images are arbitrary sizes and

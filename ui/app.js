@@ -3529,11 +3529,106 @@ function applyPlaceUnitPosition() {
 
 let imState = {
   data: null,       // list_vision_templates() categories, or null before first load
-  category: 'ui',   // active tab key -- doubles as the category a saved crop goes to
+  category: 'ui',   // default folder for a manually-typed new name (see categoryForName)
+  saveCategory: null,  // set when a card's "+" is used -- locks the save to THAT card's folder
   image: null, naturalW: 0, naturalH: 0,   // the frozen capture (an <img>, drawn to canvas)
   zoom: 1, panX: 0, panY: 0,               // canvas view transform (image px -> canvas px)
   sel: null,        // crop box in IMAGE pixels {x, y, w, h} -- null until a drag happens
 };
+
+// One-line "what is this for" shown under each Image Manager card, keyed by
+// the folder name the macro searches. The UI and Maps folders were split into
+// two tabs and people kept adding crops under the wrong one -- now it's one
+// combined list where every card says what it's for and carries its own
+// folder, so there's no tab to pick wrong. Names not listed here just show no
+// description (e.g. a brand-new template someone added by hand).
+const IMAGE_DESCRIPTIONS = {
+  cannot_place: "Shown when a unit-placement spot is invalid (can't place here).",
+  chal_enter: "The Challenge mode Enter/Join button.",
+  chal_select: "The Challenge mode select button.",
+  challenge: "The Challenge card on the Play menu.",
+  challenge_loaded: "Confirms the Challenge screen finished loading.",
+  click_anywhere_to_close: "The 'Click anywhere to close' popup (e.g. a Raid boss cutscene).",
+  confirm: "The Confirm button -- e.g. confirming a Team Loadout.",
+  continue_2: "The smaller second 'Continue' button in Expedition wave transitions.",
+  defeat: "The Defeat result screen -- how the macro knows a run was lost.",
+  enter_matchmaking: "The 'Enter Matchmaking' button (Story/Raid).",
+  exclude: "The Exclude-equipment option in the Team Loadout panel.",
+  exp_continue: "Expedition's 'Continue' button at a wave checkpoint.",
+  exp_enter_matchmaking: "Expedition's Enter Matchmaking button.",
+  exp_extract: "Expedition's 'Extract' choice at a checkpoint.",
+  exp_extract_continue: "The 'Continue' choice shown next to Extract in Expedition.",
+  exp_select_stage: "Expedition's Select Stage confirm button.",
+  expedition: "The Expedition card on the Play menu.",
+  expedition_flower_forest: "The Flower Forest map in Expedition's map picker.",
+  expedition_rose_kingdom: "The Rose Kingdom map in Expedition's map picker.",
+  extract: "The Extract button (Expedition).",
+  extract_confirm: "The confirmation dialog after choosing Extract.",
+  include: "The Include-equipment option in the Team Loadout panel.",
+  leave_stage: "The 'Leave Stage' button on the result screen.",
+  max_placement_reached: "The 'max units placed' indicator.",
+  nav_back: "The Back button used to back out of menus.",
+  nav_disband: "The Disband button (leaving a party).",
+  nav_play: "The lobby 'Play' button -- how the macro knows it's on the lobby.",
+  nav_search: "The Search button (Settings search / map search).",
+  nav_select_stage: "The 'Select Stage' confirm button on the stage screen.",
+  nav_settings: "The Settings (gear) button.",
+  nav_settings_on: "The Settings button in its open/active state.",
+  nav_start: "The Solo 'Start' button that launches the match.",
+  nav_start_game: "The party leader's 'Start Game' button (matchmaking).",
+  nav_start_game_confirm: "The confirmation after pressing Start Game.",
+  nav_unitmanager: "The Unit Manager button -- only shows in-match, so it's how the macro confirms it teleported in.",
+  not_upgradeable: "A unit's info panel when it can't be upgraded yet (not enough gold / on cooldown).",
+  priority_upgrade: "The Priority / Auto-Upgrade icon on a unit's info panel.",
+  raid: "The Raid card on the Play menu.",
+  reconnect: "Roblox's own Reconnect/Retry disconnect prompt -- triggers a rejoin.",
+  repeat_stage: "The 'Repeat Stage' button on the result screen (re-queues the same stage).",
+  restart_btn: "A restart button.",
+  return: "The 'Return to Lobby' confirmation after Leave Stage.",
+  "select upgrade card": "The level-up 'Select an upgrade!' reward-card popup.",
+  story: "The Story card on the Play menu.",
+  team: "The Team Loadout panel (opened with H).",
+  teleportstuck: "The stuck / spinning loading screen -- flags a hung teleport.",
+  toggle_false: "A Settings toggle in its OFF state.",
+  toggle_true: "A Settings toggle in its ON state.",
+  unit_exist: "Confirms a unit was actually placed on the field.",
+  upgradeable: "A unit's info panel when it CAN be upgraded.",
+  victory: "The Victory result screen -- how the macro knows a run was won.",
+  warning: "A warning popup that can block Start Game.",
+};
+// The map NAME is reused for two different images: a "UI" one (the map's name
+// label shown in-match, used to confirm which map you're on) and a "Maps" one
+// (the map's card in the Play carousel, used to pick it). Same word, different
+// job -- exactly the mix-up the badges + these descriptions clear up.
+const MAP_LABEL_DESC = "The map's NAME label shown in-match -- used to confirm which map you landed on (mainly Challenge).";
+const MAP_CARD_DESC = "The map's card in the Play > Story/Raid carousel -- used to PICK this map.";
+
+function describeImage(catKey, name) {
+  if (catKey === 'maps') return MAP_CARD_DESC;
+  if (IMAGE_DESCRIPTIONS[name]) return IMAGE_DESCRIPTIONS[name];
+  // A map name living under the UI folder is the in-match name label.
+  if (mapCardNames().has(name)) return MAP_LABEL_DESC;
+  return '';
+}
+
+// Names that exist as map CARDS (the Maps folder) -- used both by describeImage
+// and categoryForName. Derived from the live data so it needs no hardcoding.
+function mapCardNames() {
+  const maps = (imState.data || []).find(c => c.key === 'maps');
+  return new Set((maps ? maps.names : []).map(n => n.name));
+}
+
+// Which folder a manually-typed name should save to when it wasn't started
+// from a specific card's "+" (which locks the folder itself). Prefer an
+// existing card: a name that only exists under Maps saves to Maps; everything
+// else -- including names in BOTH folders and brand-new names -- defaults to
+// UI, the folder the vast majority of searched images live in.
+function categoryForName(name) {
+  const cats = imState.data || [];
+  const inUi = (cats.find(c => c.key === 'ui')?.names || []).some(n => n.name === name);
+  const inMaps = (cats.find(c => c.key === 'maps')?.names || []).some(n => n.name === name);
+  return (inMaps && !inUi) ? 'maps' : 'ui';
+}
 
 // Hotkey entry point (Settings > Hotkeys > Image Manager, default F6,
 // called via push_ui from the Python-side hook): TOGGLES the modal from
@@ -3584,36 +3679,35 @@ async function refreshImageManagerData() {
 }
 
 function renderImageManagerTabs() {
+  // No more UI/Maps tabs -- both folders are shown in one combined list
+  // (renderImageLibrary), each card badged with where it's used, so there's
+  // no tab to pick wrong. This spot now just holds the badge legend.
   const el = document.getElementById('im-category-tabs');
-  el.innerHTML = `<div class="seg-toggle" style="width: auto;">` +
-    (imState.data || []).map(c => `
-      <button type="button" class="seg-btn ${c.key === imState.category ? 'active' : ''}" style="padding: 6px 16px;"
-              onclick="selectImageManagerCategory('${c.key}')">${c.label}</button>
-    `).join('') + `</div>`;
+  el.innerHTML =
+    `<span class="im-legend">` +
+    `<span class="im-badge im-badge-ui">UI</span>in-game buttons &amp; screens` +
+    `<span class="im-badge im-badge-map">Map</span>map-select cards` +
+    `</span>`;
 }
 
-function selectImageManagerCategory(key) {
-  imState.category = key;
-  renderImageManagerTabs();
-  renderImageLibrary();
-  renderImageNameDatalist();
-}
-
-function imActiveCategory() {
-  return (imState.data || []).find(c => c.key === imState.category) || { names: [] };
-}
-
-// The save bar's name suggestions -- every existing name in the active
-// category, so "add a variant to something that already exists" is a pick
-// instead of an exact retype (a typo'd name would silently create a NEW
-// folder the runner never searches).
+// The save bar's name suggestions -- every existing name across BOTH folders,
+// so "add a variant to something that already exists" is a pick instead of an
+// exact retype (a typo'd name would silently create a NEW folder the runner
+// never searches). Deduped since map names appear in both folders.
 function renderImageNameDatalist() {
   const el = document.getElementById('im-name-list');
-  el.innerHTML = imActiveCategory().names.map(n => {
-    const opt = document.createElement('option');
-    opt.value = n.name;
-    return opt.outerHTML;
-  }).join('');
+  const seen = new Set();
+  const opts = [];
+  for (const c of (imState.data || [])) {
+    for (const n of c.names) {
+      if (seen.has(n.name)) continue;
+      seen.add(n.name);
+      const opt = document.createElement('option');
+      opt.value = n.name;
+      opts.push(opt.outerHTML);
+    }
+  }
+  el.innerHTML = opts.join('');
 }
 
 // Built via DOM calls (not innerHTML + inline onclick) so names with
@@ -3623,22 +3717,40 @@ function renderImageLibrary() {
   const el = document.getElementById('im-library');
   el.innerHTML = '';
   const filter = (document.getElementById('im-filter').value || '').toLowerCase();
-  const names = imActiveCategory().names.filter(n => n.name.toLowerCase().includes(filter));
-  if (names.length === 0) {
+  // One combined list of BOTH folders instead of a per-tab view -- each item
+  // carries its own category so the +/delete buttons route to the right
+  // folder no matter what. Sorted by name (then category) so the two entries
+  // that share a map name land next to each other, their badges making the
+  // difference obvious.
+  const items = [];
+  for (const c of (imState.data || [])) {
+    for (const n of c.names) {
+      if (n.name.toLowerCase().includes(filter)) items.push({ ...n, catKey: c.key, catLabel: c.label });
+    }
+  }
+  items.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.catKey.localeCompare(b.catKey));
+  if (items.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'im-empty';
     empty.textContent = filter
       ? 'No names match that filter.'
-      : 'No images in this category yet -- use Capture Roblox to add some, or check the Assets folder exists next to the app.';
+      : 'No reference images yet -- use Capture Roblox to add some, or check the Assets folder exists next to the app.';
     el.appendChild(empty);
     return;
   }
-  for (const n of names) {
+  for (const n of items) {
+    const catKey = n.catKey;
     const card = document.createElement('div');
     card.className = 'im-card';
 
     const head = document.createElement('div');
     head.className = 'im-card-head';
+    // Where this image is used -- "UI" (in-game buttons/screens) or "Map"
+    // (map-select carousel cards). This is the whole point of the combined
+    // list: the same map name exists in both folders for different jobs.
+    const badge = document.createElement('span');
+    badge.className = `im-badge im-badge-${catKey === 'maps' ? 'map' : 'ui'}`;
+    badge.textContent = catKey === 'maps' ? 'Map' : 'UI';
     const label = document.createElement('span');
     label.className = 'im-card-name';
     label.textContent = n.name;
@@ -3651,11 +3763,22 @@ function renderImageLibrary() {
     add.className = 'im-card-add';
     add.textContent = '+';
     add.title = `Capture your Roblox screen and crop a new variant of "${n.name}"`;
-    add.addEventListener('click', () => startImageCapture(n.name));
+    add.addEventListener('click', () => startImageCapture(n.name, catKey));
+    head.appendChild(badge);
     head.appendChild(label);
     head.appendChild(count);
     head.appendChild(add);
     card.appendChild(head);
+
+    // One-line "what this is for" so nobody has to guess what nav_unitmanager
+    // or a given map entry actually does (see IMAGE_DESCRIPTIONS).
+    const descText = describeImage(catKey, n.name);
+    if (descText) {
+      const desc = document.createElement('div');
+      desc.className = 'im-card-desc';
+      desc.textContent = descText;
+      card.appendChild(desc);
+    }
 
     // Match-sensitivity row: a slider + readout for this name's threshold.
     // Lower = looser (matches on setups where the button renders a bit
@@ -3707,7 +3830,7 @@ function renderImageLibrary() {
       del.className = 'im-thumb-del';
       del.textContent = '×';
       del.title = 'Delete this image (click twice)';
-      del.addEventListener('click', () => deleteTemplateImage(n.name, img.file, del));
+      del.addEventListener('click', () => deleteTemplateImage(catKey, n.name, img.file, del));
       wrap.appendChild(pic);
       wrap.appendChild(del);
       thumbs.appendChild(wrap);
@@ -3730,7 +3853,7 @@ function imDisarmDelete() {
   imDeleteArmed = null;
 }
 
-async function deleteTemplateImage(name, file, el) {
+async function deleteTemplateImage(catKey, name, file, el) {
   if (!imDeleteArmed || imDeleteArmed.el !== el) {
     imDisarmDelete();
     el.classList.add('armed');
@@ -3739,7 +3862,7 @@ async function deleteTemplateImage(name, file, el) {
   }
   imDisarmDelete();
   try {
-    const result = await pywebview.api.delete_vision_template_image(imState.category, name, file);
+    const result = await pywebview.api.delete_vision_template_image(catKey, name, file);
     if (!result.ok) {
       addLog(`[Images] Couldn't delete ${file}: ${result.reason || 'error'}`);
       return;
@@ -3769,7 +3892,12 @@ async function saveImageThreshold(name, value) {
   } catch (e) {}
 }
 
-async function startImageCapture(prefillName) {
+async function startImageCapture(prefillName, catKey) {
+  // catKey is set when this came from a specific card's "+" -- it locks the
+  // save to THAT card's folder so a variant can never land in the wrong one.
+  // The top "Capture Roblox" button passes nothing, and saveImageCrop then
+  // routes a manually-typed name via categoryForName instead.
+  imState.saveCategory = catKey || null;
   const returnScreen = currentScreen === 'dashboard' ? lastNonDashboardScreen : currentScreen;
   // See usePlaceUnitRobloxScreen -- the game must actually show during
   // this hop despite the open modal.
@@ -3966,15 +4094,23 @@ async function saveImageCrop() {
     addLog('[Images] Type or pick a name to save the crop under first.');
     return;
   }
+  // Folder to save into: locked to the card's category when the capture was
+  // started from a card's "+", otherwise routed from the typed name (see
+  // categoryForName). Either way the user never has to pick a tab.
+  const catKey = imState.saveCategory || categoryForName(name);
+  const catLabel = (imState.data || []).find(c => c.key === catKey)?.label || catKey;
   btn.disabled = true;
   btn.textContent = 'Saving...';
   try {
     const result = await pywebview.api.save_image_search_crop(
-      imState.category, name, imState.sel.x, imState.sel.y, imState.sel.w, imState.sel.h);
+      catKey, name, imState.sel.x, imState.sel.y, imState.sel.w, imState.sel.h);
     if (!result.ok) {
       addLog(`[Images] Save failed: ${result.reason || 'error'}`);
       btn.textContent = 'Failed';
     } else {
+      // Name the folder it went to -- a manually-typed name auto-routes, so
+      // this makes a wrong guess visible instead of silent.
+      addLog(`[Images] Saved "${name}" under ${catLabel}.`);
       btn.textContent = 'Saved!';
       // Refresh the library data in the background but STAY in capture view
       // with the screenshot up -- one capture usually yields several crops
