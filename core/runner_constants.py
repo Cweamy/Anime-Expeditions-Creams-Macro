@@ -435,11 +435,6 @@ WAVE_REGION = (467, 21, 104, 61)
 # its time re-running OCR against a number that hasn't changed yet.
 WAIT_WAVE_POLL_INTERVAL = 2.0
 
-# Fallbacks if main.py doesn't pass real calibrated regions through (mirrors
-# main.py's REWARD_REGION_DEFAULTS/STATS_REGION_DEFAULTS).
-DEFAULT_REWARD_REGION = {"x": 212, "y": 429, "width": 504, "height": 106}
-DEFAULT_STATS_REGION = {"x": 210, "y": 337, "width": 509, "height": 57}
-
 # EVERY fixed click point/row layout the runner uses, as overridable
 # settings (Settings > Debug > Macro Coordinates -- mirrors main.py's
 # MACRO_COORD_DEFAULTS): a game update shifting any of these needs a number

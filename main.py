@@ -600,8 +600,7 @@ class Api:
         data["all_time_seconds"] = self._all_time_base + elapsed
         cfg.save(data)
 
-    def _record_match_result(self, result: str, map_name: str, duration: str,
-                              stats: dict = None, items: list = None) -> None:
+    def _record_match_result(self, result: str, map_name: str, duration: str) -> None:
         # Called from core.runner (a background thread) right after a
         # Victory/Defeat screen is read -- session counts update in memory
         # immediately; all_time counts and run_history persist to disk so
@@ -920,12 +919,10 @@ class Api:
         coords = {k: data.get(k, v) for k, v in MACRO_COORD_DEFAULTS.items()}
         debug_screenshots = data.get("debug_screenshots", False)
         default_walk_paths = self.get_default_walk_paths()
-        reward_region = self.get_reward_region()
-        stats_region = self.get_stats_region()
         webhook_settings = self.get_webhook_settings()
         return self.runner.start(
             lambda: self.game_hwnd, self.get_tasks, scroll_power, coords, scroll_nudges, debug_screenshots,
-            default_walk_paths, reward_region, stats_region, webhook_settings,
+            default_walk_paths, webhook_settings,
             expedition_color_buttons=data.get("expedition_color_buttons", True),
             expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100))
 
