@@ -596,9 +596,7 @@ class Api:
 
     def persist_all_time(self) -> None:
         elapsed = time.time() - self.session_start
-        data = cfg.load()
-        data["all_time_seconds"] = self._all_time_base + elapsed
-        cfg.save(data)
+        cfg.update({"all_time_seconds": self._all_time_base + elapsed})
 
     def _record_match_result(self, result: str, map_name: str, duration: str) -> None:
         # Called from core.runner (a background thread) right after a
@@ -613,11 +611,9 @@ class Api:
 
         data = cfg.load()
         key = "all_time_wins" if is_win else "all_time_losses"
-        data[key] = data.get(key, 0) + 1
         history = data.get("run_history", [])
         history.insert(0, {"result": result, "map": map_name or "-", "duration": duration or "-", "at": time.time()})
-        data["run_history"] = history[:RUN_HISTORY_LIMIT]
-        cfg.save(data)
+        cfg.update({key: data.get(key, 0) + 1, "run_history": history[:RUN_HISTORY_LIMIT]})
 
     def get_settings(self) -> dict:
         data = cfg.load()
@@ -677,10 +673,7 @@ class Api:
         return {"ok": True, "saved": list(clean)}
 
     def reset_macro_coords(self) -> dict:
-        data = cfg.load()
-        for key, default in MACRO_COORD_DEFAULTS.items():
-            data[key] = default
-        cfg.save(data)
+        cfg.update(dict(MACRO_COORD_DEFAULTS))
         return {"ok": True, "coords": dict(MACRO_COORD_DEFAULTS)}
 
     def debug_matchmaking_region(self) -> dict:
@@ -715,14 +708,12 @@ class Api:
         return {**walk_paths.load_shipped_default_walk_paths(), **cfg.load().get("default_walk_paths", {})}
 
     def set_default_walk_path(self, map_name: str, path_name: str) -> dict:
-        data = cfg.load()
-        defaults = dict(data.get("default_walk_paths", {}))
+        defaults = dict(cfg.load().get("default_walk_paths", {}))
         if path_name:
             defaults[map_name] = path_name
         else:
             defaults.pop(map_name, None)
-        data["default_walk_paths"] = defaults
-        cfg.save(data)
+        cfg.update({"default_walk_paths": defaults})
         return {"ok": True, "default_walk_paths": defaults}
 
     # ---- Challenge tab ----
@@ -801,8 +792,7 @@ class Api:
             for s in merged["stages"].values():
                 s["count"] = 0
             merged["last_reset_date"] = today
-            data["challenge"] = merged
-            cfg.save(data)
+            cfg.update({"challenge": merged})
             self.push_log("[Challenge] Daily play counts reset.")
         return merged
 
@@ -816,41 +806,33 @@ class Api:
         # day's capped plays the way a real completion does.
         if stage not in CHALLENGE_STAGE_SLOTS:
             return {"ok": False, "reason": "bad_stage"}
-        data = cfg.load()
         challenge = self.get_challenge_settings()
         challenge["stages"][stage]["last_played_at"] = time.time()
         if count_play:
             challenge["stages"][stage]["count"] += 1
-        data["challenge"] = challenge
-        cfg.save(data)
+        cfg.update({"challenge": challenge})
         return {"ok": True}
 
     def set_challenge_enabled(self, enabled: bool) -> dict:
-        data = cfg.load()
         challenge = self.get_challenge_settings()
         challenge["enabled"] = bool(enabled)
-        data["challenge"] = challenge
-        cfg.save(data)
+        cfg.update({"challenge": challenge})
         return {"ok": True}
 
     def set_challenge_play_mode(self, play_mode: str) -> dict:
         if play_mode not in ("solo", "matchmaking"):
             return {"ok": False, "reason": "bad_play_mode"}
-        data = cfg.load()
         challenge = self.get_challenge_settings()
         challenge["play_mode"] = play_mode
-        data["challenge"] = challenge
-        cfg.save(data)
+        cfg.update({"challenge": challenge})
         return {"ok": True}
 
     def set_challenge_stage_enabled(self, stage: str, enabled: bool) -> dict:
         if stage not in CHALLENGE_STAGE_SLOTS:
             return {"ok": False, "reason": "bad_stage"}
-        data = cfg.load()
         challenge = self.get_challenge_settings()
         challenge["stages"][stage]["enabled"] = bool(enabled)
-        data["challenge"] = challenge
-        cfg.save(data)
+        cfg.update({"challenge": challenge})
         return {"ok": True}
 
     def set_challenge_stage_count(self, stage: str, count) -> dict:
@@ -863,11 +845,9 @@ class Api:
             count = max(0, int(count))
         except (TypeError, ValueError):
             return {"ok": False, "reason": "bad_count"}
-        data = cfg.load()
         challenge = self.get_challenge_settings()
         challenge["stages"][stage]["count"] = count
-        data["challenge"] = challenge
-        cfg.save(data)
+        cfg.update({"challenge": challenge})
         return {"ok": True}
 
     def set_challenge_stage_cooldown(self, stage: str, on_cooldown: bool) -> dict:
@@ -881,11 +861,9 @@ class Api:
         # get_challenge_settings computes, just driven by hand here.
         if stage not in CHALLENGE_STAGE_SLOTS:
             return {"ok": False, "reason": "bad_stage"}
-        data = cfg.load()
         challenge = self.get_challenge_settings()
         challenge["stages"][stage]["last_played_at"] = time.time() if on_cooldown else 0
-        data["challenge"] = challenge
-        cfg.save(data)
+        cfg.update({"challenge": challenge})
         self.push_log(f"[Challenge] Slot #{stage} "
                        f"{'set on cooldown until the next window' if on_cooldown else 'cleared -- Ready now'}.")
         return {"ok": True}
@@ -893,22 +871,18 @@ class Api:
     def set_challenge_map_macro(self, map_name: str, macro: str) -> dict:
         if map_name not in CHALLENGE_STORY_MAPS:
             return {"ok": False, "reason": "bad_map"}
-        data = cfg.load()
         challenge = self.get_challenge_settings()
         challenge["maps"][map_name]["macro"] = macro or ""
-        data["challenge"] = challenge
-        cfg.save(data)
+        cfg.update({"challenge": challenge})
         return {"ok": True}
 
     def reset_challenge_counts(self) -> dict:
-        data = cfg.load()
         challenge = self.get_challenge_settings()
         for s in challenge["stages"].values():
             s["count"] = 0
             s["last_played_at"] = 0  # also clears cooldown -- every slot becomes available immediately
         challenge["last_reset_date"] = date.today().isoformat()
-        data["challenge"] = challenge
-        cfg.save(data)
+        cfg.update({"challenge": challenge})
         self.push_log("[Challenge] Play counts and cooldowns reset manually.")
         return {"ok": True}
 
@@ -956,9 +930,7 @@ class Api:
         # reorder, clone) rather than discrete add/remove events, so the
         # whole list is saved as a unit on every change instead of trying
         # to diff individual mutations.
-        data = cfg.load()
-        data["tasks"] = tasks
-        cfg.save(data)
+        cfg.update({"tasks": tasks})
         return {"ok": True}
 
     def start_path_recording(self) -> dict:
@@ -1051,20 +1023,16 @@ class Api:
     def set_hotkey(self, action: str, key: str) -> dict:
         if action not in HOTKEY_DEFAULTS:
             return {"ok": False}
-        data = cfg.load()
         keys_ = dict(HOTKEY_DEFAULTS)
-        keys_.update(data.get("hotkeys", {}))
+        keys_.update(cfg.load().get("hotkeys", {}))
         keys_[action] = (key or "").lower()
-        data["hotkeys"] = keys_
-        cfg.save(data)
+        cfg.update({"hotkeys": keys_})
         if self._on_hotkeys_changed:
             self._on_hotkeys_changed(keys_)
         return {"ok": True}
 
     def reset_hotkeys(self) -> dict:
-        data = cfg.load()
-        data["hotkeys"] = dict(HOTKEY_DEFAULTS)
-        cfg.save(data)
+        cfg.update({"hotkeys": dict(HOTKEY_DEFAULTS)})
         if self._on_hotkeys_changed:
             self._on_hotkeys_changed(dict(HOTKEY_DEFAULTS))
         return {"ok": True, "hotkeys": dict(HOTKEY_DEFAULTS)}
@@ -1146,12 +1114,12 @@ class Api:
         }
 
     def save_webhook_settings(self, url: str, enabled: bool, silent: bool, mention_id: str = "") -> dict:
-        data = cfg.load()
-        data["webhook_url"] = url or ""
-        data["webhook_enabled"] = bool(enabled)
-        data["webhook_silent"] = bool(silent)
-        data["webhook_mention_id"] = (mention_id or "").strip()
-        cfg.save(data)
+        cfg.update({
+            "webhook_url": url or "",
+            "webhook_enabled": bool(enabled),
+            "webhook_silent": bool(silent),
+            "webhook_mention_id": (mention_id or "").strip(),
+        })
         return {"ok": True}
 
     def validate_webhook_url(self, url: str) -> dict:
@@ -2326,21 +2294,19 @@ class Api:
         }
 
     def save_reward_region(self, x: int, y: int, width: int, height: int) -> dict:
-        data = cfg.load()
-        data["reward_region_x"] = int(x)
-        data["reward_region_y"] = int(y)
-        data["reward_region_w"] = int(width)
-        data["reward_region_h"] = int(height)
-        cfg.save(data)
+        cfg.update({
+            "reward_region_x": int(x), "reward_region_y": int(y),
+            "reward_region_w": int(width), "reward_region_h": int(height),
+        })
         return {"ok": True}
 
     def reset_reward_region(self) -> dict:
-        data = cfg.load()
-        data["reward_region_x"] = REWARD_REGION_DEFAULTS["x"]
-        data["reward_region_y"] = REWARD_REGION_DEFAULTS["y"]
-        data["reward_region_w"] = REWARD_REGION_DEFAULTS["width"]
-        data["reward_region_h"] = REWARD_REGION_DEFAULTS["height"]
-        cfg.save(data)
+        cfg.update({
+            "reward_region_x": REWARD_REGION_DEFAULTS["x"],
+            "reward_region_y": REWARD_REGION_DEFAULTS["y"],
+            "reward_region_w": REWARD_REGION_DEFAULTS["width"],
+            "reward_region_h": REWARD_REGION_DEFAULTS["height"],
+        })
         return self.get_reward_region()
 
     def preview_reward_region(self) -> dict:
@@ -2502,21 +2468,19 @@ class Api:
         }
 
     def save_stats_region(self, x: int, y: int, width: int, height: int) -> dict:
-        data = cfg.load()
-        data["stats_region_x"] = int(x)
-        data["stats_region_y"] = int(y)
-        data["stats_region_w"] = int(width)
-        data["stats_region_h"] = int(height)
-        cfg.save(data)
+        cfg.update({
+            "stats_region_x": int(x), "stats_region_y": int(y),
+            "stats_region_w": int(width), "stats_region_h": int(height),
+        })
         return {"ok": True}
 
     def reset_stats_region(self) -> dict:
-        data = cfg.load()
-        data["stats_region_x"] = STATS_REGION_DEFAULTS["x"]
-        data["stats_region_y"] = STATS_REGION_DEFAULTS["y"]
-        data["stats_region_w"] = STATS_REGION_DEFAULTS["width"]
-        data["stats_region_h"] = STATS_REGION_DEFAULTS["height"]
-        cfg.save(data)
+        cfg.update({
+            "stats_region_x": STATS_REGION_DEFAULTS["x"],
+            "stats_region_y": STATS_REGION_DEFAULTS["y"],
+            "stats_region_w": STATS_REGION_DEFAULTS["width"],
+            "stats_region_h": STATS_REGION_DEFAULTS["height"],
+        })
         return self.get_stats_region()
 
     def preview_stats_region(self) -> dict:
@@ -2979,11 +2943,17 @@ def _launch_ui():
             try:
                 if (api._resume_after_relaunch and api.docker.docked
                         and api.game_hwnd and wm.is_window(api.game_hwnd)):
-                    if api.runner.is_running():
-                        api._resume_after_relaunch = False  # its own recovery already caught the re-dock
-                    else:
-                        api._resume_after_relaunch = False
-                        api.push_log("Roblox is back -- restarting the macro where it left off.")
+                    # Cleared either way -- the still-live runner already
+                    # caught the re-dock by itself (nothing to do here), or it
+                    # had given up and a fresh run starts below.
+                    still_running = api.runner.is_running()
+                    api._resume_after_relaunch = False
+                    if not still_running:
+                        # Not a resume: start_macro() re-enters the queue at
+                        # the first task, so an interrupted task loses the
+                        # repeats it had already done. Say that plainly rather
+                        # than implying it picks up mid-task.
+                        api.push_log("Roblox is back -- starting the macro again from the first task.")
                         api.start_macro()
             except Exception as exc:
                 api.push_log(f"Auto-restart after reopening Roblox failed: {exc}")

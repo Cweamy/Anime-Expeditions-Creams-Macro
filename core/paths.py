@@ -250,7 +250,17 @@ def replay_events(events: list, keyboard, stop_event: threading.Event = None, sp
                 break
             delay = ev["t"] - last_t
             if delay > 0:
-                time.sleep(delay)
+                # Event.wait() rather than time.sleep() so Stop cuts in during
+                # the gap BETWEEN two key events, not just at the next one. A
+                # recorded path can sit still for seconds at a time (walking
+                # to a spot, waiting for an animation), and a plain sleep
+                # blocks the stop for the whole of it. wait() returns True the
+                # moment the event is set, so there's no polling either.
+                if stop_event is not None:
+                    if stop_event.wait(delay):
+                        break
+                else:
+                    time.sleep(delay)
             last_t = ev["t"]
             name = ev["key"]
             if name not in _WATCHED_KEYS:
