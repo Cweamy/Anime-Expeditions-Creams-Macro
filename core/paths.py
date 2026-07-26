@@ -21,6 +21,7 @@ import threading
 import time
 
 from . import constants
+from .jsonstore import write_json_atomic
 
 if sys.platform == "darwin":
     from . import _input_mac as _input_backend
@@ -198,8 +199,12 @@ def save_path(name: str, events: list) -> str:
     name = _safe_name(name)
     os.makedirs(PATHS_DIR, exist_ok=True)
     path = os.path.join(PATHS_DIR, f"{name}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"name": name, "events": events}, f, indent=2)
+    # Atomic: an interrupted save must not truncate the recording that was
+    # already there. load_path() treats a corrupt file as a miss and falls
+    # through to the shipped default, so for a name that ships one the
+    # replacement is silent AND walks a different route (see
+    # core/jsonstore.py).
+    write_json_atomic(path, {"name": name, "events": events})
     return name
 
 

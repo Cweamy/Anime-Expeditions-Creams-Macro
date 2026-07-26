@@ -3,6 +3,7 @@ import os
 import re
 
 from . import constants
+from .jsonstore import write_json_atomic
 
 TEMPLATES_DIR = os.path.join(constants.APP_DIR, "Templates")
 
@@ -24,8 +25,10 @@ def save_template(name: str, blocks: list) -> str:
     name = _safe_name(name)
     os.makedirs(TEMPLATES_DIR, exist_ok=True)
     path = os.path.join(TEMPLATES_DIR, f"{name}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"name": name, "blocks": blocks}, f, indent=2)
+    # Atomic: an interrupted save must not truncate the template that was
+    # already there -- load_template() reports a corrupt file as an empty
+    # block list, so the loss would be silent (see core/jsonstore.py).
+    write_json_atomic(path, {"name": name, "blocks": blocks})
     return name
 
 
