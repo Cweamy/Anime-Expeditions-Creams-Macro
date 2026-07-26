@@ -2563,7 +2563,12 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         """
         act = str(act)
         act_images = EVENT_ACT_IMAGES.get(act)
-        if act_images is None:
+        # Both structures are checked, not just the images: EVENT_ACT_ORDER is
+        # indexed further down to decide whether the card needs scrolling to,
+        # so an act present in one but not the other would raise ValueError
+        # mid-navigation rather than failing cleanly here. They're hand-synced
+        # and Act 4 is queued to be added, so it's worth not depending on that.
+        if act_images is None or act not in EVENT_ACT_ORDER:
             self._log(f'[Macro] Unknown Event Act "{act}" -- expected one of {EVENT_ACT_ORDER}.')
             return False
         if isinstance(act_images, str):

@@ -90,8 +90,14 @@ def get_current_version() -> str:
 
 
 def _parse_version(tag: str) -> tuple:
-    nums = re.findall(r"\d+", tag)
-    return tuple(int(n) for n in nums) if nums else (0,)
+    # Only the leading dotted number run counts. Collecting EVERY digit run in
+    # the tag meant a pre-release like v0.11.0-beta2 parsed as (0, 11, 0, 2),
+    # which sorts ABOVE the finished (0, 11, 0) -- so a user on the real
+    # 0.11.0 would be offered an "update" back down to the pre-release.
+    match = re.search(r"\d+(?:\.\d+)*", tag or "")
+    if not match:
+        return (0,)
+    return tuple(int(n) for n in match.group(0).split("."))
 
 
 def _latest_tag_via_redirect(timeout: float, log=None) -> str:
@@ -499,6 +505,7 @@ def _get_release_zip_with_fallback(release_zip_url: str, log):
         log(f"[Update] Downloading {url}...")
         resp = requests.get(url, timeout=120, stream=True)
         if resp.status_code == 404 and i < len(candidates) - 1:
+            resp.close()  # streamed response -- hand the connection back before retrying
             log("[Update] Not found under that name -- trying the release zip's other known name.")
             continue
         resp.raise_for_status()
@@ -525,11 +532,11 @@ def merge_assets_update(release_zip_url: str, log) -> bool:
         log(f"[Update] Assets merge skipped ({exc}) -- existing Assets folder left as-is.")
         return False
     finally:
-        try:
-            os.remove(zip_path)
-            os.rmdir(tmp_root)
-        except OSError:
-            pass
+        # rmtree, not remove()+rmdir(): when the download never got as far as
+        # creating the zip (offline, or every candidate name 404s) the
+        # os.remove raised, so the os.rmdir never ran and an empty aecm_*
+        # folder was left in %TEMP% after every failed attempt.
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def ensure_assets_present(log) -> bool:
@@ -667,11 +674,11 @@ def _download_release_update_mac(release_zip_url: str, log, on_progress=None) ->
             log(f"[Update] Assets merge skipped ({exc}) -- existing Assets folder left as-is.")
         return staged
     finally:
-        try:
-            os.remove(zip_path)
-            os.rmdir(tmp_root)
-        except OSError:
-            pass
+        # rmtree, not remove()+rmdir(): when the download never got as far as
+        # creating the zip (offline, or every candidate name 404s) the
+        # os.remove raised, so the os.rmdir never ran and an empty aecm_*
+        # folder was left in %TEMP% after every failed attempt.
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def stage_app_update(staged_app_path: str) -> str:
@@ -785,11 +792,11 @@ def download_release_update(release_zip_url: str, log, on_progress=None) -> str:
             log(f"[Update] Assets merge skipped ({exc}) -- existing Assets folder left as-is.")
         return new_exe
     finally:
-        try:
-            os.remove(zip_path)
-            os.rmdir(tmp_root)
-        except OSError:
-            pass
+        # rmtree, not remove()+rmdir(): when the download never got as far as
+        # creating the zip (offline, or every candidate name 404s) the
+        # os.remove raised, so the os.rmdir never ran and an empty aecm_*
+        # folder was left in %TEMP% after every failed attempt.
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def stage_exe_update(new_exe_path: str) -> str:
