@@ -29,7 +29,6 @@ title-bar height estimate (_TITLEBAR_PT) are the two most likely things
 to need a first-run fix. debug.log will show any AX/Quartz exception
 with a [window_mac] prefix.
 """
-import os
 
 import Quartz
 from AppKit import NSRunningApplication, NSApplicationActivateIgnoringOtherApps
@@ -37,7 +36,7 @@ try:
     # AX* symbols live in the ApplicationServices/HIServices bindings.
     from ApplicationServices import (
         AXIsProcessTrusted, AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
-        AXUIElementSetAttributeValue, AXUIElementPerformAction, AXValueCreate, AXValueGetValue,
+        AXUIElementSetAttributeValue, AXUIElementPerformAction, AXValueCreate,
         kAXWindowsAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXRaiseAction,
         kAXValueCGPointType, kAXValueCGSizeType,
     )

@@ -15,12 +15,16 @@ import subprocess
 WINGET_PACKAGE_ID = "UB-Mannheim.TesseractOCR"
 INSTALL_TIMEOUT = 300.0  # winget downloads ~50MB -- generous for a slow connection
 
-# winget returns 0x8A15002B (unsigned: 2316632107, signed: -1978335189)
-# or 0x8A15002C (unsigned: 2316632108, signed: -1978335188) when the package
-# is already installed at its latest version and no update is available.
+# winget returns 0x8A15002B or 0x8A15002C when the package is already
+# installed at its latest version and no update is available. Both the
+# unsigned and the sign-extended reading of each code are listed, since which
+# one subprocess surfaces as returncode depends on how the exit status is
+# interpreted. NOTE: 0x8A15002B and 2316632107 are the SAME number written two
+# ways (likewise 0x8A15002C and 2316632108), so only the hex and the negative
+# forms are needed -- listing the unsigned decimal too was a no-op duplicate.
 _NO_UPDATE_APPLICABLE = {
-    0x8A15002B, 2316632107, -1978335189,
-    0x8A15002C, 2316632108, -1978335188,
+    0x8A15002B, -1978335189,
+    0x8A15002C, -1978335188,
 }
 
 

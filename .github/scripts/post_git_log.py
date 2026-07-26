@@ -16,7 +16,6 @@ Reads its inputs from environment variables (set by the calling workflow
 step) rather than argv, so the workflow YAML doesn't need to shell-escape
 anything into a command line either.
 """
-import json
 import os
 import subprocess
 import sys

@@ -9,14 +9,9 @@ Methods here run with MacroRunner's full self: shared state and helpers
 import threading
 import time
 
-from . import camera
-from . import keys
-from . import paths as walk_paths
-from . import stage_select
 from . import vision
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- the shared constants namespace
-from .runner_constants import _exp_green, _exp_green_loose, _exp_red  # underscore names, skipped by *
 
 
 class ChallengeOps:
@@ -68,9 +63,8 @@ class ChallengeOps:
                 return True
         return False
 
-    def _run_challenges(self, hwnd, stop_event: threading.Event, coords: dict, scroll_power: int,
-                          scroll_nudges: int, default_walk_paths: dict, reward_region: dict, stats_region: dict,
-                          webhook: dict) -> None:
+    def _run_challenges(self, hwnd, stop_event: threading.Event, coords: dict,
+                          default_walk_paths: dict, webhook: dict) -> None:
         """Runs every ready (enabled, under today's cap, off its own
         cooldown) Regular Challenge stage slot once each, in #1/#2/#3
         order, then returns -- called once before the Task Queue ever
@@ -80,9 +74,9 @@ class ChallengeOps:
         anymore. Challenge is Story's own flow with the
         game picking a random one of CHALLENGE_STORY_MAPS for you instead
         of you picking it, so the actual battle (Pre Start, Start Game,
-        Victory/Defeat, reward reading) reuses _play_one_match/
-        _handle_match_result unchanged via a synthetic Story-shaped task --
-        see _run_one_challenge_stage."""
+        Victory/Defeat) reuses _play_one_match/_handle_match_result
+        unchanged via a synthetic Story-shaped task -- see
+        _run_one_challenge_stage."""
         if self._get_challenge_settings is None:
             return
         try:
@@ -120,8 +114,7 @@ class ChallengeOps:
 
             play_mode = challenge.get("play_mode") or "solo"
             result = self._run_one_challenge_stage(hwnd, stop_event, slot, play_mode, challenge, coords,
-                                                     scroll_power, scroll_nudges, default_walk_paths,
-                                                     reward_region, stats_region, webhook)
+                                                     default_walk_paths, webhook)
             if self._checkpoint(stop_event):
                 return
             if result == "win":
@@ -161,8 +154,7 @@ class ChallengeOps:
         self._log("[Macro] Challenge pass finished -- moving on to the Task Queue.")
 
     def _run_one_challenge_stage(self, hwnd, stop_event: threading.Event, slot: str, play_mode: str,
-                                   challenge: dict, coords: dict, scroll_power: int, scroll_nudges: int,
-                                   default_walk_paths: dict, reward_region: dict, stats_region: dict,
+                                   challenge: dict, coords: dict, default_walk_paths: dict,
                                    webhook: dict) -> str:
         """Returns "win", "loss", or None -- None covers both a genuine
         technical failure (never got into the stage, map never recognized,
@@ -223,8 +215,7 @@ class ChallengeOps:
         # False) -- there's no "Repeat Stage" concept here, the next
         # attempt (if another slot is still ready) goes through the full
         # Challenge -> stage-slot navigation again, not a quick requeue.
-        if not self._handle_match_result(hwnd, stop_event, task, result, duration, reward_region, stats_region,
-                                           webhook, repeat=False):
+        if not self._handle_match_result(hwnd, stop_event, task, result, duration, webhook, repeat=False):
             return None
         return None if self._checkpoint(stop_event) else result
 

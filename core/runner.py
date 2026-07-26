@@ -4,9 +4,12 @@ lobby screen, open Play > Story), picking the first task's map and stage,
 Pre Start (camera setup, Team Loadout, a per-map default walk, the task's
 Macro Operation template's Pre Start blocks), pressing Start Game, and then
 watching the battle for Battle-phase blocks (Upgrade/Sell/Auto Upgrade Unit)
-and a Victory/Defeat screen -- which gets its game stats (and, on a win, its
-rewards) read via OCR, recorded to run history/win-loss counts, and reported
-to Discord if a webhook is configured. Equipment include/exclude, and the
+and a Victory/Defeat screen -- which is recorded to run history/win-loss
+counts and, if a webhook is configured, reported to Discord as a screenshot
+of the result screen plus a rendered win/loss card (see
+_handle_match_result/_send_result_webhook -- the stats/reward OCR this used
+to do per match now lives only behind Settings > Debug's on-demand "Read
+Rewards"/"Read Game Stats" buttons). Equipment include/exclude, and the
 rest of the Battle-phase block types (Walk/Wait/Setting), plug in once those
 exist.
 """
@@ -17,7 +20,6 @@ from datetime import datetime, timezone
 
 from . import camera
 from . import keys
-from . import paths as walk_paths
 from . import stage_select
 from . import vision
 from . import window as wm
@@ -64,8 +66,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             _raw_set_status(**kw)
 
         self._set_status = _tracking_set_status
-        # (result: "win"|"loss", map_name, duration_str, stats_dict, items_list) ->
-        # persists to run history / win-loss counters (see main.Api._record_match_result).
+        # (result: "win"|"loss", map_name, duration_str) -> persists to run
+        # history / win-loss counters (see main.Api._record_match_result).
         self._record_result = record_result or (lambda *a, **kw: None)
         # Challenge tab settings live in settings.json, owned by main.Api
         # (same reason record_result is a callback, not a direct import --
@@ -134,8 +136,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
 
     def start(self, hwnd_getter, get_tasks, scroll_power: int = None, coords: dict = None,
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
-              reward_region: dict = None, stats_region: dict = None, webhook: dict = None,
-              expedition_color_buttons: bool = True, expedition_camera_o_ms: float = 100) -> dict:
+              webhook: dict = None, expedition_color_buttons: bool = True,
+              expedition_camera_o_ms: float = 100) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -154,8 +156,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._consecutive_loss_map = None
         self._thread = threading.Thread(
             target=self._run,
-            args=(hwnd_getter, get_tasks, self._stop_event, scroll_power, coords, scroll_nudges, default_walk_paths,
-                  reward_region, stats_region, webhook),
+            args=(hwnd_getter, get_tasks, self._stop_event, scroll_power, coords, scroll_nudges,
+                  default_walk_paths, webhook),
             daemon=True)
         self._thread.start()
         return {"ok": True}
@@ -419,15 +421,13 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
 
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,
-              reward_region: dict = None, stats_region: dict = None, webhook: dict = None) -> None:
+              webhook: dict = None) -> None:
         coords = {**DEFAULT_COORDS, **(coords or {})}
         # Also kept on self: most click sites live in methods coords was
         # never threaded through -- one shared dict beats adding a parameter
         # to a dozen call chains (see _cxy).
         self._coords = coords
         default_walk_paths = default_walk_paths or {}
-        reward_region = reward_region or DEFAULT_REWARD_REGION
-        stats_region = stats_region or DEFAULT_STATS_REGION
         webhook = webhook or {}
 
         hwnd = hwnd_getter()
@@ -489,8 +489,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         if self._checkpoint(stop_event):
             return
         if not self._skip_first_task_setup:
-            self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges, default_walk_paths,
-                                   reward_region, stats_region, webhook)
+            self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
         if self._checkpoint(stop_event):
             return
 
@@ -535,7 +534,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 # the lobby and retries internally, only returning False when
                 # stop_event actually fired.
                 if not self._run_task(hwnd, stop_event, task, task_index, len(tasks), coords, scroll_power,
-                                        scroll_nudges, default_walk_paths, reward_region, stats_region, webhook):
+                                        scroll_nudges, default_walk_paths, webhook):
                     self._set_status(action="Idle")
                     return
 
@@ -552,7 +551,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
 
     def _run_task(self, hwnd, stop_event: threading.Event, task: dict, task_index: int, task_count: int,
                    coords: dict, scroll_power: int, scroll_nudges: int, default_walk_paths: dict,
-                   reward_region: dict, stats_region: dict, webhook: dict) -> bool:
+                   webhook: dict) -> bool:
         """Runs one task's full repeat count end to end. A mid-task failure
         backs out to the lobby and retries this task's setup from scratch
         (see _recover_to_lobby), up to TASK_RECOVERY_ATTEMPTS times, before
@@ -670,8 +669,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 # task cleanly steps out of its own stage before Challenge's
                 # navigation (which starts from the lobby) runs.
                 challenge_wants_in = (not is_last_repeat) and self._challenge_has_ready_stage()
-                if not self._handle_match_result(hwnd, stop_event, task, result, duration,
-                                                  reward_region, stats_region, webhook,
+                if not self._handle_match_result(hwnd, stop_event, task, result, duration, webhook,
                                                   repeat=(not is_last_repeat) and not challenge_wants_in
                                                   and not restart_needed):
                     if stop_event.is_set():
@@ -716,8 +714,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 if challenge_wants_in:
                     self._log(f'[Macro] Challenge stage ready -- pausing "{map_name}" to run it '
                                f'before continuing.')
-                    self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges,
-                                          default_walk_paths, reward_region, stats_region, webhook)
+                    self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
                     if self._checkpoint(stop_event):
                         return False
                     self._log(f'[Macro] Challenge pass finished -- resuming "{map_name}".')
@@ -1139,7 +1136,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         return f"{m}m {s}s" if m else f"{s}s"
 
     def _handle_match_result(self, hwnd, stop_event: threading.Event, task: dict, result: str, duration: str,
-                              reward_region: dict, stats_region: dict, webhook: dict, repeat: bool) -> bool:
+                              webhook: dict, repeat: bool) -> bool:
         label = "Victory" if result == "win" else "Defeat"
 
         # A Battle-phase quick-place chain (see _run_place_unit_block) could
@@ -1920,7 +1917,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         nav_unitmanager instead of trying to click a button that isn't there.
         """
         clicked = False
-        for attempt in range(1, SOLO_START_RETRY_ATTEMPTS + 1):
+        for _ in range(1, SOLO_START_RETRY_ATTEMPTS + 1):
             if self._checkpoint(stop_event):
                 return False
 

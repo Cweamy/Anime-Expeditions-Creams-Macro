@@ -202,7 +202,16 @@ def set_dpi_aware() -> None:
     actually took effect.
     """
     try:
-        if user32.SetProcessDpiAwarenessContext(-4):
+        # -4 is DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, and a
+        # DPI_AWARENESS_CONTEXT is a pointer-sized pseudo-handle. Passed as a
+        # bare Python -4, ctypes marshals it as a 32-bit int, so on 64-bit
+        # Windows it arrives as 0x00000000FFFFFFFC -- not a valid context, so
+        # this ALWAYS failed with ERROR_INVALID_PARAMETER (87) and silently
+        # fell through to the shcore call below, leaving the process on
+        # PER_MONITOR_AWARE (V1) instead of the V2 it asks for. c_void_p
+        # produces the proper pointer-sized -4; same 64-bit pseudo-handle
+        # truncation set_always_on_top/place_topmost already work around.
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
             return
     except (OSError, AttributeError):
         pass

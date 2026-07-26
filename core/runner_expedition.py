@@ -9,10 +9,6 @@ Methods here run with MacroRunner's full self: shared state and helpers
 import threading
 import time
 
-from . import camera
-from . import keys
-from . import paths as walk_paths
-from . import stage_select
 from . import vision
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- the shared constants namespace
@@ -370,7 +366,7 @@ class ExpeditionOps:
                 # accept-at) extract chance at the next checkpoint.
                 self._log("[Macro] Extract confirm never registered -- continuing this checkpoint instead.")
             else:
-                self._log(f'[Macro] Not the configured sighting yet -- declining (continuing).')
+                self._log('[Macro] Not the configured sighting yet -- declining (continuing).')
         else:
             self._log(f'[Macro] Wave Continue found (x={cont["cx"]}) -- clicking it.')
 
@@ -422,7 +418,7 @@ class ExpeditionOps:
             how = "mirrored from Continue"
         self._log(f'[Macro] Sighting {self._expedition_extract_count}/{self._expedition_extract_accept_at} -- '
                    f'extracting for real (Extract at ({ex}, {ey}), {how}).')
-        for attempt in range(1, 5):
+        for _ in range(1, 5):
             if self._checkpoint(stop_event):
                 return False
             self._mouse.click(left + ex, top + ey)

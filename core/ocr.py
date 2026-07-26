@@ -4,7 +4,6 @@ finding/loading the Tesseract engine, capturing a screen region with mss,
 and turning a tiny colorful crop into a handful of binarized candidates so
 Tesseract has a real shot at it.
 """
-import os
 import re
 import subprocess
 import numpy as np
