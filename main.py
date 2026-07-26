@@ -2946,11 +2946,17 @@ def _launch_ui():
             try:
                 if (api._resume_after_relaunch and api.docker.docked
                         and api.game_hwnd and wm.is_window(api.game_hwnd)):
-                    if api.runner.is_running():
-                        api._resume_after_relaunch = False  # its own recovery already caught the re-dock
-                    else:
-                        api._resume_after_relaunch = False
-                        api.push_log("Roblox is back -- restarting the macro where it left off.")
+                    # Cleared either way -- the still-live runner already
+                    # caught the re-dock by itself (nothing to do here), or it
+                    # had given up and a fresh run starts below.
+                    still_running = api.runner.is_running()
+                    api._resume_after_relaunch = False
+                    if not still_running:
+                        # Not a resume: start_macro() re-enters the queue at
+                        # the first task, so an interrupted task loses the
+                        # repeats it had already done. Say that plainly rather
+                        # than implying it picks up mid-task.
+                        api.push_log("Roblox is back -- starting the macro again from the first task.")
                         api.start_macro()
             except Exception as exc:
                 api.push_log(f"Auto-restart after reopening Roblox failed: {exc}")
