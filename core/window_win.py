@@ -3,6 +3,7 @@ import ctypes
 from ctypes import wintypes
 
 from . import config
+from .window import BaseWindowManager
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -93,7 +94,7 @@ class RECT(ctypes.Structure):
     ]
 
 
-class WindowManager:
+class WindowsWindowManager(BaseWindowManager):
     """Locates the Roblox window and keeps coordinate math in one place.
 
     Placement/detection code should work in *client* coordinates (0,0 at
@@ -102,8 +103,21 @@ class WindowManager:
     """
 
     def __init__(self, title_substring: str = config.ROBLOX_WINDOW_TITLE):
-        self.title_substring = title_substring
+        super().__init__(title_substring=title_substring)
         self.hwnd = None
+
+    def find_window(self):
+        return self.find()
+
+    def activate(self) -> None:
+        self.bring_to_front()
+
+    def get_rect(self):
+        return self.get_window_rect()
+
+    def set_bounds(self, x: int, y: int, width: int, height: int) -> None:
+        hwnd = self._require_hwnd()
+        user32.SetWindowPos(hwnd, 0, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE)
 
     def find(self):
         matches = []
@@ -665,3 +679,5 @@ def restore_borders(hwnd: int) -> None:
     style |= WS_CAPTION | WS_BORDER | WS_THICKFRAME
     user32.SetWindowLongW(hwnd, GWL_STYLE, style)
     user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+
+WindowManager = WindowsWindowManager
