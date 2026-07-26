@@ -9,14 +9,9 @@ Methods here run with MacroRunner's full self: shared state and helpers
 import threading
 import time
 
-from . import camera
-from . import keys
-from . import paths as walk_paths
-from . import stage_select
 from . import vision
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- the shared constants namespace
-from .runner_constants import _exp_green, _exp_green_loose, _exp_red  # underscore names, skipped by *
 
 
 class ChallengeOps:

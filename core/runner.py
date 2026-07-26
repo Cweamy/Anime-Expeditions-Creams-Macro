@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 
 from . import camera
 from . import keys
-from . import paths as walk_paths
 from . import stage_select
 from . import vision
 from . import window as wm
@@ -1920,7 +1919,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         nav_unitmanager instead of trying to click a button that isn't there.
         """
         clicked = False
-        for attempt in range(1, SOLO_START_RETRY_ATTEMPTS + 1):
+        for _ in range(1, SOLO_START_RETRY_ATTEMPTS + 1):
             if self._checkpoint(stop_event):
                 return False
 
