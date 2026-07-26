@@ -57,6 +57,31 @@ def test_capture_window_rgb_vectorized_parsing(monkeypatch):
     assert np.all(arr[:, :, 2] == 100)
 
 
+def test_set_dpi_aware_passes_pointer_sized_context(monkeypatch):
+    """DPI_AWARENESS_CONTEXT is a pointer-sized pseudo-handle, so -4
+    (PER_MONITOR_AWARE_V2) must not be marshalled as a 32-bit int -- it would
+    arrive as 0x00000000FFFFFFFC and the call would fail with
+    ERROR_INVALID_PARAMETER on every 64-bit Windows, silently downgrading the
+    process to the V1 shcore fallback."""
+    seen = []
+
+    def mock_set_context(ctx):
+        seen.append(ctx)
+        return True  # V2 accepted -- nothing after this should run
+
+    monkeypatch.setattr(window_win.user32, "SetProcessDpiAwarenessContext", mock_set_context)
+    monkeypatch.setattr(window_win.user32, "SetProcessDPIAware",
+                        lambda: pytest.fail("fell through to SetProcessDPIAware despite V2 succeeding"))
+
+    window_win.set_dpi_aware()
+
+    assert len(seen) == 1, "SetProcessDpiAwarenessContext was not called exactly once"
+    ctx = seen[0]
+    assert isinstance(ctx, ctypes.c_void_p), f"context passed as {type(ctx).__name__}, not a pointer"
+    # c_void_p normalizes -4 to its unsigned pointer-sized representation.
+    assert ctx.value == (-4 & (2 ** (8 * ctypes.sizeof(ctypes.c_void_p)) - 1))
+
+
 def test_is_roblox_process_or_title(monkeypatch):
     """Verifies process name and window title detection logic for Roblox."""
     # Scenario 1: Standard Roblox process name
