@@ -60,6 +60,24 @@
       list.scrollTop = list.scrollHeight;
     }
 
+    function appendLogBatch(entries) {
+      if (!entries || !entries.length) return;
+      const list = document.getElementById('log-list');
+      if (!list) return;
+      const fragment = document.createDocumentFragment();
+      for (let i = 0; i < entries.length; i++) {
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        renderLogLine(div, entries[i]);
+        fragment.appendChild(div);
+      }
+      list.appendChild(fragment);
+      while (list.childElementCount > 400) list.removeChild(list.firstElementChild);
+      list.scrollTop = list.scrollHeight;
+    }
+
+    window.appendLogBatch = appendLogBatch;
+
     function clearLogs() {
       document.getElementById('log-list').innerHTML = '';
     }

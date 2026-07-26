@@ -57,6 +57,24 @@ function addLog(line) {
   list.scrollTop = list.scrollHeight;
 }
 
+function appendLogBatch(entries) {
+  if (!entries || !entries.length) return;
+  const list = document.getElementById('log-list');
+  if (!list) return;
+  const fragment = document.createDocumentFragment();
+  for (let i = 0; i < entries.length; i++) {
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    renderLogLine(div, entries[i]);
+    fragment.appendChild(div);
+  }
+  list.appendChild(fragment);
+  while (list.childElementCount > LOG_MAX_LINES) list.removeChild(list.firstElementChild);
+  list.scrollTop = list.scrollHeight;
+}
+
+window.appendLogBatch = appendLogBatch;
+
 // Clears this window's view and asks Python to drop its history buffer and
 // clear any other open log window (e.g. a popped-out one), so "Clear" doesn't
 // leave a stale copy sitting in a second window.

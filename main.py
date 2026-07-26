@@ -10,6 +10,7 @@ import time
 import json
 import subprocess
 import threading
+import queue
 from datetime import date
 
 from core import window as wm
@@ -380,6 +381,10 @@ class Api:
         self._mac_panel_width = None  # last applied width, so repeat calls are free
         self._mac_geometry_lock = threading.Lock()
         self.stopping = threading.Event()
+        self._log_queue = queue.Queue()
+        self._log_flush_lock = threading.Lock()
+        self._log_thread = threading.Thread(target=self._log_flush_worker, daemon=True)
+        self._log_thread.start()
         self.logger = Logger()
         self.session_start = time.time()
         self._all_time_base = cfg.load().get("all_time_seconds", 0)
@@ -1136,23 +1141,68 @@ class Api:
         }
         return webhook.send(url or "", embed)
 
-    def push_log(self, message: str) -> None:
+    def _log_flush_worker(self) -> None:
+        """Background worker thread flushing log messages to PyWebView every 100ms."""
+        while not self.stopping.is_set():
+            time.sleep(0.1)
+            try:
+                self.flush_logs()
+            except Exception:
+                pass
+
+    def flush_logs(self) -> None:
+        """Flushes pending queued log messages to PyWebView in a single IPC batch."""
+        if not any((self._window, self._log_window)):
+            while self._log_queue.qsize() > LOG_HISTORY_LIMIT:
+                try:
+                    self._log_queue.get_nowait()
+                except queue.Empty:
+                    break
+            return
+
+        with self._log_flush_lock:
+            batch = []
+            while True:
+                try:
+                    batch.append(self._log_queue.get_nowait())
+                except queue.Empty:
+                    break
+            if not batch:
+                return
+
+            payload = json.dumps(batch)
+            for win in (self._window, self._log_window):
+                if not win:
+                    continue
+                try:
+                    win.evaluate_js(
+                        f"if (window.appendLogBatch) {{ window.appendLogBatch({payload}); }} "
+                        f"else if (window.addLog) {{ {payload}.forEach(function(l){{ window.addLog(l); }}); }}"
+                    )
+                except Exception:
+                    pass
+
+    def push_log(self, message: str, immediate: bool = False) -> None:
         self.logger.log(message)
         self._log_history.append(message)
         if len(self._log_history) > LOG_HISTORY_LIMIT:
             self._log_history = self._log_history[-LOG_HISTORY_LIMIT:]
-        for win in (self._window, self._log_window):
-            if not win:
-                continue
-            try:
-                win.evaluate_js(f"window.addLog && window.addLog({json.dumps(message)})")
-            except Exception:
-                pass
+        self._log_queue.put(message)
+
+        is_critical = immediate or any(k in message.lower() for k in ["error", "critical", "exception", "failed"])
+        if is_critical:
+            self.flush_logs()
 
     def clear_logs(self) -> None:
         # Drops the replay buffer too, so a log window popped out *after* this
         # won't come back seeded with lines the user just cleared.
         self._log_history = []
+        with self._log_flush_lock:
+            while not self._log_queue.empty():
+                try:
+                    self._log_queue.get_nowait()
+                except queue.Empty:
+                    break
         for win in (self._window, self._log_window):
             if not win:
                 continue
@@ -1181,9 +1231,13 @@ class Api:
         self._log_window = win
 
         def _seed():
-            for line in self._log_history:
+            if self._log_history:
                 try:
-                    win.evaluate_js(f"window.addLog && window.addLog({json.dumps(line)})")
+                    payload = json.dumps(self._log_history)
+                    win.evaluate_js(
+                        f"if (window.appendLogBatch) {{ window.appendLogBatch({payload}); }} "
+                        f"else if (window.addLog) {{ {payload}.forEach(function(l){{ window.addLog(l); }}); }}"
+                    )
                 except Exception:
                     pass
 
