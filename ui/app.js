@@ -45,7 +45,7 @@ function renderLogLine(div, line) {
 // Oldest lines get dropped past this: the log is a live view, not an
 // archive (Python keeps its own history buffer for pop-out replay), and an
 // ever-growing list makes "am I at the newest line?" ambiguous.
-const LOG_MAX_LINES = 400;
+const LOG_MAX_LINES = 500;
 
 function addLog(line) {
   const list = document.getElementById('log-list');
@@ -53,7 +53,7 @@ function addLog(line) {
   div.className = 'log-entry';
   renderLogLine(div, line);
   list.appendChild(div);
-  while (list.childElementCount > LOG_MAX_LINES) list.removeChild(list.firstElementChild);
+  while (list.childElementCount > LOG_MAX_LINES) list.firstElementChild.remove();
   list.scrollTop = list.scrollHeight;
 }
 

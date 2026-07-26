@@ -56,7 +56,7 @@
       div.className = 'log-entry';
       renderLogLine(div, line);
       list.appendChild(div);
-      while (list.childElementCount > 400) list.removeChild(list.firstElementChild);
+      while (list.childElementCount > 500) list.firstElementChild.remove();
       list.scrollTop = list.scrollHeight;
     }
 
