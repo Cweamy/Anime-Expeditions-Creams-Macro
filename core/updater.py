@@ -115,10 +115,10 @@ def _latest_tag_via_redirect(timeout: float, log=None) -> str:
     first. Returns "" if the redirect lookup itself fails for any reason.
     """
     try:
-        resp = requests.head(RELEASES_PAGE_URL, allow_redirects=False, timeout=timeout)
-        location = resp.headers.get("Location", "")
-        if "/releases/tag/" in location:
-            return location.rsplit("/releases/tag/", 1)[-1]
+        with requests.head(RELEASES_PAGE_URL, allow_redirects=False, timeout=timeout) as resp:
+            location = resp.headers.get("Location", "")
+            if "/releases/tag/" in location:
+                return location.rsplit("/releases/tag/", 1)[-1]
     except Exception as exc:
         if log:
             log(f"[Update] Redirect-based version check failed: {exc}")
@@ -137,10 +137,10 @@ def check_for_update(timeout: float = 6.0, log=None) -> dict:
     # (subject to the 60/hr limit the redirect check above avoids for the
     # common "nothing new" case) to get exact asset URLs and release notes.
     try:
-        resp = requests.get(RELEASES_LATEST_URL, timeout=timeout,
-                             headers={"Accept": "application/vnd.github+json"})
-        resp.raise_for_status()
-        data = resp.json()
+        with requests.get(RELEASES_LATEST_URL, timeout=timeout,
+                          headers={"Accept": "application/vnd.github+json"}) as resp:
+            resp.raise_for_status()
+            data = resp.json()
     except Exception as exc:
         if log:
             log(f"[Update] Release metadata request failed ({exc}) -- "
@@ -202,15 +202,18 @@ def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> st
 
     log(f"[Update] Downloading {zip_url}...")
     resp = requests.get(zip_url, timeout=60, stream=True)
-    resp.raise_for_status()
-    total = int(resp.headers.get("content-length") or 0)
-    downloaded = 0
-    with open(zip_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=1 << 16):
-            f.write(chunk)
-            downloaded += len(chunk)
-            if on_progress:
-                on_progress(downloaded, total)
+    try:
+        resp.raise_for_status()
+        total = int(resp.headers.get("content-length") or 0)
+        downloaded = 0
+        with open(zip_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                f.write(chunk)
+                downloaded += len(chunk)
+                if on_progress:
+                    on_progress(downloaded, total)
+    finally:
+        resp.close()
 
     extract_dir = os.path.join(tmp_root, "extracted")
     with zipfile.ZipFile(zip_path) as zf:
