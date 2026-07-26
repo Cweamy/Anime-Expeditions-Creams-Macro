@@ -670,6 +670,60 @@ def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold
     return {"x": x, "y": y, "w": tw, "h": th, "cx": x + tw // 2, "cy": y + th // 2, "score": float(max_val)}
 
 
+def find_template(image: np.ndarray, template: np.ndarray, threshold: float = DEFAULT_THRESHOLD,
+                  roi: tuple = None) -> dict:
+    """Finds a template image inside a target image matrix.
+
+    Args:
+        image: The target image array (grayscale or color) to search within.
+        template: The reference template image array to locate.
+        threshold: Score threshold between 0.0 and 1.0 (defaults to DEFAULT_THRESHOLD).
+        roi: Optional region of interest tuple (x, y, w, h) to slice target image.
+
+    Returns:
+        Dict with keys ('x', 'y', 'w', 'h', 'cx', 'cy', 'score') mapped to the
+        full image frame, or None if no match meets the threshold.
+    """
+    if image is None or template is None:
+        return None
+
+    target = image
+    offset_x, offset_y = 0, 0
+
+    if roi is not None:
+        x, y, w, h = roi
+        crop = image[y:y+h, x:x+w]
+        target = crop
+        offset_x, offset_y = x, y
+
+    th, tw = template.shape[:2]
+    hh, hw = target.shape[:2]
+    if th > hh or tw > hw:
+        return None
+
+    result = cv2.matchTemplate(target, template, cv2.TM_CCOEFF_NORMED)
+    result[~np.isfinite(result)] = -1
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+    if max_val < threshold:
+        return None
+
+    match_x, match_y = max_loc
+    res_x = match_x + offset_x
+    res_y = match_y + offset_y
+
+    return {
+        "x": res_x,
+        "y": res_y,
+        "w": tw,
+        "h": th,
+        "cx": res_x + tw // 2,
+        "cy": res_y + th // 2,
+        "score": float(max_val),
+    }
+
+
+
 def _scaled_templates(name: str, template_dir: str, scale: float) -> list:
     """Every variant of a name (see load_template_grays), resized to one
     scale factor -- cached per (dir, name, scale) so templates that keep
