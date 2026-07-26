@@ -1056,8 +1056,9 @@ class Api:
         # reuses this same dialog for templates alone), so that's the more
         # useful starting point than whatever generic default the OS picks.
         os.makedirs(tpl.TEMPLATES_DIR, exist_ok=True)
+        dialog_type = getattr(getattr(webview, "FileDialog", None), "SAVE", getattr(webview, "SAVE_DIALOG", 2))
         result = self._window.create_file_dialog(
-            webview.SAVE_DIALOG, directory=tpl.TEMPLATES_DIR, save_filename=fname,
+            dialog_type, directory=tpl.TEMPLATES_DIR, save_filename=fname,
             file_types=("JSON files (*.json)",))
         if not result:
             return {"ok": False, "reason": "cancelled"}
@@ -1075,8 +1076,9 @@ class Api:
         if not self._window:
             return {"ok": False, "reason": "no_window"}
         os.makedirs(tpl.TEMPLATES_DIR, exist_ok=True)
+        dialog_type = getattr(getattr(webview, "FileDialog", None), "OPEN", getattr(webview, "OPEN_DIALOG", 1))
         result = self._window.create_file_dialog(
-            webview.OPEN_DIALOG, directory=tpl.TEMPLATES_DIR, file_types=("JSON files (*.json)",))
+            dialog_type, directory=tpl.TEMPLATES_DIR, file_types=("JSON files (*.json)",))
         if not result:
             return {"ok": False, "reason": "cancelled"}
         path = result[0] if isinstance(result, (list, tuple)) else result

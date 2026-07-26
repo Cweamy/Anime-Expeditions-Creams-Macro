@@ -659,6 +659,42 @@ function setSettingsCategory(cat) {
   document.querySelectorAll('.settings-category').forEach(sec => {
     sec.style.display = (cat === 'all' || sec.dataset.cat === cat) ? 'block' : 'none';
   });
+  // Clear search when switching categories
+  const searchInput = document.getElementById('settings-search');
+  if (searchInput && searchInput.value) { searchInput.value = ''; filterSettings(''); }
+}
+
+// Settings search: filters visible setting-rows by matching their text
+// content (label + description) against the query. Automatically switches
+// to the "All" view so results from every category show. Empty query
+// restores all rows.
+function filterSettings(query) {
+  const q = (query || '').trim().toLowerCase();
+  // Switch to "All" when searching so every category is visible
+  if (q) {
+    document.querySelectorAll('.settings-cat-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.cat === 'all'));
+    document.querySelectorAll('.settings-category').forEach(sec => { sec.style.display = 'block'; });
+  }
+  // Process each category section
+  document.querySelectorAll('.settings-category').forEach(catSection => {
+    let catHasHit = false;
+    catSection.querySelectorAll('.rp-panel').forEach(panel => {
+      let panelHasHit = false;
+      panel.querySelectorAll('.setting-row').forEach(row => {
+        const text = (row.textContent || '').toLowerCase();
+        const hit = !q || text.includes(q);
+        row.classList.toggle('search-hidden', !hit);
+        row.classList.toggle('search-hit', hit && !!q);
+        if (hit) panelHasHit = true;
+      });
+      // Also check the panel header text (e.g. "Webhook", "General")
+      const headerText = (panel.querySelector('.rp-panel-head')?.textContent || '').toLowerCase();
+      if (q && headerText.includes(q)) panelHasHit = true;
+      panel.classList.toggle('search-hidden', !panelHasHit && !!q);
+      if (panelHasHit) catHasHit = true;
+    });
+    catSection.classList.toggle('search-hidden', !catHasHit && !!q);
+  });
 }
 
 // Restarts the .bounce keyframe animation on every click, even if the toggle
@@ -1818,6 +1854,45 @@ function saveTaskQueue() {
 
 async function refreshTaskTemplates() {
   try { taskTemplates = await pywebview.api.list_templates(); } catch (e) { taskTemplates = []; }
+}
+
+async function exportSettings() {
+  try {
+    const s = await pywebview.api.get_settings();
+    const payload = {
+      kind: 'anime-expeditions-settings',
+      version: 1,
+      exported: new Date().toISOString(),
+      settings: s,
+    };
+    const result = await pywebview.api.export_tasks_file(payload, 'settings');
+    if (result && result.ok) addLog(`[Settings] Exported settings to ${result.path}`);
+    else if (result && result.reason !== 'cancelled') addLog(`[Settings] Export failed: ${result.reason || 'error'}`);
+  } catch (e) {
+    addLog(`[Settings] Export failed: ${e.message || e}`);
+  }
+}
+
+async function importSettings() {
+  try {
+    const result = await pywebview.api.import_tasks_file();
+    if (!result || !result.ok) {
+      if (result && result.reason !== 'cancelled') addLog(`[Settings] Import failed: ${result.reason || 'error'}`);
+      return;
+    }
+    const data = result.data || {};
+    if (data.kind !== 'anime-expeditions-settings' || !data.settings) {
+      addLog('[Settings] Import failed: file is not a valid settings export.');
+      return;
+    }
+    for (const [key, val] of Object.entries(data.settings)) {
+      try { await pywebview.api.set_setting(key, val); } catch (e) {}
+    }
+    await loadSettingsUI();
+    addLog('[Settings] Successfully imported and applied settings.');
+  } catch (e) {
+    addLog(`[Settings] Import failed: ${e.message || e}`);
+  }
 }
 
 // Export bundles the queue AND every Macro Manager template the tasks reference
