@@ -154,12 +154,35 @@ def _safe_name(name: str) -> str:
     return cleaned or "path"
 
 
+# Built-in default map/act -> walk-path-name mappings, baked into the CODE so
+# they ship with the exe itself (delivered by the exe swap) rather than
+# relying on Assets/default_walk_paths.json being refreshed by the updater.
+# That refresh does NOT happen for an existing install: the add-only Assets
+# merge only ever ADDS brand-new files -- a change to a file that shipped with
+# the original install is treated as untracked and left untouched (see
+# core.updater._extract_assets_zip_addonly). That gap is exactly why the Event
+# Act walk paths didn't reach updated exe users even though the path files
+# themselves (bundled in the exe under Paths/defaults) did. The JSON file
+# still loads ON TOP of these, so it can add or override any entry without a
+# code change -- these are just the guaranteed-delivered floor. Mirrors
+# Assets/default_walk_paths.json.
+_BUILTIN_DEFAULT_WALK_PATHS = {
+    "Fairy King Forest": "Fairy King Forest",
+    "King's Tomb": "Kings Tomb",
+    "Spirit City Act3": "Spirit Act3",
+    "Event Act1": "Villian1",
+    "Event Act2": "Villian2",
+}
+
+
 def load_shipped_default_walk_paths() -> dict:
+    merged = dict(_BUILTIN_DEFAULT_WALK_PATHS)
     try:
         with open(SHIPPED_DEFAULT_WALK_PATHS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            merged.update(json.load(f))
     except (OSError, json.JSONDecodeError):
-        return {}
+        pass
+    return merged
 
 
 def list_paths() -> list:

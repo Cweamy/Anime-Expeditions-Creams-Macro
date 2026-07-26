@@ -176,3 +176,57 @@ def send_file(url: str, embed: dict, screenshot_path: str, content: str = "", si
             continue
         return {"ok": False, "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"}
     return {"ok": False, "reason": "rate limited -- gave up after retries"}
+
+
+def send_rich(url: str, embeds: list = None, file_attachments: list = None,
+              components: list = None, content: str = "", silent: bool = False) -> dict:
+    """A fuller send than send()/send_file(): MULTIPLE embeds, MULTIPLE image
+    attachments, and message components (a link-button action row) in one
+    message -- what the match-result webhook needs to show the status card
+    and the game screenshot as two separate images with Join Discord/GitHub
+    buttons under them.
+
+    `file_attachments` is a list of (filename, bytes); an embed references
+    one via {"image": {"url": "attachment://<filename>"}}. `components` is a
+    raw Discord components array (already shaped by the caller). Returns the
+    same {"ok", "reason"} contract as the others, and honours 429 retries.
+
+    Plain incoming webhooks DO accept link-style buttons (verified live) --
+    unlike the interactive component types, which need a bot; if Discord ever
+    rejects the components, the whole send fails with that HTTP reason rather
+    than silently dropping them, so it surfaces instead of hiding.
+    """
+    if not url:
+        return {"ok": False, "reason": "no webhook URL configured"}
+    payload = {}
+    if embeds:
+        payload["embeds"] = embeds
+    if content:
+        payload["content"] = content
+    if components:
+        payload["components"] = components
+    if silent:
+        payload["flags"] = SUPPRESS_NOTIFICATIONS_FLAG
+
+    files = {}
+    for i, (name, data) in enumerate(file_attachments or []):
+        files[f"files[{i}]"] = (name, data, "image/png")
+
+    for attempt in range(_RETRY_MAX + 1):
+        try:
+            if files:
+                resp = requests.post(
+                    url, data={"payload_json": json.dumps(payload)}, files=files,
+                    headers={"User-Agent": USER_AGENT}, timeout=15)
+            else:
+                resp = requests.post(
+                    url, json=payload, headers={"User-Agent": USER_AGENT}, timeout=15)
+        except requests.RequestException as exc:
+            return {"ok": False, "reason": str(exc)}
+        if 200 <= resp.status_code < 300:
+            return {"ok": True, "reason": ""}
+        if resp.status_code == 429 and attempt < _RETRY_MAX:
+            time.sleep(_retry_after(resp))
+            continue
+        return {"ok": False, "reason": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+    return {"ok": False, "reason": "rate limited -- gave up after retries"}

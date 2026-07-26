@@ -206,9 +206,7 @@ class ChallengeOps:
         # Story task uses (see _play_one_match/_handle_match_result), since
         # that's genuinely what Challenge's own battle is. is_challenge is
         # the marker other code checks when it actually needs to tell the
-        # two apart (see _log_expected_rewards -- Challenge isn't in
-        # stage_data.json under this map's Story entry, so that reference-
-        # reward lookup would otherwise silently show the wrong data).
+        # two apart.
         task = {
             "mode": "story", "is_challenge": True, "map": detected_map, "difficulty": "Normal",
             "macro": macro_name, "play_mode": play_mode, "repeat": 1, "team": "", "equipment": "include",

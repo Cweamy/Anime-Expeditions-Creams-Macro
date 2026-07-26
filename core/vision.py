@@ -723,6 +723,22 @@ def save_match_debug(hwnd: int, name: str, match: dict) -> str:
     return path
 
 
+def save_window_screenshot(hwnd: int, path: str) -> str:
+    """Full-window color screenshot written to an arbitrary `path` (not the
+    fixed debug/ folder like save_region_debug) -- used to attach the
+    Victory/Defeat screen to the match-result webhook. Uses the same
+    normalized capture as detection (capture_game_bgr), so it works even
+    while Roblox is covered or tabbed out. Returns the path on success, or
+    None if the capture or the file write failed."""
+    bgr = capture_game_bgr(hwnd)
+    if bgr is None:
+        return None
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    return path if cv2.imwrite(path, bgr) else None
+
+
 def save_region_debug(hwnd: int, name: str, region: tuple) -> str:
     """Saves a plain screenshot of exactly `region` (no match/box drawn -- see
     save_match_debug for that) to debug/region_<name>.png, so a fixed search

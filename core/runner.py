@@ -31,7 +31,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
     active at a time (one physical game window, one macro)."""
 
     def __init__(self, mouse, keyboard, log, set_status=None, record_result=None,
-                 get_challenge_settings=None, mark_challenge_stage_played=None):
+                 get_challenge_settings=None, mark_challenge_stage_played=None, get_run_stats=None):
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
@@ -73,6 +73,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # in tests/CLI mode) just makes _run_challenges a no-op.
         self._get_challenge_settings = get_challenge_settings
         self._mark_challenge_stage_played = mark_challenge_stage_played or (lambda *a, **kw: None)
+        # Returns a fresh session/all-time win-loss + session_start + version
+        # snapshot for the match-result webhook (see _send_result_webhook).
+        # None (tests/CLI) just yields an empty snapshot, so those fields are
+        # quietly omitted rather than the webhook failing.
+        self._get_run_stats = get_run_stats or (lambda: {})
         self._thread = None
         self._stop_event = None
         self._pause_event = threading.Event()
@@ -1142,23 +1147,24 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # never still held into the result screen and beyond.
         self._release_quick_place_shift()
 
-        # Only the CAPTURE (a couple of screenshots, maybe one scroll) has to
-        # happen while the result screen is actually still up -- the OCR
-        # itself (several seconds of Tesseract subprocesses) doesn't need
-        # anything more from the screen once the pixels are already in hand,
-        # so it runs on its own thread instead of making the run sit and
-        # wait on it before it can move on to Repeat/Leave Stage.
+        # Only the CAPTURE (one screenshot) has to happen while the result
+        # screen is actually still up -- the run's result is now reported by
+        # SENDING that image to the webhook (plus a rendered win/loss card),
+        # not by OCRing the stats/reward panels off the screen, so there's
+        # just the one grab left here and the send itself runs on its own
+        # thread instead of holding up Repeat/Leave Stage. Only captured when
+        # a webhook is actually configured to receive it.
         self._set_status(action=f"Capturing {label} screen...")
-        stats_image = self._capture_stats_image(hwnd, stats_region)
-        reward_images = self._capture_reward_images(hwnd, reward_region) if result == "win" else None
+        webhook_wants_shot = bool(webhook and webhook.get("enabled") and webhook.get("url"))
+        result_screenshot = self._capture_result_screenshot(hwnd) if webhook_wants_shot else None
 
         map_name = task.get("map") or "-"
         threading.Thread(
             target=self._finish_match_result_background,
-            args=(stats_image, reward_images, result, map_name, duration, task, webhook),
+            args=(result, map_name, duration, task, webhook, result_screenshot),
             daemon=True,
         ).start()
-        self._log(f"[Macro] {label} ({duration}) -- stats/rewards processing in the background.")
+        self._log(f"[Macro] {label} ({duration}) -- reporting in the background.")
 
         # The cursor is moved to the same near-empty corner
         # _reset_unit_info_panel uses first, so a leftover hover
@@ -1239,154 +1245,71 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._click_return_to_lobby_if_found(hwnd, stop_event)
         return True
 
-    def _finish_match_result_background(self, stats_image, reward_images, result: str, map_name: str,
-                                          duration: str, task: dict, webhook: dict) -> None:
-        stats = self._ocr_game_stats(stats_image)
-        items = []
-        if reward_images is not None:
-            names, amounts = self._log_expected_rewards(task)
-            items = self._ocr_reward_items(*reward_images, allowed_names=names, amounts=amounts)
-        self._record_result(result, map_name, duration, stats, items)
-        self._send_result_webhook(webhook, result, task, duration, stats, items)
-
-    def _log_expected_rewards(self, task: dict) -> tuple:
-        # Reference logged right before the actual reward read so they're
-        # easy to eyeball against each other -- scraped from the wiki's own
-        # data (see tools/fetch_stage_data.py). The returned name list AND
-        # amounts dict both feed into the actual read (core.rewards.
-        # read_reward_grid): names narrow icon identification down to what
-        # this stage can actually reward, and amounts is the lookup table
-        # that replaced OCRing each reward's quantity badge entirely -- not
-        # just a passive log line, this stage data now IS how quantities
-        # get reported. Returns (names, amounts), both possibly empty/None
-        # if stage_data.json has nothing for this map/stage/difficulty.
-        # Expedition has no entry in stage_data.json at all -- its stage/
-        # difficulty values ("1"/"2"/"3", no Act number) would otherwise
-        # alias onto the SAME map's Story Act 1 data below (get_stage falls
-        # back to "Normal" for any difficulty that isn't literally "Hard"),
-        # silently showing real Story rewards mislabeled as Expedition's.
-        # Challenge (task["is_challenge"], see _run_one_challenge_stage) is
-        # mode="story" on purpose to reuse the rest of this pipeline, but
-        # for the SAME reason as Expedition its stage_data.json lookup
-        # would alias onto that map's real Story Act 1 data -- Challenge
-        # isn't in stage_data.json under any entry at all.
-        if task.get("mode") == "expedition" or task.get("is_challenge"):
-            return None, None
+    def _finish_match_result_background(self, result: str, map_name: str, duration: str, task: dict,
+                                          webhook: dict, result_screenshot: str = None) -> None:
+        self._record_result(result, map_name, duration)
         try:
-            from . import stage_data
-            map_name, stage, difficulty = task.get("map"), task.get("stage") or "1", task.get("difficulty") or "Normal"
-            expected = stage_data.expected_rewards(map_name, stage, difficulty)
-            names = stage_data.expected_item_names(map_name, stage, difficulty)
-            amounts = stage_data.expected_item_amounts(map_name, stage, difficulty)
-        except Exception:
-            return None, None
-        if expected:
-            self._log(f"[Macro] Expected reward for this stage: {', '.join(expected)}")
-        if names:
-            try:
-                from . import rewards
-                rewards._ensure_wiki_icons_for(names)
-            except Exception as exc:
-                self._log(f"[Macro] Couldn't fetch wiki icons for this stage's rewards: {exc}")
-        return names or None, amounts or None
+            self._send_result_webhook(webhook, result, task, duration, result_screenshot)
+        finally:
+            # A temp file per match -- deleted once it's been sent (or the
+            # send was skipped), whatever the outcome, so they don't pile up.
+            if result_screenshot:
+                try:
+                    os.remove(result_screenshot)
+                except OSError:
+                    pass
 
-    def _capture_stats_image(self, hwnd, stats_region: dict):
+    def _capture_result_screenshot(self, hwnd) -> str:
+        """Full-window screenshot of the Victory/Defeat screen, saved to a
+        temp PNG for the match-result webhook to attach. Captured
+        synchronously while the result screen is still up (the send itself,
+        which composites the win/loss card under this and uploads it, then
+        runs on the background thread, which deletes this file afterward).
+        Returns the path, or None if it couldn't be captured."""
         try:
-            from core.ocr import capture_region
-            left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            return capture_region(
-                left + stats_region["x"], top + stats_region["y"], stats_region["width"], stats_region["height"])
+            import tempfile
+            fd, path = tempfile.mkstemp(prefix="ae_result_", suffix=".png")
+            os.close(fd)
+            saved = vision.save_window_screenshot(hwnd, path)
+            if not saved:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                return None
+            return saved
         except Exception as exc:
-            self._log(f"[Macro] Couldn't capture the game stats region: {exc}")
+            self._log(f"[Macro] Couldn't capture the result screenshot for the webhook: {exc}")
             return None
 
-    def _ocr_game_stats(self, image) -> dict:
-        if image is None:
-            return {}
-        try:
-            from core import game_stats
-            stats = game_stats.read_game_stats(image)
-        except Exception as exc:
-            self._log(f"[Macro] Couldn't read game stats: {exc}")
-            return {}
-        self._log(f"[Macro] Stats -- Clear Time {stats.get('clear_time') or '?'} | "
-                   f"Yen {stats.get('total_yen') or '?'} | Kills {stats.get('total_kills') or '?'} | "
-                   f"Damage {stats.get('total_damage') or '?'}")
-        return stats
+    @staticmethod
+    def _tree_rows(rows) -> str:
+        """Tree-style lines for one inline embed field (the field's own name
+        is the header, so no bracketed header here): each (label, value) as a
+        box-drawing branch with a bold label and a code value, last row on
+        the └ corner. e.g. ├ **Elapsed:** `11h 27m` / └ ..."""
+        rows = [r for r in rows if r is not None]
+        lines = []
+        for i, (label, value) in enumerate(rows):
+            branch = "└" if i == len(rows) - 1 else "├"
+            lines.append(f"{branch} **{label}:** `{value}`")
+        return "\n".join(lines)
 
-    def _capture_reward_images(self, hwnd, reward_region: dict):
-        # Same capture-then-maybe-scroll-then-capture-again dance as
-        # main.Api.read_rewards. The scroll only happens when the scrollbar
-        # track is actually, confidently detected (rewards.SCROLLBAR_TOLERANCE,
-        # stricter than sample_color_matches' own default) -- scrolling on a
-        # false positive doesn't just waste time, it can scroll the page into
-        # a completely different panel/section and capture THAT as
-        # "image_bottom", which merge_reward_pages then blends in as if it
-        # were more real rewards (garbled quantities, items that were never
-        # actually dropped). If the scrollbar isn't confidently found, this
-        # never touches the mouse at all -- no move into the reward box, no
-        # scroll.
-        try:
-            from core import rewards
-            from core.ocr import capture_region, sample_color_matches
-            left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            image_top = capture_region(
-                left + reward_region["x"], top + reward_region["y"],
-                reward_region["width"], reward_region["height"])
-
-            probe_x, probe_y, probe_w, probe_h = rewards.SCROLLBAR_PROBE
-            has_more = sample_color_matches(
-                left + probe_x, top + probe_y, probe_w, probe_h, rewards.SCROLLBAR_COLOR,
-                tolerance=rewards.SCROLLBAR_TOLERANCE)
-            if not has_more:
-                self._log("[Macro] Reward list fits in view -- no scroll needed.")
-                return (image_top, None)
-
-            self._log("[Macro] Reward list overflows -- scrolling for the rest.")
-            wm.activate_window(hwnd)
-            time.sleep(0.1)
-            box_cx = left + reward_region["x"] + reward_region["width"] // 2
-            box_cy = top + reward_region["y"] + reward_region["height"] // 2
-            self._mouse.move_to(box_cx, box_cy)
-            time.sleep(0.05)
-            self._mouse.nudge()
-            time.sleep(0.2)
-            for _ in range(20):
-                self._mouse.scroll(-120)
-                time.sleep(0.02)
-            time.sleep(0.2)
-            image_bottom = capture_region(
-                left + reward_region["x"], top + reward_region["y"],
-                reward_region["width"], reward_region["height"])
-            # Move off the reward box once scrolling is done -- leaving the
-            # cursor parked there can keep it "active"/hovered for whatever
-            # comes next, same reasoning as the unit-info-panel reset click.
-            self._mouse.move_to(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
-            return (image_top, image_bottom)
-        except Exception as exc:
-            self._log(f"[Macro] Couldn't capture the rewards region: {exc}")
-            return None
-
-    def _ocr_reward_items(self, image_top, image_bottom, allowed_names: list = None,
-                            amounts: dict = None) -> list:
-        try:
-            from core import rewards
-            pages = [rewards.read_reward_grid(image_top, allowed_names=allowed_names, amounts=amounts)]
-            if image_bottom is not None:
-                pages.append(rewards.read_reward_grid(image_bottom, allowed_names=allowed_names, amounts=amounts))
-            items = rewards.merge_reward_pages(*pages)
-        except Exception as exc:
-            self._log(f"[Macro] Couldn't read rewards: {exc}")
-            return []
-
-        if not items:
-            self._log("[Macro] No reward icons identified -- check the region in Settings > Debug.")
-        for item in items:
-            self._log(f"[Macro] Reward: {item.get('quantity') or '?'} {item.get('name') or '(unidentified)'}")
-        return items
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        """Session runtime as "11h 27m" / "27m 4s" / "45s" -- longer scale
+        than _format_duration (a single match), so it leads with hours."""
+        seconds = max(0, int(seconds))
+        h, rem = divmod(seconds, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h}h {m}m"
+        if m:
+            return f"{m}m {s}s"
+        return f"{s}s"
 
     def _send_result_webhook(self, webhook: dict, result: str, task: dict, duration: str,
-                              stats: dict, items: list) -> None:
+                              screenshot_path: str = None) -> None:
         url = (webhook or {}).get("url")
         if not url or not webhook.get("enabled"):
             return
@@ -1394,54 +1317,127 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
 
         is_win = result == "win"
         map_name = task.get("map") or "-"
-        stage = task.get("stage") or "-"
         mode = task.get("mode") or "story"
+        raw_stage = task.get("stage") or "-"
+        # Raid/Event pick Acts; Story's Infinite/Mastery are named; the rest
+        # are numbered stages.
+        if mode in ("raid", "event"):
+            stage = f"Act {raw_stage}" if raw_stage != "-" else "-"
+        elif str(raw_stage).isdigit():
+            stage = f"Stage {raw_stage}"
+        else:
+            stage = str(raw_stage)
         # Raid and Infinite/Mastery stages are locked to Hard in-game (see
         # _run_task_setup's identical check) -- the task's own difficulty
         # setting never actually applies there, so reporting it verbatim
-        # was showing e.g. "Normal" for a run that was really Hard.
-        if mode == "raid" or stage in SPECIAL_STAGES_NO_DIFFICULTY:
+        # was showing e.g. "Normal" for a run that was really Hard. Event has
+        # no difficulty at all.
+        if mode == "raid" or raw_stage in SPECIAL_STAGES_NO_DIFFICULTY:
             difficulty = "Hard"
+        elif mode == "event":
+            difficulty = "-"
         else:
             difficulty = task.get("difficulty") or "-"
 
-        fields = [
-            {"name": "Map", "value": map_name, "inline": True},
-            {"name": "Stage", "value": stage, "inline": True},
-            {"name": "Difficulty", "value": difficulty, "inline": True},
-            {"name": "Clear Time", "value": stats.get("clear_time") or "?", "inline": True},
-            {"name": "Total Yen", "value": stats.get("total_yen") or "?", "inline": True},
-            {"name": "Total Kills", "value": stats.get("total_kills") or "?", "inline": True},
-            {"name": "Total Damage", "value": stats.get("total_damage") or "?", "inline": True},
-            {"name": "Run Time", "value": duration, "inline": True},
-        ]
-        if is_win and items:
-            lines = [f"{item.get('quantity') or '?'}x {item.get('name') or '(unreadable)'}" for item in items]
-            # Discord field values cap at 1024 chars -- trim the list rather
-            # than let a long drop silently fail the whole webhook send.
-            text = "\n".join(lines)
-            if len(text) > 1024:
-                text = text[:1000] + "\n..."
-            fields.append({"name": f"Rewards ({len(items)})", "value": text, "inline": False})
+        # Fresh session/all-time snapshot -- already includes THIS match, since
+        # the webhook is sent right after _record_result bumped the counters.
+        try:
+            snap = self._get_run_stats() or {}
+        except Exception:
+            snap = {}
+        sw, sl = snap.get("session_wins", 0), snap.get("session_losses", 0)
+        aw, al = snap.get("all_time_wins", 0), snap.get("all_time_losses", 0)
+        session_time = self._format_elapsed(time.time() - snap["session_start"]) if snap.get("session_start") else "-"
 
-        embed = {
-            "title": "Victory!" if is_win else "Defeat",
+        where = " · ".join(p for p in (map_name, stage, difficulty) if p and p != "-")
+        session_rate = f"{round(sw / (sw + sl) * 100)}%" if (sw + sl) else "-"
+        all_time_rate = f"{round(aw / (aw + al) * 100)}%" if (aw + al) else "-"
+        tuc = snap.get("time_until_challenge", "-")
+
+        # Inline, tree-style fields (bold labels, code values) side by side --
+        # Match / Session / All Time. The visual win/loss tiles + activity
+        # grid live in the separate status-card image below.
+        fields = [
+            {"name": "⚔️ Match", "value": self._tree_rows([
+                ("Result", "Victory \U0001F3C6" if is_win else "Defeat \U0001F480"),
+                ("Duration", duration or "-"),
+            ] + ([("Stage", where)] if where else [])), "inline": True},
+            {"name": "\U0001F4CA Session", "value": self._tree_rows([
+                ("Elapsed", session_time),
+                ("Record", f"{sw}W · {sl}L"),
+                ("Rate", session_rate),
+                ("Challenge", tuc),
+            ]), "inline": True},
+            {"name": "\U0001F3C6 All Time", "value": self._tree_rows([
+                ("Record", f"{aw}W · {al}L"),
+                ("Rate", all_time_rate),
+            ]), "inline": False},
+        ]
+        # A plain incoming webhook can't render real buttons (those need a
+        # bot/app-owned webhook) -- so the links go here as clickable masked
+        # markdown links, which render everywhere. Full width, at the bottom.
+        links = (f"[\U0001F4AC Discord]({DISCORD_INVITE_URL})   •   "
+                 f"[\U0001F4FA YouTube]({YOUTUBE_URL})   •   "
+                 f"[\U00002B50 GitHub]({GITHUB_REPO_URL})")
+        fields.append({"name": "\U0001F517 Links", "value": links, "inline": False})
+        result_word = "Victory" if is_win else "Defeat"
+        description = (f"{result_word} on **{where}** — session match **#{sw + sl}**."
+                       if where else f"{result_word} — session match **#{sw + sl}**.")
+
+        version = snap.get("version")
+        footer = "Cream's Macro | Anime Expeditions" + (f" · v{version}" if version else "")
+        main_embed = {
+            "title": "Victory! \U0001F3C6" if is_win else "Defeat \U0001F480",
             "color": 0x3FBF6F if is_win else 0xE05A6D,
+            "description": description,
             "fields": fields,
-            "footer": {"text": "Cream's Macro | Anime Expeditions"},
+            "footer": {"text": footer},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         mention_id = (webhook or {}).get("mention_id")
         content = f"<@{mention_id}>" if mention_id else ""
+        silent = bool(webhook.get("silent"))
+
+        # Two SEPARATE images (each in its own embed, so Discord shows them as
+        # distinct pictures rather than one stacked image): the rendered
+        # status card, and the live result screenshot. Best-effort -- a failed
+        # render/read just drops that one image, never the whole notification.
+        embeds = [main_embed]
+        files = []
         try:
-            result = webhook_module.send(url, embed, content=content, silent=bool(webhook.get("silent")))
+            import cv2
+            from . import status_card
+            card = status_card.render_status_card_bgr(
+                is_win=is_win, action="Match Finished", last_run_duration=duration,
+                last_run_win=is_win, time_until_challenge=tuc,
+                session_wins=sw, session_losses=sl, all_time_wins=aw, all_time_losses=al,
+                results=snap.get("results"))
+            if card is not None:
+                ok, buf = cv2.imencode(".png", card)
+                if ok:
+                    files.append(("card.png", buf.tobytes()))
+                    main_embed["image"] = {"url": "attachment://card.png"}
+        except Exception as exc:
+            self._log(f"[Macro] Couldn't render the status card: {exc}")
+        if screenshot_path and os.path.isfile(screenshot_path):
+            try:
+                with open(screenshot_path, "rb") as f:
+                    files.append(("shot.png", f.read()))
+                embeds.append({"color": main_embed["color"], "image": {"url": "attachment://shot.png"}})
+            except OSError:
+                pass
+
+        try:
+            send_result = webhook_module.send_rich(
+                url, embeds=embeds, file_attachments=files,
+                content=content, silent=silent)
         except Exception as exc:
             self._log(f"[Macro] Webhook send failed: {exc}")
             return
-        if result["ok"]:
+        if send_result["ok"]:
             self._log("[Macro] Webhook sent.")
         else:
-            self._log(f"[Macro] Webhook send failed: {result['reason']}")
+            self._log(f"[Macro] Webhook send failed: {send_result['reason']}")
 
     def _run_prestart(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
                         first_repeat: bool = True) -> bool:

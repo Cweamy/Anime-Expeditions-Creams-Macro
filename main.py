@@ -400,7 +400,36 @@ class Api:
         self._update_progress = {}
         self.runner = MacroRunner(
             self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result,
-            self.get_challenge_settings, self.mark_challenge_stage_played)
+            self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot)
+
+    def _run_stats_snapshot(self) -> dict:
+        # Fed to the runner's match-result webhook so it can report the same
+        # session/all-time win-loss picture the Dashboard shows, plus the
+        # session runtime and app version -- read fresh at send time (a run
+        # can span hours) rather than passed once at Start. Called right
+        # after _record_match_result has already bumped the counters for the
+        # match being reported, so these totals include it.
+        data = cfg.load()
+        try:
+            challenge = self.get_challenge_settings()
+            time_until_challenge = (_time_until_challenge_ready(challenge)
+                                     if challenge.get("enabled") else "Disabled")
+        except Exception:
+            time_until_challenge = "Disabled"
+        # run_history is newest-first (see _record_match_result) -- reversed to
+        # oldest->newest booleans so the card's activity grid reads left (old)
+        # to right (recent), GitHub-contribution style.
+        history = data.get("run_history", [])
+        return {
+            "session_wins": self._session_wins,
+            "session_losses": self._session_losses,
+            "all_time_wins": data.get("all_time_wins", 0),
+            "all_time_losses": data.get("all_time_losses", 0),
+            "session_start": self.session_start,
+            "version": updater.get_current_version(),
+            "time_until_challenge": time_until_challenge,
+            "results": [h.get("result") == "win" for h in reversed(history)],
+        }
 
     def _set_run_status(self, **kwargs) -> None:
         self._run_status.update(kwargs)
