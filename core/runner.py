@@ -155,7 +155,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._consecutive_losses = 0
         self._consecutive_loss_map = None
         self._thread = threading.Thread(
-            target=self._run,
+            target=self._run_session,
             args=(hwnd_getter, get_tasks, self._stop_event, scroll_power, coords, scroll_nudges,
                   default_walk_paths, webhook),
             daemon=True)
@@ -247,6 +247,9 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                                                        macro_name=macro_name)
                         time.sleep(MATCH_RESULT_POLL_INTERVAL)
         finally:
+            # Release this thread's screen-capture handle (see core.mss_manager)
+            # when the debug test ends -- same cleanup a real run does below.
+            vision.close_mss()
             if not (stop_event is not None and stop_event.is_set()):
                 self._log("[Debug] Test finished.")
             self._set_status(action="Idle")
@@ -418,6 +421,16 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         only actually writes when the toggle is on. Returns None otherwise,
         which callers fold into their log line's " Debug: ..." suffix."""
         return vision.save_match_debug(hwnd, name, match) if self._debug_screenshots else None
+
+    def _run_session(self, *args) -> None:
+        """Thread entry for a real run. Wraps _run only to guarantee this
+        thread's screen-capture handle (see core.mss_manager) is released when
+        the run ends -- however it ends -- without threading a try/finally
+        through _run's whole early-returning body."""
+        try:
+            self._run(*args)
+        finally:
+            vision.close_mss()
 
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,

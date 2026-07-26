@@ -2568,6 +2568,9 @@ class Api:
         # so Roblox has to be un-parented *before* this window is destroyed.
         self.detach_game_safely()
         self.persist_all_time()
+        from core import vision
+        vision.close_all_mss()
+        self.logger.close()
         if self._window:
             self._window.destroy()
 
@@ -3014,6 +3017,9 @@ def _launch_ui():
         # (e.g. Alt+F4): close_window() already handles the normal case.
         api.detach_game_safely()
         api.persist_all_time()
+        from core import vision
+        vision.close_all_mss()
+        api.logger.close()
         return True
 
     # Last-resort backstop: if the app exits any OTHER way -- an unhandled
@@ -3021,14 +3027,21 @@ def _launch_ui():
     # graceful path having run -- atexit still detaches Roblox before the
     # process (and its child windows) go away. Cheap and idempotent.
     import atexit
-    atexit.register(api.detach_game_safely)
+
+    def _on_app_exit():
+        api.detach_game_safely()
+        from core import vision
+        vision.close_all_mss()
+        api.logger.close()
+
+    atexit.register(_on_app_exit)
 
     window.events.shown += on_shown
     window.events.closing += on_closing
     webview.start()
     # webview.start() returns once the window is gone -- detach here too, in
     # case the window died without firing our handlers.
-    api.detach_game_safely()
+    _on_app_exit()
     try:
         keyboard.unhook_all()
     except OSError:
