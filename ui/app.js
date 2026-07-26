@@ -345,6 +345,32 @@ let IS_MAC = /Mac|Macintosh|Mac OS X/i.test(
   (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '');
 if (IS_MAC) document.documentElement.dataset.platform = 'mac';
 
+// High-DPI fit (issue #11) -------------------------------------------------
+// The Windows layout reserves a fixed 1152px game hole (#game-slot) plus a
+// 400px control panel -- together GUI_WIDTH_FULL -- and those numbers are
+// PHYSICAL pixels, because the docked native Roblox window and every fixed
+// macro click coordinate live in physical pixels (the DPI-aware process
+// sizes the window in physical px too). At >100% Windows display scaling the
+// WebView still renders CSS pixels LARGER than physical ones
+// (devicePixelRatio > 1), so this fixed-px layout overflows the physical
+// window: the right panel is clipped off the edge and the game slot no
+// longer lines up with the docked game (exactly what issue #11 shows).
+// Counter-scaling the whole document by 1/dpr makes 1 CSS px == 1 physical
+// px again, so the layout occupies precisely the pixels the window was sized
+// in and everything fits and aligns -- the same physical-pixel space the
+// rest of the app already assumes. A no-op at 100% scale (dpr 1), so setups
+// that already work are untouched. Windows-only: the mac side-by-side layout
+// works in logical points and must not be zoomed.
+function applyDpiFit() {
+  if (IS_MAC) { document.documentElement.style.zoom = ''; return; }
+  const dpr = window.devicePixelRatio || 1;
+  document.documentElement.style.zoom = dpr > 1.001 ? String(1 / dpr) : '';
+}
+applyDpiFit();
+// devicePixelRatio changes (dragging the window to a monitor at a different
+// scale) surface as a resize here -- re-fit so it doesn't clip again.
+window.addEventListener('resize', applyDpiFit);
+
 // Previous poll's macro-running state, so refreshStatus can act on the
 // running -> stopped EDGE rather than every tick (see refreshStatus).
 let wasMacroRunning = false;
@@ -898,6 +924,9 @@ async function loadSettingsUI() {
   try {
     const s = await pywebview.api.get_settings();
     document.getElementById('toggle-start-minimized').classList.toggle('on', !!s.start_minimized);
+    const autoRelaunchEl = document.getElementById('toggle-auto-relaunch-roblox');
+    // Default ON -- absent key means enabled.
+    if (autoRelaunchEl) autoRelaunchEl.classList.toggle('on', s.auto_relaunch_roblox !== false);
     const actionDelayEl = document.getElementById('setting-action-delay');
     if (actionDelayEl) actionDelayEl.value = s.action_delay_ms || 0;
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
@@ -1733,10 +1762,13 @@ const TASK_DATA = {
   event: {
     label: 'Event',
     // Event has its own lobby entry (nav_event -> event_gamemode -> Act),
-    // no map carousel and no difficulty picker -- just one of 3 Acts (each a
+    // no map carousel and no difficulty picker -- just one of the Acts (each a
     // villain), then Solo/Matchmaking. Stored in `stage` (values '1'-'3')
     // the same way Raid stores its Acts, so it reuses the existing
-    // stage/act plumbing. Mirrors core.runner_constants' EVENT_ACT_ORDER.
+    // stage/act plumbing. Acts past the second are reached by scrolling the
+    // villain list (see runner._reach_event_act_selected). Act 4 exists
+    // in-game but isn't supported yet (still being worked on), so it's not
+    // listed. Mirrors core.runner_constants' EVENT_ACT_ORDER.
     stages: ['1', '2', '3'],
     isEvent: true,
   },
@@ -3627,7 +3659,7 @@ const IMAGE_DESCRIPTIONS = {
   victory: "The Victory result screen -- how the macro knows a run was won.",
   villian1: "Event Act 1's villain card (Solo/Matchmaking event entry).",
   villian2: "Event Act 2's villain card (Solo/Matchmaking event entry).",
-  villain3: "Event Act 3's villain card (Solo/Matchmaking event entry).",
+  villain3: "Event Act 3's villain card -- scrolled into view if it's below the fold (Solo/Matchmaking event entry).",
   warning: "A warning popup that can block Start Game.",
 };
 // The map NAME is reused for two different images: a "UI" one (the map's name
@@ -4643,6 +4675,7 @@ window.addEventListener('pywebviewready', async () => {
     IS_MAC = !!(env && env.mac);
     if (IS_MAC) document.documentElement.dataset.platform = 'mac';
     else delete document.documentElement.dataset.platform;
+    applyDpiFit();  // now that the platform is authoritative (mac must not be zoomed)
   } catch (e) {}
 
   try {

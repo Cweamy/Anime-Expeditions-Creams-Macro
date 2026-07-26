@@ -157,15 +157,35 @@ ACT_ROW_HEIGHT = 129
 
 # Event mode: reached straight from the lobby via its own nav_event button
 # (NOT through Play like Story/Raid/Expedition/Challenge), then the
-# event_gamemode card, then one of 3 Act cards (each a villain). There's no
+# event_gamemode card, then one of the Act cards (each a villain). There's no
 # map carousel and no difficulty picker -- picking the Act IS the whole
 # selection, so it goes straight from the Act to the Solo/Matchmaking tail
 # (nav_select_stage + nav_start, or enter_matchmaking) the other modes share.
 # The image folder names are exactly as they ship under Assets/ui/ -- the
 # mixed "villian"/"villain" spelling is intentional, it matches the real
 # folders. Mirrors TASK_DATA.event.stages in ui/app.js.
+# Act 4 (villian4/villian4_close) exists in-game but isn't supported yet --
+# still being worked on -- so it's deliberately left out of the selectable
+# order/images here (and TASK_DATA.event.stages in ui/app.js). Adding the now
+# in-game 4th card DID push the later Acts below the fold on the Event screen,
+# though, which is why the Act pick scrolls now (see EVENT_ACT_SCROLL_FROM_INDEX).
 EVENT_ACT_ORDER = ["1", "2", "3"]
-EVENT_ACT_IMAGES = {"1": "villian1", "2": "villian2", "3": "villain3"}
+# Values are a tuple of candidate crops per Act (any match wins), so an Act
+# card that shows in more than one visual state can be matched in whichever
+# it's currently in.
+EVENT_ACT_IMAGES = {
+    "1": ("villian1",),
+    "2": ("villian2",),
+    "3": ("villain3",),
+}
+# Acts from this one on can sit below the fold on the Event gamemode screen
+# and only come into view by scrolling the villain list -- picking one of
+# these runs the same wheel-scroll search Story maps use (see
+# _reach_event_act_selected / _scroll_find_and_click). Acts before it are
+# already on screen and get a plain wait-then-click. The scroll search checks
+# what's already visible first, so it's a no-op for an Act that didn't need
+# scrolling anyway.
+EVENT_ACT_SCROLL_FROM_INDEX = 2  # 0-based into EVENT_ACT_ORDER: index 2 == Act "3"
 EVENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Event screen (nav_event / event_gamemode / the Act card) to appear
 
 # Infinite/Mastery are locked to Hard in-game with no picker shown for them

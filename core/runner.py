@@ -817,7 +817,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 if attempt > 1:
                     self._log(f"[Macro] Retrying Event entry from the lobby "
                                f"(attempt {attempt}/{MAP_SELECT_RETRY_ATTEMPTS})...")
-                if self._reach_event_act_selected(hwnd, stop_event, task.get("stage") or "1"):
+                if self._reach_event_act_selected(hwnd, stop_event, task.get("stage") or "1",
+                                                   scroll_power, scroll_nudges):
                     reached_event = True
                     break
                 if stop_event.is_set():
@@ -2543,8 +2544,9 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._spam_back_until_gone(hwnd, stop_event)
         return False
 
-    def _reach_event_act_selected(self, hwnd, stop_event: threading.Event, act: str) -> bool:
-        """Lobby -> Event -> Event gamemode -> Act (villain 1-3), as one
+    def _reach_event_act_selected(self, hwnd, stop_event: threading.Event, act: str,
+                                    scroll_power: int = None, scroll_nudges: int = None) -> bool:
+        """Lobby -> Event -> Event gamemode -> Act (villain card), as one
         restartable unit -- Event's equivalent of _reach_map_selected. Event
         has its OWN lobby entry (the nav_event button), not the Play ->
         gamemode -> map flow the other modes share, so there's no gamemode
@@ -2552,12 +2554,20 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         card, then the chosen Act's villain card. On any failure it backs out
         to the lobby (_spam_back_until_gone) so the next attempt starts clean,
         same as the map path does.
+
+        The first couple of Act cards are on screen already; later ones
+        (EVENT_ACT_SCROLL_FROM_INDEX on) sit below the fold and only come into
+        view by scrolling, so those get the same wheel-scroll search the Story
+        map carousel uses (see _scroll_find_and_click) instead of a plain
+        wait-then-click.
         """
         act = str(act)
-        act_image = EVENT_ACT_IMAGES.get(act)
-        if act_image is None:
+        act_images = EVENT_ACT_IMAGES.get(act)
+        if act_images is None:
             self._log(f'[Macro] Unknown Event Act "{act}" -- expected one of {EVENT_ACT_ORDER}.')
             return False
+        if isinstance(act_images, str):
+            act_images = (act_images,)
 
         if not self._ensure_lobby(hwnd, stop_event):
             return False
@@ -2585,7 +2595,15 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         time.sleep(SETTLE_DELAY)
 
         self._set_status(action=f"Clicking Act {act}...")
-        if self._click_found_image(hwnd, act_image, EVENT_SCREEN_TIMEOUT, stop_event) is None:
+        needs_scroll = EVENT_ACT_ORDER.index(act) >= EVENT_ACT_SCROLL_FROM_INDEX
+        if needs_scroll:
+            # Act 3+ is below the fold -- scroll the villain list into view
+            # (Story-carousel style) before clicking it.
+            if not self._scroll_find_and_click(hwnd, act_images, stop_event, scroll_power, scroll_nudges,
+                                                 label=f"Act {act}"):
+                self._spam_back_until_gone(hwnd, stop_event)
+                return False
+        elif self._click_found_image(hwnd, act_images[0], EVENT_SCREEN_TIMEOUT, stop_event) is None:
             self._spam_back_until_gone(hwnd, stop_event)
             return False
         # Let the stage/Enter-Matchmaking screen finish animating in before
@@ -2593,6 +2611,68 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # _select_stage settles after its own click).
         time.sleep(SETTLE_DELAY)
         return not self._checkpoint(stop_event)
+
+    def _scroll_find_and_click(self, hwnd, names, stop_event: threading.Event,
+                                 scroll_power: int = None, scroll_nudges: int = None,
+                                 label: str = "card") -> bool:
+        """Wheel-scroll search for a card that may sit below the fold, modeled
+        on (and reusing the tuning of) the Story map carousel search -- see
+        stage_select.find_and_click_map. `names` is a tuple of candidate crops;
+        any match wins, so a card with several visual states (e.g. Event Act 4,
+        which has a peeking-in crop and a fully-scrolled-in one) is matched in
+        whichever state it's currently showing.
+
+        Checks what's on screen first (no scroll), so a card that's already
+        visible is clicked without scrolling at all; otherwise nudges the list
+        forward up to scroll_nudges times, then resets to the top and tries the
+        whole pass again, up to MAX_PASSES times -- same recover-by-resetting
+        approach the map carousel uses so a nudge that lands mid-animation
+        doesn't strand the search. Returns whether it found and clicked one.
+        """
+        power = scroll_power if scroll_power is not None else stage_select.DEFAULT_SCROLL_POWER
+        nudges = scroll_nudges if scroll_nudges is not None else stage_select.SCROLL_NUDGES_PER_PASS
+        scroll_step = -120 * max(1, int(power))
+        nudges = max(0, int(nudges))
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        cx, cy = left + stage_select.SCROLL_CENTER[0], top + stage_select.SCROLL_CENTER[1]
+
+        for pass_no in range(1, stage_select.MAX_PASSES + 1):
+            if self._checkpoint(stop_event):
+                return False
+            self._log(f'[Macro] Looking for {label} (pass {pass_no}/{stage_select.MAX_PASSES}, '
+                       f'up to {nudges} scrolls)...')
+            for nudge in range(nudges + 1):
+                if stop_event is not None and stop_event.is_set():
+                    return False
+                try:
+                    match, found = vision.find_image_any(hwnd, tuple(names))
+                except vision.TemplateNotFound as exc:
+                    self._log(f"[Macro] {exc}")
+                    return False
+                if match is not None:
+                    debug_path = self._debug_save(hwnd, found, match)
+                    suffix = f" Debug: {debug_path}" if debug_path else ""
+                    self._log(f'[Macro] Found "{found}" (score {match["score"]:.2f}) -- clicking it.{suffix}')
+                    vision.click_match(self._mouse, hwnd, match)
+                    return True
+                if nudge < nudges:
+                    self._mouse.move_to(cx, cy)
+                    stage_select._hover_wiggle(self._mouse)
+                    self._mouse.scroll(scroll_step)
+                    time.sleep(stage_select.SETTLE_DELAY)
+            # Not on this pass -- scroll all the way back to a known start
+            # before trying again (see the map carousel's identical reset).
+            self._log(f"[Macro] {label} not found in this pass -- scrolling back to the start.")
+            self._mouse.move_to(cx, cy)
+            stage_select._hover_wiggle(self._mouse)
+            for _ in range(stage_select.SCROLL_RESET_NOTCHES):
+                self._mouse.scroll(-scroll_step)
+            time.sleep(stage_select.SETTLE_DELAY)
+
+        self._log(f'[Macro] {label} never came into view after {stage_select.MAX_PASSES} scroll passes -- '
+                   f'stopping. If its card was visibly scrolling by, its crop isn\'t matching your setup '
+                   f'-- add your own via Settings > General > Image Manager.')
+        return False
 
     def _spam_back_until_gone(self, hwnd, stop_event: threading.Event) -> None:
         # A failed map search can leave the run sitting on any of several

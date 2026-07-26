@@ -112,6 +112,13 @@ WAVE_MONITOR_HTML = os.path.join(constants.UI_DIR, "wave_monitor.html")
 LOGO_ICO = os.path.join(constants.BUNDLE_DIR, "logo.ico")
 LOG_HISTORY_LIMIT = 500  # caps what a freshly popped-out window gets replayed with
 
+# Auto-reopen throttle: after a run's Roblox window closes, the dock watchdog
+# relaunches the game via deep link, but a fresh Roblox can take a good while
+# to boot and show a window -- this is how long to wait before trying the
+# launch again, so a slow startup isn't mistaken for a failed launch and
+# spammed with more launches on top of it.
+ROBLOX_RELAUNCH_COOLDOWN = 60.0
+
 HOTKEY_DEFAULTS = {
     "toggle_game": "f4", "skip_waiting": "", "macro_start": "f1", "macro_stop": "f2", "macro_pause": "f5",
     "debug_screenshot": "f3",
@@ -357,6 +364,14 @@ class Api:
         # instantly re-attaching after an explicit Un-Attach.
         self.pinned_hwnd = None
         self.dock_suspended = False
+        # Auto-reopen/auto-restart after Roblox closes mid-run (see
+        # _dock_watchdog): _resume_after_relaunch is armed the moment a live
+        # run's window vanishes and drives both reopening the game and picking
+        # the run back up once it's re-docked; _roblox_relaunch_at throttles
+        # the deep-link launches (see ROBLOX_RELAUNCH_COOLDOWN). Cleared by an
+        # explicit Stop so closing Roblox to quit doesn't get undone.
+        self._resume_after_relaunch = False
+        self._roblox_relaunch_at = 0.0
         # macOS side-by-side layout state (see set_panel_expanded): the panel
         # only starts trading width against the game once it has actually been
         # arranged, and the lock keeps the screen-switch resizes from
@@ -628,6 +643,10 @@ class Api:
             "game_cutout": data.get("game_cutout", False),
             "use_wgc_capture": data.get("use_wgc_capture", False),
             "flicker_free_capture": data.get("flicker_free_capture", True),
+            # Reopen Roblox and resume the run if the game closes/crashes
+            # mid-run (see _dock_watchdog). Default on -- it's the point of an
+            # unattended overnight run surviving a Roblox crash.
+            "auto_relaunch_roblox": data.get("auto_relaunch_roblox", True),
         }
 
     def get_tasks(self) -> list:
@@ -911,6 +930,11 @@ class Api:
             expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100))
 
     def stop_macro(self) -> dict:
+        # An explicit Stop cancels any pending auto-reopen/auto-restart -- if
+        # the user is deliberately stopping (and may then close Roblox to
+        # quit), the watchdog must not helpfully reopen the game and start the
+        # run back up behind them.
+        self._resume_after_relaunch = False
         return self.runner.stop()
 
     def pause_macro(self) -> dict:
@@ -2745,6 +2769,14 @@ def _launch_ui():
                     api.game_hwnd = None
                     api.push_ui("showWaiting")
                     api.push_log("Roblox window closed, waiting for it again.")
+                    # Arm the auto-reopen ONLY if a run was actually live when
+                    # Roblox vanished -- snapshotting is_running() right here,
+                    # while the runner's own recovery is still ticking on the
+                    # now-dead hwnd, is what tells "the game crashed mid-run"
+                    # apart from "the run had already finished and the user
+                    # closed Roblox". The reopen + resume happen further down.
+                    if api.runner.is_running():
+                        api._resume_after_relaunch = True
 
                 # Explicit Un-Attach (Settings > Debug): skip auto-detect
                 # entirely until the user picks a window and clicks Attach
@@ -2766,6 +2798,39 @@ def _launch_ui():
                 else:
                     api.pinned_hwnd = None
                     hwnd = wm.find_roblox_window()  # title AND process name: a Chrome tab titled "Roblox" won't match
+
+                # Roblox is gone and a run wants it back: reopen the game via
+                # the same deep link the runner's own rejoin uses, so an
+                # unattended run heals a crash/close instead of sitting on
+                # "waiting" forever. Throttled (ROBLOX_RELAUNCH_COOLDOWN) so a
+                # slow boot isn't hit with a second launch, and skipped when
+                # other Roblox windows are open -- the deep link's single-
+                # instance handling would force-close them (alt accounts).
+                if not hwnd and api._resume_after_relaunch:
+                    try:
+                        want_reopen = cfg.load().get("auto_relaunch_roblox", True)
+                    except Exception:
+                        want_reopen = True
+                    now = time.time()
+                    if (want_reopen and hasattr(os, "startfile")
+                            and now - api._roblox_relaunch_at >= ROBLOX_RELAUNCH_COOLDOWN):
+                        try:
+                            others = wm.list_roblox_windows()
+                        except Exception:
+                            others = []
+                        if others:
+                            api._roblox_relaunch_at = now  # also rate-limits this log
+                            api.push_log("Roblox closed mid-run, but other Roblox windows are open -- "
+                                         "not auto-reopening (it would close them).")
+                        else:
+                            from core.runner_constants import REJOIN_DEEPLINK
+                            api._roblox_relaunch_at = now
+                            try:
+                                os.startfile(REJOIN_DEEPLINK)
+                                api.push_log("Roblox closed mid-run -- reopening the game automatically...")
+                            except OSError as exc:
+                                api.push_log(f"Couldn't auto-reopen Roblox: {exc}")
+
                 if hwnd and (not api.docker.docked or hwnd != api.game_hwnd):
                     api.push_log("Roblox found, settling before docking...")
                     api.game_hwnd = hwnd
@@ -2908,6 +2973,23 @@ def _launch_ui():
                     api.docker.dock(api.game_hwnd, api.gui_hwnd, x=0, y=TITLEBAR_H)
             except Exception:
                 pass
+
+            # Run interrupted by Roblox closing, and the game is now back and
+            # docked: pick the run up again so it doesn't need a human to hit
+            # Start. Fires once per outage -- cleared whether the still-live
+            # runner recovered onto the new window by itself (nothing to do)
+            # or it had given up and we start a fresh run here.
+            try:
+                if (api._resume_after_relaunch and api.docker.docked
+                        and api.game_hwnd and wm.is_window(api.game_hwnd)):
+                    if api.runner.is_running():
+                        api._resume_after_relaunch = False  # its own recovery already caught the re-dock
+                    else:
+                        api._resume_after_relaunch = False
+                        api.push_log("Roblox is back -- restarting the macro where it left off.")
+                        api.start_macro()
+            except Exception as exc:
+                api.push_log(f"Auto-restart after reopening Roblox failed: {exc}")
 
             time.sleep(2)
 
