@@ -148,7 +148,7 @@ MACRO_COORD_DEFAULTS = {
     "challenge_stage_1_x": 460, "challenge_stage_1_y": 277,
     "challenge_stage_2_x": 460, "challenge_stage_2_y": 400,
     "challenge_stage_3_x": 460, "challenge_stage_3_y": 533,
-    "expedition_difficulty_x": 1094, "expedition_difficulty_y": 456,
+    "expedition_difficulty_x": 441, "expedition_difficulty_y": 524,
     "team_loadout_x": 800, "team_loadout_y": 324, "team_loadout_row_height": 126,
     "screen_middle_x": 576, "screen_middle_y": 378,
     "unit_info_reset_x": 3, "unit_info_reset_y": 3,

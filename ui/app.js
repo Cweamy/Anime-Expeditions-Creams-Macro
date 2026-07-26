@@ -1730,6 +1730,16 @@ const TASK_DATA = {
     // run. See core.runner._expedition_extract_accept_at.
     extractAfter: ['0', '1', '2', '3', '4', '5'],
   },
+  event: {
+    label: 'Event',
+    // Event has its own lobby entry (nav_event -> event_gamemode -> Act),
+    // no map carousel and no difficulty picker -- just one of 3 Acts (each a
+    // villain), then Solo/Matchmaking. Stored in `stage` (values '1'-'3')
+    // the same way Raid stores its Acts, so it reuses the existing
+    // stage/act plumbing. Mirrors core.runner_constants' EVENT_ACT_ORDER.
+    stages: ['1', '2', '3'],
+    isEvent: true,
+  },
 };
 
 let taskCards = [];
@@ -1891,6 +1901,7 @@ function setTaskProp(id, key, value) {
   if (key === 'mode') {
     const d = TASK_DATA[t.mode];
     if (d.maps) t.map = d.maps[0];
+    else if (d.isEvent) t.map = 'Event';  // no map to pick, but a label keeps logs/status readable
     if (d.stages) t.stage = d.stages[0];
     if (d.difficulties) t.difficulty = d.difficulties[0];
     if (d.extractAfter) t.extract_after = '1';
@@ -1905,7 +1916,7 @@ function taskOpts(list, current, fmt) {
 }
 
 // One accent per mode so the queue scans by color before you even read it.
-const TASK_MODE_COLORS = { story: 'var(--brand)', raid: 'var(--rose)', expedition: 'var(--teal)' };
+const TASK_MODE_COLORS = { story: 'var(--brand)', raid: 'var(--rose)', expedition: 'var(--teal)', event: 'var(--amber)' };
 
 // The two text lines a queue row shows for a task -- where it goes, then how
 // it runs. All editing happens in the Builder, rows are read-only summaries.
@@ -1916,6 +1927,8 @@ function taskSummary(t) {
     title += ` · ${t.map} · ${/^\d+$/.test(t.stage) ? 'Stage ' + t.stage : t.stage}`;
   } else if (t.mode === 'expedition') {
     title += ` · ${t.map}`;
+  } else if (t.mode === 'event') {
+    title += ` · Act ${t.stage}`;
   }
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
   const diff = ((t.mode === 'story' && !specialStage) || t.mode === 'expedition') ? t.difficulty
@@ -2002,6 +2015,8 @@ function renderTaskBuilder() {
     fields.push(field('Stage', sel('stage', d.stages, s => /^\d+$/.test(s) ? 'Stage ' + s : s)));
   } else if (t.mode === 'expedition') {
     fields.push(field('Expedition', sel('map', d.maps)));
+  } else if (t.mode === 'event') {
+    fields.push(field('Act', sel('stage', d.stages, s => 'Act ' + s)));
   }
 
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
@@ -3566,7 +3581,8 @@ const IMAGE_DESCRIPTIONS = {
   confirm: "The Confirm button -- e.g. confirming a Team Loadout.",
   continue_2: "The smaller second 'Continue' button in Expedition wave transitions.",
   defeat: "The Defeat result screen -- how the macro knows a run was lost.",
-  enter_matchmaking: "The 'Enter Matchmaking' button (Story/Raid).",
+  enter_matchmaking: "The 'Enter Matchmaking' button (Story/Raid/Event).",
+  event_gamemode: "The Event's gamemode card, clicked after the lobby Event button.",
   exclude: "The Exclude-equipment option in the Team Loadout panel.",
   exp_continue: "Expedition's 'Continue' button at a wave checkpoint.",
   exp_enter_matchmaking: "Expedition's Enter Matchmaking button.",
@@ -3583,6 +3599,7 @@ const IMAGE_DESCRIPTIONS = {
   max_placement_reached: "The 'max units placed' indicator.",
   nav_back: "The Back button used to back out of menus.",
   nav_disband: "The Disband button (leaving a party).",
+  nav_event: "The lobby 'Event' button -- Event mode's own entry (not under Play).",
   nav_play: "The lobby 'Play' button -- how the macro knows it's on the lobby.",
   nav_search: "The Search button (Settings search / map search).",
   nav_select_stage: "The 'Select Stage' confirm button on the stage screen.",
@@ -3608,6 +3625,9 @@ const IMAGE_DESCRIPTIONS = {
   unit_exist: "Confirms a unit was actually placed on the field.",
   upgradeable: "A unit's info panel when it CAN be upgraded.",
   victory: "The Victory result screen -- how the macro knows a run was won.",
+  villian1: "Event Act 1's villain card (Solo/Matchmaking event entry).",
+  villian2: "Event Act 2's villain card (Solo/Matchmaking event entry).",
+  villain3: "Event Act 3's villain card (Solo/Matchmaking event entry).",
   warning: "A warning popup that can block Start Game.",
 };
 // The map NAME is reused for two different images: a "UI" one (the map's name

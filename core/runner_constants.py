@@ -155,6 +155,19 @@ ACT_ORDER = ["1", "2", "3"]
 ACT_CLICK_BASE = (250, 267)  # Act 1's click point
 ACT_ROW_HEIGHT = 129
 
+# Event mode: reached straight from the lobby via its own nav_event button
+# (NOT through Play like Story/Raid/Expedition/Challenge), then the
+# event_gamemode card, then one of 3 Act cards (each a villain). There's no
+# map carousel and no difficulty picker -- picking the Act IS the whole
+# selection, so it goes straight from the Act to the Solo/Matchmaking tail
+# (nav_select_stage + nav_start, or enter_matchmaking) the other modes share.
+# The image folder names are exactly as they ship under Assets/ui/ -- the
+# mixed "villian"/"villain" spelling is intentional, it matches the real
+# folders. Mirrors TASK_DATA.event.stages in ui/app.js.
+EVENT_ACT_ORDER = ["1", "2", "3"]
+EVENT_ACT_IMAGES = {"1": "villian1", "2": "villian2", "3": "villain3"}
+EVENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Event screen (nav_event / event_gamemode / the Act card) to appear
+
 # Infinite/Mastery are locked to Hard in-game with no picker shown for them
 # (see ui/app.js's TASK_DATA.story comment) -- no difficulty click happens
 # for those stages at all, so there's nothing to look up for them here.
@@ -187,7 +200,7 @@ CHALLENGE_STAGE_CLICK = {"1": (460, 277), "2": (460, 400), "3": (460, 533)}
 CHALLENGE_SCREEN_TIMEOUT = 10.0  # how long to wait for challenge_loaded after clicking the Challenge card
 CHALLENGE_MAP_DETECT_TIMEOUT = 20.0  # how long to poll for a recognizable map after teleporting in
 
-EXPEDITION_DIFFICULTY_CLICK = (1094, 456)
+EXPEDITION_DIFFICULTY_CLICK = (441, 524)
 EXPEDITION_DIFFICULTY_CLICK_DELAY = 0.1  # lets each increment register before the next click
 
 # Clicking the stage row (or the map, for Expedition) fires an animation on

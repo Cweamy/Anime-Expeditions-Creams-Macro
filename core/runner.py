@@ -512,7 +512,10 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                     return
 
                 map_name = task.get("map")
-                if not map_name:
+                # Event mode has no map to pick (just an Act) -- it's the one
+                # mode where a missing map is expected, not a misconfigured
+                # task, so don't skip it over that.
+                if not map_name and (task.get("mode") or "story") != "event":
                     self._log(f"[Macro] Task {task_index}/{len(tasks)} has no map set -- skipping it.")
                     continue
 
@@ -792,56 +795,84 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                           coords: dict, scroll_power: int, scroll_nudges: int, webhook: dict = None) -> bool:
         """Lobby -> Play -> Story/Raid -> map -> stage/act -> difficulty ->
         confirm -> matchmaking/solo -> teleport-in. Runs once per TASK, not
-        once per repeat -- see the repeat loop in _run."""
-        # Lobby -> Play -> Story/Raid -> map search, retried wholesale from
-        # the lobby if the map search fails and backing out succeeds (see
-        # _spam_back_until_gone) -- a failed search leaves nothing about
-        # "already on the gamemode menu" safe to assume anymore, so each
-        # attempt re-checks from scratch rather than resuming partway
-        # through.
-        reached_map = False
-        for attempt in range(1, MAP_SELECT_RETRY_ATTEMPTS + 1):
+        once per repeat -- see the repeat loop in _run. Event mode takes its
+        own lobby entry (nav_event -> event_gamemode -> Act) with no map or
+        difficulty, then rejoins the shared confirm/Solo/Matchmaking tail."""
+        if mode == "event":
+            # Event is reached straight from the lobby (nav_event), not
+            # through Play/gamemode/map, and has no difficulty picker -- so
+            # it reaches the chosen Act and then falls straight through to
+            # the shared confirm + Solo/Matchmaking tail below. Same
+            # retried-from-the-lobby loop as the map path, for the same
+            # reason (a failed attempt leaves nothing safe to assume).
+            reached_event = False
+            for attempt in range(1, MAP_SELECT_RETRY_ATTEMPTS + 1):
+                if self._checkpoint(stop_event):
+                    return False
+                if attempt > 1:
+                    self._log(f"[Macro] Retrying Event entry from the lobby "
+                               f"(attempt {attempt}/{MAP_SELECT_RETRY_ATTEMPTS})...")
+                if self._reach_event_act_selected(hwnd, stop_event, task.get("stage") or "1"):
+                    reached_event = True
+                    break
+                if stop_event.is_set():
+                    return False
+            if not reached_event:
+                self._log(f'[Macro] Couldn\'t reach the Event Act after {MAP_SELECT_RETRY_ATTEMPTS} '
+                           f'attempts -- stopping.')
+                return False
             if self._checkpoint(stop_event):
                 return False
-            if attempt > 1:
-                self._log(f"[Macro] Retrying from the lobby (attempt {attempt}/{MAP_SELECT_RETRY_ATTEMPTS})...")
-            if self._reach_map_selected(hwnd, stop_event, map_name, mode, scroll_power, scroll_nudges):
-                reached_map = True
-                break
-            if stop_event.is_set():
-                return False
-        if not reached_map:
-            self._log(f'[Macro] Couldn\'t reach map "{map_name}" after {MAP_SELECT_RETRY_ATTEMPTS} attempts -- stopping.')
-            return False
-        if self._checkpoint(stop_event):
-            return False
-
-        if mode == "expedition":
-            # No stage-row picker to click through -- just the difficulty
-            # stepper, straight after the map.
-            time.sleep(DIFFICULTY_CLICK_DELAY)
-            self._select_expedition_difficulty(hwnd, stop_event, task.get("difficulty") or "1")
         else:
-            stage = task.get("stage") or "1"
-            if not self._select_stage(hwnd, stop_event, stage, mode):
+            # Lobby -> Play -> Story/Raid -> map search, retried wholesale from
+            # the lobby if the map search fails and backing out succeeds (see
+            # _spam_back_until_gone) -- a failed search leaves nothing about
+            # "already on the gamemode menu" safe to assume anymore, so each
+            # attempt re-checks from scratch rather than resuming partway
+            # through.
+            reached_map = False
+            for attempt in range(1, MAP_SELECT_RETRY_ATTEMPTS + 1):
+                if self._checkpoint(stop_event):
+                    return False
+                if attempt > 1:
+                    self._log(f"[Macro] Retrying from the lobby (attempt {attempt}/{MAP_SELECT_RETRY_ATTEMPTS})...")
+                if self._reach_map_selected(hwnd, stop_event, map_name, mode, scroll_power, scroll_nudges):
+                    reached_map = True
+                    break
+                if stop_event.is_set():
+                    return False
+            if not reached_map:
+                self._log(f'[Macro] Couldn\'t reach map "{map_name}" after {MAP_SELECT_RETRY_ATTEMPTS} attempts -- stopping.')
                 return False
             if self._checkpoint(stop_event):
                 return False
 
-            # Raid's Acts are locked to Hard in-game, same as Story's
-            # Infinite/Mastery (see TASK_DATA.raid.fixedDifficulty) -- no
-            # difficulty picker exists for it, so no click happens for it.
-            if mode == "raid":
-                self._log('[Macro] Raid is locked to Hard in-game -- no difficulty click needed.')
-            elif stage in SPECIAL_STAGES_NO_DIFFICULTY:
-                self._log(f'[Macro] "{stage}" is locked to Hard in-game -- no difficulty click needed.')
+            if mode == "expedition":
+                # No stage-row picker to click through -- just the difficulty
+                # stepper, straight after the map.
+                time.sleep(DIFFICULTY_CLICK_DELAY)
+                self._select_expedition_difficulty(hwnd, stop_event, task.get("difficulty") or "1")
             else:
-                # _select_stage already settled (DIFFICULTY_CLICK_DELAY)
-                # right after its own double-click, so the panel/toggle is
-                # done animating in by the time we get here.
-                self._select_difficulty(hwnd, task.get("difficulty") or "Normal", coords)
-        if self._checkpoint(stop_event):
-            return False
+                stage = task.get("stage") or "1"
+                if not self._select_stage(hwnd, stop_event, stage, mode):
+                    return False
+                if self._checkpoint(stop_event):
+                    return False
+
+                # Raid's Acts are locked to Hard in-game, same as Story's
+                # Infinite/Mastery (see TASK_DATA.raid.fixedDifficulty) -- no
+                # difficulty picker exists for it, so no click happens for it.
+                if mode == "raid":
+                    self._log('[Macro] Raid is locked to Hard in-game -- no difficulty click needed.')
+                elif stage in SPECIAL_STAGES_NO_DIFFICULTY:
+                    self._log(f'[Macro] "{stage}" is locked to Hard in-game -- no difficulty click needed.')
+                else:
+                    # _select_stage already settled (DIFFICULTY_CLICK_DELAY)
+                    # right after its own double-click, so the panel/toggle is
+                    # done animating in by the time we get here.
+                    self._select_difficulty(hwnd, task.get("difficulty") or "Normal", coords)
+            if self._checkpoint(stop_event):
+                return False
 
         # nav_select_stage is a confirm button that finalizes the stage/
         # difficulty pick -- Start/Enter Matchmaking doesn't actually
@@ -2316,7 +2347,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # position -- no matchmaking_region_* exists for either, so they're
         # searched full-window instead of the Story/Raid region restriction.
         image_name = {"expedition": "exp_enter_matchmaking", "challenge": "chal_enter"}.get(mode, "enter_matchmaking")
-        region = None if mode in ("expedition", "challenge") else (
+        # Event reuses Story/Raid's shared "enter_matchmaking" image, but its
+        # button isn't at the calibrated Story/Raid position (matchmaking_
+        # region_*) -- so it's searched full-window, same as Expedition/
+        # Challenge, rather than boxed to a region it may not land in.
+        region = None if mode in ("expedition", "challenge", "event") else (
             coords["matchmaking_region_x"], coords["matchmaking_region_y"],
             coords["matchmaking_region_w"], coords["matchmaking_region_h"],
         )
@@ -2512,6 +2547,56 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._spam_back_until_gone(hwnd, stop_event)
         return False
 
+    def _reach_event_act_selected(self, hwnd, stop_event: threading.Event, act: str) -> bool:
+        """Lobby -> Event -> Event gamemode -> Act (villain 1-3), as one
+        restartable unit -- Event's equivalent of _reach_map_selected. Event
+        has its OWN lobby entry (the nav_event button), not the Play ->
+        gamemode -> map flow the other modes share, so there's no gamemode
+        menu or map carousel here: click nav_event, click the event_gamemode
+        card, then the chosen Act's villain card. On any failure it backs out
+        to the lobby (_spam_back_until_gone) so the next attempt starts clean,
+        same as the map path does.
+        """
+        act = str(act)
+        act_image = EVENT_ACT_IMAGES.get(act)
+        if act_image is None:
+            self._log(f'[Macro] Unknown Event Act "{act}" -- expected one of {EVENT_ACT_ORDER}.')
+            return False
+
+        if not self._ensure_lobby(hwnd, stop_event):
+            return False
+        if self._checkpoint(stop_event):
+            return False
+
+        # nav_event: the lobby's Event button (its own nav entry, not under
+        # Play). Each of the three clicks below is a wait-then-click with a
+        # focus-safe verify via _click_found_image, and each screen animates
+        # in, so a short settle follows before searching the next one.
+        self._set_status(action="Clicking Event...")
+        if self._click_found_image(hwnd, "nav_event", EVENT_SCREEN_TIMEOUT, stop_event) is None:
+            self._spam_back_until_gone(hwnd, stop_event)
+            return False
+        if self._checkpoint(stop_event):
+            return False
+        time.sleep(SETTLE_DELAY)
+
+        self._set_status(action="Clicking Event gamemode...")
+        if self._click_found_image(hwnd, "event_gamemode", EVENT_SCREEN_TIMEOUT, stop_event) is None:
+            self._spam_back_until_gone(hwnd, stop_event)
+            return False
+        if self._checkpoint(stop_event):
+            return False
+        time.sleep(SETTLE_DELAY)
+
+        self._set_status(action=f"Clicking Act {act}...")
+        if self._click_found_image(hwnd, act_image, EVENT_SCREEN_TIMEOUT, stop_event) is None:
+            self._spam_back_until_gone(hwnd, stop_event)
+            return False
+        # Let the stage/Enter-Matchmaking screen finish animating in before
+        # the shared tail searches for its confirm button (same reason
+        # _select_stage settles after its own click).
+        time.sleep(SETTLE_DELAY)
+        return not self._checkpoint(stop_event)
 
     def _spam_back_until_gone(self, hwnd, stop_event: threading.Event) -> None:
         # A failed map search can leave the run sitting on any of several
