@@ -14,54 +14,16 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 // Logs
 // ---------------------------------------------------------------------------
-// Lines that start with a "[Tag]" (e.g. "[Selector] ...", "[Theme] ...") are
-// treated as categorized: the tag is hashed to a stable accent color from the
-// app palette (same tag -> same color every time, tags that don't exist yet
-// get one automatically), which drives both the tag text and the line's
-// hover highlight via the --cat custom property (see .log-entry in style.css).
-const LOG_TAG_COLORS = ['var(--brand)', 'var(--teal)', 'var(--amber)', 'var(--lilac)', 'var(--rose)', 'var(--slate)'];
-
-function logTagColor(tag) {
-  let h = 0;
-  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
-  return LOG_TAG_COLORS[h % LOG_TAG_COLORS.length];
-}
-
-function renderLogLine(div, line) {
-  const match = /^\[([^\]]+)\](.*)$/.exec(line);
-  div.appendChild(document.createTextNode('> '));
-  if (match) {
-    div.style.setProperty('--cat', logTagColor(match[1]));
-    const tag = document.createElement('span');
-    tag.className = 'log-tag';
-    tag.textContent = `[${match[1]}]`;
-    div.appendChild(tag);
-    div.appendChild(document.createTextNode(match[2]));
-  } else {
-    div.appendChild(document.createTextNode(line));
-  }
-}
-
-// Oldest lines get dropped past this: the log is a live view, not an
-// archive (Python keeps its own history buffer for pop-out replay), and an
-// ever-growing list makes "am I at the newest line?" ambiguous.
-const LOG_MAX_LINES = 400;
-
-function addLog(line) {
-  const list = document.getElementById('log-list');
-  const div = document.createElement('div');
-  div.className = 'log-entry';
-  renderLogLine(div, line);
-  list.appendChild(div);
-  while (list.childElementCount > LOG_MAX_LINES) list.removeChild(list.firstElementChild);
-  list.scrollTop = list.scrollHeight;
-}
+// Line rendering, the line cap, and the scroll-follow behaviour all live in
+// ui/log_view.js -- loaded before this file and shared with the popped-out log
+// window (ui/logs_window.html), which is a separate document showing the same
+// stream. Only what the DASHBOARD does beyond displaying lines stays here.
 
 // Clears this window's view and asks Python to drop its history buffer and
 // clear any other open log window (e.g. a popped-out one), so "Clear" doesn't
 // leave a stale copy sitting in a second window.
 function clearLogs() {
-  document.getElementById('log-list').innerHTML = '';
+  clearLogView();
   try { window.pywebview && pywebview.api.clear_logs(); } catch (e) {}
 }
 
@@ -438,14 +400,12 @@ function switchScreen(name) {
   if (name === 'challenge') refreshChallengeScreen();
   if (name === 'settings') { refreshSavedPaths(); loadMacroCoords(); loadRewardTestMaps(); }
 
-  // The Process Log only exists on the Dashboard; addLog()'s scroll-to-bottom
-  // is a no-op for lines that arrive while another screen is up (a
-  // display:none element has no scroll height), so snap to the newest line
-  // on the way back in.
-  if (name === 'dashboard') {
-    const log = document.getElementById('log-list');
-    if (log) log.scrollTop = log.scrollHeight;
-  }
+  // The Process Log only exists on the Dashboard, and a display:none element
+  // has no scroll height -- so while another screen is up the list cannot
+  // track where it was, and lines arriving off-screen must not pile up as
+  // "unread". Snap to the newest line (and reset that counter) on the way in;
+  // from there normal follow/pin behaviour takes over. See ui/log_view.js.
+  if (name === 'dashboard') logSnapToLatest();
 }
 
 // Bound to the "Toggle Game Visibility" hotkey (default F4) from Python.
