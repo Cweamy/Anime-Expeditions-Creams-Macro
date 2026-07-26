@@ -57,6 +57,21 @@
   --text: #1c1f2b; --text-dim: #565a6e; --text-muted: #8c90a0;
   --teal: #16a087; --amber: #b8842e; --slate: #6b7290; --lilac: #8f5fcc; --rose: #c0435a;
 }
+:root[data-theme-base="space"] {
+  --bg-deep: #050714; --bg-card: #0b0d19; --bg-surface: #121629; --border: #1e2640;
+  --text: #e2e8f0; --text-dim: #8b9bb4; --text-muted: #48566e;
+  --brand: #818cf8; --lilac: #c084fc;
+}
+:root[data-theme-base="gold"] {
+  --bg-deep: #242018; --bg-card: #2f2a20; --bg-surface: #3b3528; --border: #524837;
+  --text: #fef08a; --text-dim: #d99b26; --text-muted: #8c734b;
+  --brand: #f59e0b; --amber: #fbbf24; --teal: #16a087; --slate: #8b93b8; --lilac: #b58ce0; --rose: #d9667a;
+}
+:root[data-theme-base="silver"] {
+  --bg-deep: #1e2229; --bg-card: #262b34; --bg-surface: #303742; --border: #434c5b;
+  --text: #f1f5f9; --text-dim: #a6b4c9; --text-muted: #67758a;
+  --brand: #cbd5e1; --slate: #94a3b8; --teal: #45c9b5; --amber: #e3b158; --lilac: #b58ce0; --rose: #d9667a;
+}
 :root[data-theme-base="light"]:not([data-theme-accent]) { --brand: #5b7cf0; }
 
 /* Liquid Glass: frosted panels over a SELF-CONTAINED animated aurora --

@@ -793,6 +793,9 @@ const THEME_BASES = {
   black:   { label: 'Black', bg: '#0a0a0a', border: '#262626' },
   slate:   { label: 'Slate', bg: '#1a1b1e', border: '#313338' },
   light:   { label: 'Light', bg: '#ffffff', border: '#d8dbe4' },
+  space:   { label: 'Space', bg: '#0b0d19', border: '#1e2640' },
+  gold:    { label: 'Semi Gold', bg: '#2f2a20', border: '#524837' },
+  silver:  { label: 'Semi Silver', bg: '#262b34', border: '#434c5b' },
   // Frosted panels over an animated in-app aurora -- see #glass-aurora in style.css.
   glass:   { label: 'Liquid Glass', bg: 'linear-gradient(135deg, rgba(110,166,255,0.45), rgba(181,140,224,0.45))', border: 'rgba(255,255,255,0.25)' },
 };
