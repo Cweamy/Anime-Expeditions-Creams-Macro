@@ -1952,6 +1952,128 @@ async function importTasks() {
   addLog(`[Task] Imported ${added} task(s)${tplAdded ? ` and ${tplAdded} macro template(s)` : ''}.`);
 }
 
+// ---------------------------------------------------------------------------
+// Task Queue presets
+// ---------------------------------------------------------------------------
+// Named queues saved on THIS machine, picked from a dropdown. Export/Import
+// above is the other half of the story: that writes a file through a native
+// dialog because it exists to move a queue to someone else's install. See
+// core/task_presets.py.
+
+async function refreshTaskPresets(keepSelected) {
+  const sel = document.getElementById('task-preset-select');
+  if (!sel) return;
+  const previous = keepSelected != null ? keepSelected : sel.value;
+  let names = [];
+  try { names = await pywebview.api.list_task_presets(); } catch (e) {}
+  // Built with new Option(...) rather than an innerHTML template: a preset
+  // name is free text the user typed, and Option's text/value are set as
+  // properties, so nothing in the name can be parsed as markup.
+  sel.replaceChildren();
+  if (names.length === 0) {
+    sel.appendChild(new Option('No saved presets', ''));
+  } else {
+    for (const n of names) sel.appendChild(new Option(n, n));
+  }
+  if (previous && names.includes(previous)) sel.value = previous;
+}
+
+// Picking one pre-fills the name box, so Save overwrites the preset you're
+// looking at instead of silently creating a near-duplicate.
+function onTaskPresetPicked() {
+  const sel = document.getElementById('task-preset-select');
+  const nameInput = document.getElementById('task-preset-name');
+  if (sel && nameInput && sel.value) nameInput.value = sel.value;
+}
+
+async function saveTaskPreset() {
+  const nameInput = document.getElementById('task-preset-name');
+  const name = (nameInput ? nameInput.value : '').trim();
+  if (!name) { addLog('[Task] Give the preset a name first.'); return; }
+  if (taskCards.length === 0) { addLog('[Task] Nothing to save -- the queue is empty.'); return; }
+  let result = null;
+  try { result = await pywebview.api.save_task_preset(name, taskCards); } catch (e) {}
+  if (!result || !result.ok) {
+    addLog(`[Task] Couldn't save preset: ${(result && result.reason) || 'error'}`);
+    return;
+  }
+  await refreshTaskPresets(result.name);
+}
+
+async function loadTaskPreset() {
+  const sel = document.getElementById('task-preset-select');
+  const name = sel ? sel.value : '';
+  if (!name) { addLog('[Task] Pick a preset to load first.'); return; }
+  let result = null;
+  try { result = await pywebview.api.load_task_preset(name); } catch (e) {}
+  if (!result || !result.ok) { addLog('[Task] Couldn\'t load that preset.'); return; }
+  if (!Array.isArray(result.tasks) || result.tasks.length === 0) {
+    addLog(`[Task] Preset "${name}" has no tasks in it.`);
+    return;
+  }
+  // Same sanitising refreshTaskQueue() does to the saved queue, for the same
+  // reason: a preset is a plain .json the user is invited to edit by hand
+  // (see the Folder button), and it can outlive a mode being renamed or
+  // retired -- "challenge" was a real Task Queue mode once. An unrecognized
+  // mode reaches TASK_DATA[t.mode] as undefined in taskSummary() and takes
+  // the whole Task screen down with a TypeError, so those rows are dropped
+  // and counted rather than trusted. stage is coerced to a String because
+  // every comparison downstream assumes one.
+  const merged = result.tasks
+    .filter(t => t && typeof t === 'object')
+    .map(t => ({ ...defaultTask(), ...t, id: newTaskId() }));
+  const usable = merged.filter(t => TASK_DATA[t.mode]);
+  const dropped = result.tasks.length - usable.length;
+  if (usable.length === 0) {
+    addLog(`[Task] Preset "${name}" has no usable tasks (unrecognized mode or malformed `
+           + `entries) -- the queue was left as it was.`);
+    return;
+  }
+  usable.forEach(t => { t.stage = String(t.stage); });
+
+  // Replaces the queue rather than appending -- Import appends (you're
+  // merging someone else's tasks into yours), but loading a preset means
+  // "run this queue instead", so appending would just pile duplicates up
+  // every time you switched between two presets.
+  taskCards = usable;
+  if (dropped) {
+    addLog(`[Task] Skipped ${dropped} task(s) in "${name}" with an unrecognized mode.`);
+  }
+  enteringTaskIds = new Set(taskCards.map(t => t.id));
+  selectedTaskId = taskCards.length ? taskCards[0].id : null;
+  await refreshTaskTemplates();
+  renderTaskList();
+  renderTaskBuilder();
+  saveTaskQueue();
+  if (result.missing_macros && result.missing_macros.length) {
+    // The preset still loads -- those tasks just have no macro attached
+    // now, which is worth saying out loud rather than letting a run start
+    // with a silently empty Pre Start.
+    addLog(`[Task] Heads up: this preset references ${result.missing_macros.length} Macro Operation(s) `
+           + `that no longer exist (${result.missing_macros.join(', ')}) -- reassign those tasks.`);
+  }
+}
+
+async function openTaskPresetsFolder() {
+  // Also re-reads the folder afterwards: the whole point of opening it is to
+  // add/rename/remove files by hand, and the dropdown should reflect that
+  // without needing an app restart.
+  try { await pywebview.api.open_task_presets_folder(); } catch (e) {}
+  await refreshTaskPresets();
+}
+
+async function deleteTaskPreset() {
+  const sel = document.getElementById('task-preset-select');
+  const name = sel ? sel.value : '';
+  if (!name) { addLog('[Task] Pick a preset to delete first.'); return; }
+  let result = null;
+  try { result = await pywebview.api.delete_task_preset(name); } catch (e) {}
+  if (!result || !result.ok) { addLog(`[Task] Couldn't delete "${name}".`); return; }
+  const nameInput = document.getElementById('task-preset-name');
+  if (nameInput && nameInput.value === name) nameInput.value = '';
+  await refreshTaskPresets('');
+}
+
 function addTaskCard() {
   const t = defaultTask();
   taskCards.push(t);
@@ -2245,6 +2367,7 @@ async function refreshTaskQueue() {
   taskCards.forEach(t => enteringTaskIds.add(t.id));
   renderTaskList();
   renderTaskBuilder();
+  refreshTaskPresets();  // fills the preset dropdown alongside the queue itself
 }
 
 // ── Task drag-reorder: grip-drag with a floating ghost + drop indicator ──
