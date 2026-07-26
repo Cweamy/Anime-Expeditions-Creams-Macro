@@ -1763,13 +1763,15 @@ const TASK_DATA = {
     label: 'Event',
     // Event has its own lobby entry (nav_event -> event_gamemode -> Act),
     // no map carousel and no difficulty picker -- just one of the Acts (each a
-    // villain), then Solo/Matchmaking. Stored in `stage` (values '1'-'3')
+    // villain), then Solo/Matchmaking. Stored in `stage` (values '1'-'4')
     // the same way Raid stores its Acts, so it reuses the existing
     // stage/act plumbing. Acts past the second are reached by scrolling the
-    // villain list (see runner._reach_event_act_selected). Act 4 exists
-    // in-game but isn't supported yet (still being worked on), so it's not
-    // listed. Mirrors core.runner_constants' EVENT_ACT_ORDER.
-    stages: ['1', '2', '3'],
+    // villain list (see runner._reach_event_act_selected). Act 4 ("Crow -
+    // Dawn") is relic-gated -- pick it to run it directly, or let a farm task
+    // auto-divert to it on a Crow Relic drop (see the Act 4 controls the Task
+    // Builder adds for event tasks). Mirrors core.runner_constants'
+    // EVENT_ACT_ORDER.
+    stages: ['1', '2', '3', '4'],
     isEvent: true,
   },
 };
@@ -1795,6 +1797,11 @@ function defaultTask() {
     map: TASK_DATA.story.maps[0], stage: '1', difficulty: 'Normal',
     extract_after: '1',
     repeat: 1, team: '', equipment: 'include', play_mode: 'solo', macro: '',
+    // Event-only: auto-clear Villian Invasion Act 4 when a Crow Relic drops.
+    // act4_mode 'once' spends one relic then resumes; 'until_locked' spends
+    // every banked relic. act4_macro is Act 4's own Macro Operation (it plays
+    // nothing like Acts 1-3). See runner._run_act4_diversion.
+    act4_on_drop: false, act4_mode: 'once', act4_macro: '',
   };
 }
 
@@ -1970,6 +1977,8 @@ function taskSummary(t) {
     diff,
     t.play_mode === 'matchmaking' ? 'Matchmaking' : 'Solo',
     t.macro ? `▸ ${t.macro}` : '',
+    (t.mode === 'event' && t.stage !== '4' && t.act4_on_drop)
+      ? `⮡ Act 4 on drop${t.act4_mode === 'until_locked' ? ' (until locked)' : ''}` : '',
   ].filter(Boolean).join(' · ');
   return { title, meta };
 }
@@ -2079,11 +2088,42 @@ function renderTaskBuilder() {
     </select>`;
   fields.push(field('Macro Operation', macroSel));
 
+  // Event farm tasks (Acts 1-3) can auto-divert to Villian Invasion Act 4
+  // ("Crow - Dawn") when a Crow Relic drops. Not shown on an Act 4 task
+  // itself -- there's nothing to divert TO. Act 4 needs its own Macro
+  // Operation since it plays nothing like Acts 1-3.
+  if (t.mode === 'event' && t.stage !== '4') {
+    const on = !!t.act4_on_drop;
+    const onOffSeg = `
+      <div class="seg-toggle">
+        <button type="button" class="seg-btn ${on ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_on_drop', true); renderTaskBuilder()">On</button>
+        <button type="button" class="seg-btn ${!on ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_on_drop', false); renderTaskBuilder()">Off</button>
+      </div>`;
+    fields.push(field('Auto-clear Act 4 on relic drop', onOffSeg));
+    if (t.act4_on_drop) {
+      const runsSeg = `
+        <div class="seg-toggle">
+          <button type="button" class="seg-btn ${t.act4_mode !== 'until_locked' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_mode', 'once'); renderTaskBuilder()">Once</button>
+          <button type="button" class="seg-btn ${t.act4_mode === 'until_locked' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_mode', 'until_locked'); renderTaskBuilder()">Until locked</button>
+        </div>`;
+      fields.push(field('Act 4 Runs', runsSeg));
+      const act4MacroSel = `
+        <select class="task-select" onchange="setTaskProp('${t.id}', 'act4_macro', this.value)">
+          <option value="">No Macro</option>
+          ${taskTemplates.map(n => `<option value="${n}" ${n === t.act4_macro ? 'selected' : ''}>&#9654; ${n}</option>`).join('')}
+        </select>`;
+      fields.push(field('Act 4 Macro Operation', act4MacroSel));
+    }
+  }
+
   const extractHint = t.mode === 'expedition'
     ? `<div class="wh-hint">"Extract After" is how many extract prompts to skip before actually taking one -- 0 extracts at the first node, higher goes deeper (and takes longer) per run.</div>` : '';
+  const act4Hint = (t.mode === 'event' && t.stage !== '4' && t.act4_on_drop)
+    ? `<div class="wh-hint">When a Crow Relic drops on a win, the run leaves this stage, clears Act 4 (Crow - Dawn) with its own Macro Operation above, then comes back. <b>Once</b> spends one relic; <b>Until locked</b> spends every banked relic. Give Act 4 its own Macro Operation ${'&#8212;'} it plays nothing like Acts 1-3.</div>` : '';
   el.innerHTML = `
     <div class="task-builder-grid">${fields.join('')}</div>
     ${extractHint}
+    ${act4Hint}
     <div class="wh-hint" style="margin-top: 8px;">The macro's Team Loadout comes from its template (Macro Manager tab).</div>
     <div class="flex items-center gap-2" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
       <button class="task-toolbar-btn add" onclick="cloneTaskCard('${t.id}')">&#10697; Clone Task</button>
@@ -3660,6 +3700,9 @@ const IMAGE_DESCRIPTIONS = {
   villian1: "Event Act 1's villain card (Solo/Matchmaking event entry).",
   villian2: "Event Act 2's villain card (Solo/Matchmaking event entry).",
   villain3: "Event Act 3's villain card -- scrolled into view if it's below the fold (Solo/Matchmaking event entry).",
+  villian4: "Event Act 4's villain card (Crow - Dawn) -- scrolled into view; clicked to enter Act 4.",
+  villian4_close: "Act 4's LOCKED card ('requires 1 Crow Relic', 0/1x Owned) -- means there's no relic to spend, so the Act 4 auto-divert backs out here.",
+  drop_relic: "The Crow Relic reward on the Victory screen -- spotting it is what triggers a farm task's optional auto-divert to Act 4.",
   warning: "A warning popup that can block Start Game.",
 };
 // The map NAME is reused for two different images: a "UI" one (the map's name

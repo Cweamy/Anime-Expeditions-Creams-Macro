@@ -164,12 +164,11 @@ ACT_ROW_HEIGHT = 129
 # The image folder names are exactly as they ship under Assets/ui/ -- the
 # mixed "villian"/"villain" spelling is intentional, it matches the real
 # folders. Mirrors TASK_DATA.event.stages in ui/app.js.
-# Act 4 (villian4/villian4_close) exists in-game but isn't supported yet --
-# still being worked on -- so it's deliberately left out of the selectable
-# order/images here (and TASK_DATA.event.stages in ui/app.js). Adding the now
-# in-game 4th card DID push the later Acts below the fold on the Event screen,
-# though, which is why the Act pick scrolls now (see EVENT_ACT_SCROLL_FROM_INDEX).
-EVENT_ACT_ORDER = ["1", "2", "3"]
+# Act 4 (Villian Invasion "Crow - Dawn") is a relic-gated Act: it costs 1 Crow
+# Relic to enter, so its card shows locked ("0/1x Owned", VILLIAN4_CLOSE_IMAGE)
+# until you've banked one. It's selectable now, and farm tasks can auto-divert
+# to it when a relic drops (see runner._run_act4_diversion / DROP_RELIC_IMAGE).
+EVENT_ACT_ORDER = ["1", "2", "3", "4"]
 # Values are a tuple of candidate crops per Act (any match wins), so an Act
 # card that shows in more than one visual state can be matched in whichever
 # it's currently in.
@@ -177,6 +176,7 @@ EVENT_ACT_IMAGES = {
     "1": ("villian1",),
     "2": ("villian2",),
     "3": ("villain3",),
+    "4": ("villian4",),
 }
 # Acts from this one on can sit below the fold on the Event gamemode screen
 # and only come into view by scrolling the villain list -- picking one of
@@ -187,6 +187,15 @@ EVENT_ACT_IMAGES = {
 # scrolling anyway.
 EVENT_ACT_SCROLL_FROM_INDEX = 2  # 0-based into EVENT_ACT_ORDER: index 2 == Act "3"
 EVENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Event screen (nav_event / event_gamemode / the Act card) to appear
+
+# Villian Invasion Act 4 ("Crow - Dawn") relic gate. DROP_RELIC_IMAGE is the
+# Crow Relic reward shown on the Victory screen (relics only drop on a win) --
+# spotting it is what triggers a farm task's optional auto-divert to Act 4.
+# VILLIAN4_CLOSE_IMAGE is Act 4's locked card ("requires 1 Crow Relic / 0/1x
+# Owned"); seeing it means there's no relic to spend, so the divert backs out.
+DROP_RELIC_IMAGE = "drop_relic"
+VILLIAN4_CLOSE_IMAGE = "villian4_close"
+EVENT_ACT4_STAGE = "4"
 
 # Infinite/Mastery are locked to Hard in-game with no picker shown for them
 # (see ui/app.js's TASK_DATA.story comment) -- no difficulty click happens
@@ -312,6 +321,10 @@ START_GAME_CHECK_TIMEOUT = 1.5
 NAV_CLICK_TIMEOUT = 8.0  # nav_settings / nav_search in the Auto Vote Start fallback
 REPEAT_STAGE_MODAL_CLEAR_TIMEOUT = 5.0  # how long to wait for the Victory/Defeat banner to actually clear after Repeat Stage
 REWARD_CARD_CLEAR_TIMEOUT = 6.0  # how long to spend dismissing "select upgrade card" before Repeat/Leave Stage
+# The Victory/Defeat panel's reward row streams its items in one at a time, so
+# the screenshot (and the Crow Relic drop check) used to be able to fire before
+# they'd all rendered. A short settle lets the row finish populating first.
+RESULT_CAPTURE_DELAY = 1.0
 SETTLE_DELAY = 0.6  # lets a panel-open animation (e.g. Settings) finish before searching it
 
 # A warning popup can block Start Game right after Pre Start (see
