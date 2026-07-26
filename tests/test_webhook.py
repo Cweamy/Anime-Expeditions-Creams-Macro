@@ -1,4 +1,4 @@
-from core.webhook import validate
+from core.webhook import validate, validate_webhook_url, send, send_file, send_rich
 
 
 def test_validate_empty_url():
@@ -61,3 +61,22 @@ def test_validate_valid_urls():
     assert validate(
         "https://canary.discord.com/api/webhooks/1234567890/test-token?wait=true"
     ) == {"valid": True, "reason": "ok"}
+
+
+def test_validate_webhook_url_helper():
+    # Helper returns True for valid Discord webhooks and False for invalid/SSRF targets
+    assert validate_webhook_url("https://discord.com/api/webhooks/123/abc") is True
+    assert validate_webhook_url("https://discordapp.com/api/webhooks/1234567890/test-token") is True
+    assert validate_webhook_url("http://127.0.0.1") is False
+    assert validate_webhook_url("https://evil.com/webhook") is False
+    assert validate_webhook_url("") is False
+
+
+def test_send_invalid_url_ssrf_prevention():
+    # Sending to invalid or non-Discord URLs returns an error dict without initiating HTTP requests
+    invalid_reason = "invalid webhook URL format or non-Discord target"
+    assert send("http://127.0.0.1", {}) == {"ok": False, "reason": invalid_reason}
+    assert send("https://evil.com/webhook", {}) == {"ok": False, "reason": invalid_reason}
+    assert send_file("http://127.0.0.1", {}, "nonexistent.png") == {"ok": False, "reason": invalid_reason}
+    assert send_rich("https://evil.com/webhook") == {"ok": False, "reason": invalid_reason}
+

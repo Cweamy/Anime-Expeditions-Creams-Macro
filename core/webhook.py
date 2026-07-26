@@ -84,6 +84,12 @@ def validate(url: str) -> dict:
     return {"valid": True, "reason": "ok"}
 
 
+def validate_webhook_url(url: str) -> bool:
+    """Validates whether the webhook URL is HTTPS and belongs to allowed Discord domains."""
+    return validate(url).get("valid", False)
+
+
+
 def send(url: str, embed: dict, content: str = "", silent: bool = False) -> dict:
     """Returns {"ok": bool, "reason": str} instead of a bare bool -- a
     failed send used to disappear silently (the caller never even logged
@@ -92,6 +98,8 @@ def send(url: str, embed: dict, content: str = "", silent: bool = False) -> dict
     success."""
     if not url:
         return {"ok": False, "reason": "no webhook URL configured"}
+    if not validate_webhook_url(url):
+        return {"ok": False, "reason": "invalid webhook URL format or non-Discord target"}
     payload = {"embeds": [embed]}
     if content:
         payload["content"] = content
@@ -138,6 +146,8 @@ def send_file(url: str, embed: dict, screenshot_path: str, content: str = "", si
     unreadable debug screenshot."""
     if not url:
         return {"ok": False, "reason": "no webhook URL configured"}
+    if not validate_webhook_url(url):
+        return {"ok": False, "reason": "invalid webhook URL format or non-Discord target"}
     if not screenshot_path or not os.path.isfile(screenshot_path):
         return send(url, embed, content=content, silent=silent)
 
@@ -198,6 +208,8 @@ def send_rich(url: str, embeds: list = None, file_attachments: list = None,
     """
     if not url:
         return {"ok": False, "reason": "no webhook URL configured"}
+    if not validate_webhook_url(url):
+        return {"ok": False, "reason": "invalid webhook URL format or non-Discord target"}
     payload = {}
     if embeds:
         payload["embeds"] = embeds
