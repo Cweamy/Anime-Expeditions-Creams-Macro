@@ -1579,7 +1579,16 @@ class Api:
         try:
             for sub in ("ui", "maps"):
                 os.makedirs(os.path.join(constants.ASSETS_OVERRIDE_DIR, sub), exist_ok=True)
-            os.startfile(constants.ASSETS_OVERRIDE_DIR)
+            # os.startfile is Windows-only (AttributeError elsewhere) -- mac
+            # needs `open`, and on mac the folder lives under ~/Library/
+            # Application Support (see core.constants), which Finder hides by
+            # default, so opening it directly is the only way a user reaches it.
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", constants.ASSETS_OVERRIDE_DIR])
+            elif os.name == "nt":
+                os.startfile(constants.ASSETS_OVERRIDE_DIR)
+            else:
+                subprocess.Popen(["xdg-open", constants.ASSETS_OVERRIDE_DIR])
         except OSError as exc:
             self.push_log(f"[Settings] Couldn't open the Assets folder: {exc}")
             return {"ok": False, "reason": str(exc)}

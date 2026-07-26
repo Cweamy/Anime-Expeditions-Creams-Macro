@@ -17,6 +17,11 @@ user downloaded, NOT wherever a onefile build happens to extract itself to
 this run (that temp dir can differ, or get wiped, between runs) -- losing
 settings.json every launch would make Settings pointless.
 
+On macOS, "beside the exe" would mean inside the .app bundle
+(<App>.app/Contents/MacOS), which is wrong on two counts -- see the
+darwin override below -- so there APP_DIR is redirected to
+~/Library/Application Support instead.
+
 See build_nuitka.py's comment on the pywebview/pythonnet crash this (and
 the correct webview backend --include-module flags) were needed to fix --
 this file existing at all is a direct consequence of that: every core/*.py
@@ -39,6 +44,27 @@ elif getattr(sys, "frozen", False) or "__compiled__" in dir():
 else:
     BUNDLE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     APP_DIR = BUNDLE_DIR
+
+# macOS: a frozen build's APP_DIR (above) lands INSIDE the .app bundle
+# (<App>.app/Contents/MacOS) -- the wrong home for user data on two counts.
+# 1. Gatekeeper App Translocation runs a freshly-downloaded, still-quarantined
+#    .app from a randomized READ-ONLY mount (/private/var/folders/.../
+#    AppTranslocation/.../d/<App>.app), so every write beside the binary dies
+#    with [Errno 30] Read-only file system -- which is exactly why the Assets
+#    download (and settings saves) were failing at launch.
+# 2. Even un-translocated, writing user data inside the bundle breaks its code
+#    signature and gets wiped every time the .app is replaced on self-update.
+# ~/Library/Application Support/<app> is the macOS-standard home for this:
+# writable, persistent across updates, and immune to translocation.
+if IS_FROZEN and sys.platform == "darwin":
+    APP_DIR = os.path.join(
+        os.path.expanduser("~/Library/Application Support"),
+        "Creams Macro - Anime Expeditions",
+    )
+    try:
+        os.makedirs(APP_DIR, exist_ok=True)
+    except OSError:
+        pass
 
 UI_DIR = os.path.join(BUNDLE_DIR, "ui")
 
