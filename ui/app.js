@@ -12,6 +12,19 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// HTML Sanitization
+// ---------------------------------------------------------------------------
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ---------------------------------------------------------------------------
 // Logs
 // ---------------------------------------------------------------------------
 // Lines that start with a "[Tag]" (e.g. "[Selector] ...", "[Theme] ...") are
@@ -1060,7 +1073,7 @@ async function refreshDebugMacroOpSelect() {
   try { names = await pywebview.api.list_templates(); } catch (e) { names = []; }
   const prev = sel.value;
   sel.innerHTML = names.length
-    ? names.map(n => `<option value="${n}">${n}</option>`).join('')
+    ? names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')
     : '<option value="">No Macro Operations saved yet</option>';
   if (names.includes(prev)) sel.value = prev;
 }
@@ -1077,7 +1090,7 @@ async function refreshRobloxWindowList() {
   try { windows = await pywebview.api.list_roblox_windows(); } catch (e) { windows = []; }
   const prev = sel.value;
   sel.innerHTML = windows.length
-    ? windows.map(w => `<option value="${w.hwnd}">${w.title || 'Roblox'} (pid ${w.pid})</option>`).join('')
+    ? windows.map(w => `<option value="${escapeHtml(w.hwnd)}">${escapeHtml(w.title || 'Roblox')} (pid ${escapeHtml(w.pid)})</option>`).join('')
     : '<option value="">No other Roblox windows found</option>';
   if (windows.some(w => String(w.hwnd) === prev)) sel.value = prev;
 }
@@ -1208,7 +1221,7 @@ async function loadRewardTestMaps() {
   try {
     const maps = await pywebview.api.list_stage_data_maps();
     const prev = sel.value;
-    sel.innerHTML = '<option value="">Map (optional)</option>' + maps.map(m => `<option value="${m}">${m}</option>`).join('');
+    sel.innerHTML = '<option value="">Map (optional)</option>' + maps.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
     sel.value = prev;
   } catch (e) {}
 }
@@ -1479,13 +1492,13 @@ async function runHealthCheck(btn) {
     if (out) {
       out.innerHTML = (result.checks || []).map(c => {
         const mark = c.ok ? '<span style="color: var(--teal);">&#10003;</span>' : '<span style="color: var(--rose);">&#10007;</span>';
-        const detail = c.detail ? ` <span style="color: var(--text-muted);">-- ${c.detail}</span>` : '';
+        const detail = c.detail ? ` <span style="color: var(--text-muted);">-- ${escapeHtml(c.detail)}</span>` : '';
         // A check can carry a fix-it action the backend named -- render it
         // as a real button so the fix is one click, not a URL to retype.
         const action = c.action === 'open_releases'
           ? ` <button type="button" class="block-mod-btn" style="margin-left: 6px;" onclick="pywebview.api.open_releases_page()">Open latest release</button>`
           : '';
-        return `<div>${mark} <span style="color: var(--text-dim);">${c.name}</span>${detail}${action}</div>`;
+        return `<div>${mark} <span style="color: var(--text-dim);">${escapeHtml(c.name)}</span>${detail}${action}</div>`;
       }).join('');
       out.style.display = '';
     }
@@ -2029,7 +2042,7 @@ function setTaskProp(id, key, value) {
 }
 
 function taskOpts(list, current, fmt) {
-  return list.map(o => `<option value="${o}" ${String(o) === String(current) ? 'selected' : ''}>${fmt ? fmt(o) : o}</option>`).join('');
+  return list.map(o => `<option value="${escapeHtml(o)}" ${String(o) === String(current) ? 'selected' : ''}>${escapeHtml(fmt ? fmt(o) : o)}</option>`).join('');
 }
 
 // One accent per mode so the queue scans by color before you even read it.
@@ -2071,8 +2084,8 @@ function renderQueueRow(t, idx) {
       <span class="tq-index">${idx + 1}</span>
       <span class="tq-accent"></span>
       <div class="tq-text">
-        <div class="tq-title">${title}</div>
-        <div class="tq-meta">${meta}</div>
+        <div class="tq-title">${escapeHtml(title)}</div>
+        <div class="tq-meta">${escapeHtml(meta)}</div>
       </div>
       <button class="task-icon-btn clone" onclick="event.stopPropagation(); cloneTaskCard('${t.id}')" data-tooltip="Clone">&#10697;</button>
       <button class="task-icon-btn delete" onclick="event.stopPropagation(); removeTaskCard('${t.id}')" data-tooltip="Remove">&#10005;</button>
@@ -2162,7 +2175,7 @@ function renderTaskBuilder() {
   const macroSel = `
     <select class="task-select" onchange="setTaskProp('${t.id}', 'macro', this.value)">
       <option value="">No Macro</option>
-      ${taskTemplates.map(n => `<option value="${n}" ${n === t.macro ? 'selected' : ''}>&#9654; ${n}</option>`).join('')}
+      ${taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === t.macro ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('')}
     </select>`;
   fields.push(field('Macro Operation', macroSel));
 
@@ -2188,7 +2201,7 @@ function renderTaskBuilder() {
       const act4MacroSel = `
         <select class="task-select" onchange="setTaskProp('${t.id}', 'act4_macro', this.value)">
           <option value="">No Macro</option>
-          ${taskTemplates.map(n => `<option value="${n}" ${n === t.act4_macro ? 'selected' : ''}>&#9654; ${n}</option>`).join('')}
+          ${taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === t.act4_macro ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('')}
         </select>`;
       fields.push(field('Act 4 Macro Operation', act4MacroSel));
     }
@@ -2399,13 +2412,13 @@ function renderChallengeScreen() {
   if (!mapList) return;
   if (!s) { mapList.innerHTML = '<div class="rh-empty">Couldn\'t load Challenge settings.</div>'; return; }
   const macroOpts = (current) => `<option value="">No Macro</option>` +
-    taskTemplates.map(n => `<option value="${n}" ${n === current ? 'selected' : ''}>&#9654; ${n}</option>`).join('');
+    taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === current ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('');
   mapList.innerHTML = CHALLENGE_STORY_MAPS.map(map => {
     const info = s.maps[map] || { macro: '' };
     return `
       <div class="task-card" style="--tqc: var(--lilac); cursor: default;">
         <div class="tq-text" style="min-width: 0;">
-          <div class="tq-title">${map}</div>
+          <div class="tq-title">${escapeHtml(map)}</div>
           <div class="challenge-map-row">
             <select class="task-select" style="width: 100%;" onchange="setChallengeMapMacro('${escJs(map)}', this.value)">
               ${macroOpts(info.macro)}
@@ -2667,7 +2680,7 @@ async function refreshSavedPaths() {
   // Walk" in sync -- one saved-paths list feeds the Custom Path block
   // picker, the debug tester, and the per-map default picker.
   const options = savedPaths.length
-    ? savedPaths.map(n => `<option value="${n}">${n}</option>`).join('')
+    ? savedPaths.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')
     : '<option value="">No saved paths</option>';
   const sel = document.getElementById('debug-path-select');
   if (sel) { const prev = sel.value; sel.innerHTML = options; sel.value = prev; }
@@ -2690,7 +2703,7 @@ async function loadDefaultWalkPaths() {
     ? '<div class="text-xs" style="color: var(--text-muted); padding: 2px 0;">No defaults set yet.</div>'
     : entries.map(([map, path]) => `
         <div class="flex items-center gap-2 justify-between text-xs" style="padding: 4px 2px; color: var(--text-dim);">
-          <span><b>${map}</b> &rarr; ${path}</span>
+          <span><b>${escapeHtml(map)}</b> &rarr; ${escapeHtml(path)}</span>
           <span class="block-delete" onclick="removeDefaultWalkPath('${map.replace(/'/g, "\\'")}')" data-tooltip="Remove">&times;</span>
         </div>`).join('');
 }
@@ -2942,7 +2955,7 @@ function renderPalette() {
 
 function renderParamInput(b, p) {
   if (p.type === 'select') {
-    const opts = p.options.map(o => `<option value="${o}" ${String(o) === String(b.params[p.key]) ? 'selected' : ''}>${o === 'None' ? 'None' : 'Priority ' + o}</option>`).join('');
+    const opts = p.options.map(o => `<option value="${escapeHtml(o)}" ${String(o) === String(b.params[p.key]) ? 'selected' : ''}>${o === 'None' ? 'None' : 'Priority ' + escapeHtml(o)}</option>`).join('');
     return `<select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', '${p.key}', this.value)">${opts}</select>`;
   }
   // Text fields (unit/target/setting names) are cramped at the default
@@ -2950,7 +2963,7 @@ function renderParamInput(b, p) {
   // hold a few digits.
   const width = p.type === 'text' ? 'width:130px;' : '';
   return `
-    <input class="block-input" style="${width}" type="${p.type}" value="${b.params[p.key]}" placeholder="${p.placeholder}"
+    <input class="block-input" style="${width}" type="${p.type}" value="${escapeHtml(b.params[p.key])}" placeholder="${escapeHtml(p.placeholder)}"
            oninput="updateBlockParam('${b.id}', '${p.key}', this.value)">`;
 }
 
@@ -3047,7 +3060,7 @@ function renderPlaceUnitControls(b) {
   const field = (label, inner) => `
     <label class="blk-field"><span class="blk-field-label">${label}</span>${inner}</label>`;
   const idx = `<span class="pu-idx">#${placeUnitOrdinal(b.id)}</span>`;
-  const name = field('Name', `<input class="block-input" style="width:120px;" type="text" value="${b.params.name}" placeholder="unit" oninput="updateBlockParam('${b.id}', 'name', this.value)">`);
+  const name = field('Name', `<input class="block-input" style="width:120px;" type="text" value="${escapeHtml(b.params.name)}" placeholder="unit" oninput="updateBlockParam('${b.id}', 'name', this.value)">`);
   const x = field('X', `<input class="block-input" type="number" value="${b.params.x}" oninput="updateBlockParam('${b.id}', 'x', this.value)">`);
   const y = field('Y', `<input class="block-input" type="number" value="${b.params.y}" oninput="updateBlockParam('${b.id}', 'y', this.value)">`);
   const hotkey = field('Hotkey', `<button type="button" class="keybind-btn" onclick="startBlockHotkeyCapture('${b.id}', 'hotkey', this)">${b.hotkey ? b.hotkey.toUpperCase() : 'Set key'}</button>`);
@@ -3089,7 +3102,7 @@ function renderSendKeyControls(b) {
 // into this block's picker instead of the Walk Path row's.
 function renderWalkControls(b) {
   const isRecording = recordingBlockId === b.id;
-  const options = savedPaths.map(n => `<option value="${n}" ${n === b.params.path ? 'selected' : ''}>${n}</option>`).join('');
+  const options = savedPaths.map(n => `<option value="${escapeHtml(n)}" ${n === b.params.path ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
   return `
     <button type="button" class="block-mod-btn ${isRecording ? 'on' : ''}" onclick="toggleRecordPath('${b.id}')">${isRecording ? 'Stop' : 'Record'}</button>
     <select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'path', this.value)">
@@ -3125,7 +3138,7 @@ function renderWalkPathControls(b) {
     </div>`;
   let customControls = '';
   if (b.mode === 'custom') {
-    const options = savedPaths.map(n => `<option value="${n}" ${n === b.pathName ? 'selected' : ''}>${n}</option>`).join('');
+    const options = savedPaths.map(n => `<option value="${escapeHtml(n)}" ${n === b.pathName ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
     customControls = `
       <button type="button" class="block-mod-btn ${isRecording ? 'on' : ''}" onclick="toggleRecordPath('${b.id}')">${isRecording ? 'Stop' : 'Record'}</button>
       <select class="block-input" style="width:auto;" onchange="setWalkPathPath('${b.id}', this.value)"><option value="">Pick saved path...</option>${options}</select>`;
@@ -3165,7 +3178,7 @@ function listPlacedUnits() {
 
 function renderUnitIndexSelect(b, key) {
   const options = listPlacedUnits().map(u => `
-    <option value="${u.n}" ${String(b.params[key]) === String(u.n) ? 'selected' : ''}>#${u.n}${u.name ? ' ' + u.name : ''}</option>`).join('');
+    <option value="${u.n}" ${String(b.params[key]) === String(u.n) ? 'selected' : ''}>#${u.n}${u.name ? ' ' + escapeHtml(u.name) : ''}</option>`).join('');
   return `
     <select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', '${key}', this.value)">
       <option value="">Unit...</option>${options}
@@ -4686,7 +4699,7 @@ async function refreshTemplateList() {
   if (!sel) return;
   try {
     const names = await pywebview.api.list_templates();
-    sel.innerHTML = '<option value="">Load...</option>' + names.map(n => `<option value="${n}">${n}</option>`).join('');
+    sel.innerHTML = '<option value="">Load...</option>' + names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
   } catch (e) {}
 }
 
