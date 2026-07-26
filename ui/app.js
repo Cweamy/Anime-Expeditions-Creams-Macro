@@ -499,6 +499,9 @@ async function refreshStatus() {
     const csAction = document.getElementById('compact-action');
     if (csAction) csAction.textContent = status.action ?? 'Idle';
     document.getElementById('stat-last-run').textContent = status.last_run ?? '-';
+    const runsPerHour = status.runs_per_hour ?? '-';
+    const rphElem = document.getElementById('stat-runs-per-hour');
+    if (rphElem) rphElem.textContent = runsPerHour;
     document.getElementById('stat-challenge').textContent = status.time_until_challenge ?? '-';
     document.getElementById('stat-mode').textContent = status.mode ?? '-';
     document.getElementById('stat-stage').textContent = status.stage ?? '-';

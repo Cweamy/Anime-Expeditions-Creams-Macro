@@ -557,6 +557,30 @@ class Api:
     def get_update_progress(self) -> dict:
         return self._update_progress
 
+    @staticmethod
+    def _calculate_runs_per_hour(history: list, current_time: float = None) -> str:
+        """Calculates completed runs per hour over a rolling 1-hour window (3600s)."""
+        # Return "-" if history is empty or not a list
+        if not history or not isinstance(history, list):
+            return "-"
+        now = current_time if current_time is not None else time.time()
+        # Filter valid runs within the 1-hour window (0 to 3600 seconds)
+        recent = [
+            h for h in history
+            if isinstance(h, dict)
+            and isinstance(h.get("at"), (int, float))
+            and 0 <= (now - h["at"]) <= 3600
+        ]
+        if not recent:
+            return "-"
+        oldest_at = min(h["at"] for h in recent)
+        time_span = max(now - oldest_at, 60.0)  # Minimum 1 min to prevent division by zero / spikes
+        rate = round((len(recent) * 3600.0) / time_span, 1)
+        if rate.is_integer():
+            return str(int(rate))
+        return str(rate)
+
+
     def get_status(self) -> dict:
         # current_task/map/action come from the live runner (see
         # _set_run_status); wins/losses/run_history come from
@@ -572,6 +596,7 @@ class Api:
             "docked": self.docker.docked,
             **self._run_status,
             "last_run": _format_ago(history[0]["at"]) if history else "-",
+            "runs_per_hour": self._calculate_runs_per_hour(history),
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / (wins + losses) * 100) if (wins + losses) else None,
