@@ -53,7 +53,7 @@
 - **Repeat farming with automatic recovery** — farm the same stage N times via Repeat Stage without re-doing the lobby/map/stage picks each run. A stuck battle or a missed click backs out to the lobby and retries automatically instead of derailing an unattended session.
 - **Pre Start block builder (Macro Manager)** — a drag-and-drop editor for what happens before a match starts: place starter units (with click-verify and auto-nudge if a spot is rejected), flip in-game settings via hotkey, and mark any block "Once" so it only fires on a task's first entry into a stage, not every repeat.
 - **Walk path recorder** — record a WASD(+ability-key) movement path once per map and replay it automatically as part of Pre Start.
-- **Victory/Defeat + reward OCR** — reads match stats (clear time, Yen, kills, damage) and reward items off the result screen automatically, cross-checked against scraped wiki stage data so garbled OCR reads get filtered out.
+- **Victory/Defeat detection + Discord match reports** — the result screen is detected automatically, recorded to your win/loss counts and run history, and (with a webhook configured) posted to Discord as a screenshot of the result screen plus a rendered win/loss card. Reading the match stats (clear time, Yen, kills, damage) and reward items off the screen is available on demand under Settings > Debug.
 - **Discord webhook reporting** — optional win/loss embeds posted to a Discord channel as the macro runs.
 - **Win/loss history & stats** — session and all-time win/loss counts, win rate, and a recent-run history, all in the Dashboard.
 - **Global hotkeys** — start/stop/pause without touching the mouse, with the bound key shown right on the Dashboard's controls.
@@ -164,7 +164,7 @@ build_bootstrap.py # builds bootstrap.py into its own small exe
 
 ## Contributing
 
-Issues and PRs are welcome. Every push/PR runs a CI sanity check (Python + JS syntax); there's no automated test suite yet, so please describe how you tested a change manually in your PR.
+Issues and PRs are welcome. Every push/PR runs CI on Windows: the `tests/` unit suite under pytest, a compile check over every Python file, and a syntax check of `ui/app.js`. Run the suite locally with `pip install -r requirements-dev.txt` then `python -m pytest tests/`. It only covers the pure-logic modules (settings, pacing, webhook, and friends), so please also describe how you tested a change manually in your PR.
 
 To cut a release: bump `VERSION`, commit, then tag with an **annotated** tag whose message is a short, human-readable changelog: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. That message becomes both the GitHub Release body and what gets posted to Discord (see below) — a lightweight tag (no `-a`/`-m`) falls back to just the tagged commit's own message, which is usually not what you want announced. Pushing the tag triggers the release workflow, which builds the app exe with PyInstaller (see `build_pyinstaller.py`), packages it together with the user-editable `Assets/` folder into `Creams-Macro-Anime-Expeditions-Windows.zip` (a macOS job builds the `-macOS` twin) — the per-platform zips are the only uploaded assets, which new installs, the auto-updater, and any bootstrapper copies all read from — and publishes a GitHub Release.
 
