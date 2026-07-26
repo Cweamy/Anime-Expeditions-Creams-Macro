@@ -489,8 +489,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         if self._checkpoint(stop_event):
             return
         if not self._skip_first_task_setup:
-            self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges,
-                                   default_walk_paths, webhook)
+            self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
         if self._checkpoint(stop_event):
             return
 
@@ -715,8 +714,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 if challenge_wants_in:
                     self._log(f'[Macro] Challenge stage ready -- pausing "{map_name}" to run it '
                                f'before continuing.')
-                    self._run_challenges(hwnd, stop_event, coords, scroll_power, scroll_nudges,
-                                          default_walk_paths, webhook)
+                    self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
                     if self._checkpoint(stop_event):
                         return False
                     self._log(f'[Macro] Challenge pass finished -- resuming "{map_name}".')

@@ -63,8 +63,8 @@ class ChallengeOps:
                 return True
         return False
 
-    def _run_challenges(self, hwnd, stop_event: threading.Event, coords: dict, scroll_power: int,
-                          scroll_nudges: int, default_walk_paths: dict, webhook: dict) -> None:
+    def _run_challenges(self, hwnd, stop_event: threading.Event, coords: dict,
+                          default_walk_paths: dict, webhook: dict) -> None:
         """Runs every ready (enabled, under today's cap, off its own
         cooldown) Regular Challenge stage slot once each, in #1/#2/#3
         order, then returns -- called once before the Task Queue ever
@@ -114,7 +114,7 @@ class ChallengeOps:
 
             play_mode = challenge.get("play_mode") or "solo"
             result = self._run_one_challenge_stage(hwnd, stop_event, slot, play_mode, challenge, coords,
-                                                     scroll_power, scroll_nudges, default_walk_paths, webhook)
+                                                     default_walk_paths, webhook)
             if self._checkpoint(stop_event):
                 return
             if result == "win":
@@ -154,8 +154,8 @@ class ChallengeOps:
         self._log("[Macro] Challenge pass finished -- moving on to the Task Queue.")
 
     def _run_one_challenge_stage(self, hwnd, stop_event: threading.Event, slot: str, play_mode: str,
-                                   challenge: dict, coords: dict, scroll_power: int, scroll_nudges: int,
-                                   default_walk_paths: dict, webhook: dict) -> str:
+                                   challenge: dict, coords: dict, default_walk_paths: dict,
+                                   webhook: dict) -> str:
         """Returns "win", "loss", or None -- None covers both a genuine
         technical failure (never got into the stage, map never recognized,
         etc.) AND the run being stopped mid-way, same as _play_one_match's
