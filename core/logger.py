@@ -1,40 +1,66 @@
+import logging
+from logging.handlers import RotatingFileHandler
 import os
 import time
 
 from . import constants
 
 LOG_FILE = os.path.join(constants.APP_DIR, "debug.log")
+MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB per log file
+BACKUP_COUNT = 3  # Keep up to 3 backup files (debug.log.1, debug.log.2, etc.)
 
 
 class Logger:
-    """Full timestamped history goes to debug.log; the UI's Logs panel shows
+    """Writes to debug.log. Adds timestamps to debug logs. GUI logs format
     the message alone since barely anyone reads the per-line clock there."""
 
     def __init__(self):
-        self._file = None
+        # Rotation handler for log file management
+        self._handler = None
 
-    def _get_file(self):
-        if self._file is None or getattr(self._file, "closed", True):
+    def _get_handler(self) -> RotatingFileHandler | None:
+        """Obtains or creates the RotatingFileHandler instance."""
+        if self._handler is None:
             try:
-                self._file = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+                log_dir = os.path.dirname(LOG_FILE)
+                if log_dir and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+
+                self._handler = RotatingFileHandler(
+                    LOG_FILE,
+                    maxBytes=MAX_LOG_SIZE,
+                    backupCount=BACKUP_COUNT,
+                    encoding="utf-8",
+                )
             except OSError:
-                self._file = None
-        return self._file
+                self._handler = None
+        return self._handler
 
     def log(self, message: str) -> None:
-        line = f"[{time.strftime('%H:%M:%S')}] {message}\n"
-        f = self._get_file()
-        if f is not None:
+        """Logs a timestamp-formatted message to the rotating log file."""
+        handler = self._get_handler()
+        if handler is not None:
             try:
-                f.write(line)
-                f.flush()
+                timestamp = time.strftime("%H:%M:%S")
+                line = f"[{timestamp}] {message}"
+                record = logging.LogRecord(
+                    name="logging",
+                    level=logging.INFO,
+                    pathname="",
+                    lineno=0,
+                    msg=line,
+                    args=(),
+                    exc_info=None,
+                )
+                handler.emit(record)
             except OSError:
-                self._file = None
+                self.close()
 
     def close(self) -> None:
-        if self._file is not None and not getattr(self._file, "closed", True):
+        """Closes the file handler and releases resources."""
+        if self._handler is not None:
             try:
-                self._file.close()
+                self._handler.close()
             except OSError:
                 pass
-            self._file = None
+            self._handler = None
