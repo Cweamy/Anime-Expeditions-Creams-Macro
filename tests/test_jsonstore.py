@@ -83,3 +83,32 @@ def test_interrupted_save_path_does_not_revert_to_the_shipped_default(tmp_path, 
         walk_paths.save_path("Kings Tomb", mine)
 
     assert walk_paths.load_path("Kings Tomb")["events"] == mine
+
+
+def test_write_json_atomic_concurrent(tmp_path):
+    # Test concurrent writing across multiple threads on the same file to verify thread-safety
+    import threading
+
+    target = tmp_path / "concurrent.json"
+    errors = []
+
+    def worker(worker_id):
+        try:
+            for i in range(20):
+                write_json_atomic(str(target), {"worker": worker_id, "iteration": i})
+        except Exception as err:
+            errors.append(err)
+
+    threads = [threading.Thread(target=worker, args=(w_id,)) for w_id in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, f"Errors during concurrent write: {errors}"
+    assert target.exists()
+    content = json.loads(target.read_text(encoding="utf-8"))
+    assert "worker" in content and "iteration" in content
+    assert not list(tmp_path.glob("*.tmp")), "Temporary file remaining after concurrent writes"
+
+

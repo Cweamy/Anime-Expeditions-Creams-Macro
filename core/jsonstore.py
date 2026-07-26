@@ -17,25 +17,31 @@ the NEW complete file, never a half-written one.
 """
 import json
 import os
+import threading
+
+# Global lock to ensure thread-safe atomic write operations on JSON files
+_lock = threading.Lock()
 
 
 def write_json_atomic(path: str, data) -> None:
-    """Serialize `data` to `path` as JSON, atomically. Raises whatever the
+    """Atomic write: writes `data` to `path.tmp` first, then renames onto `path`.
+
+    Prevents partial reads if the macro process dies mid-write. Re-raises if
     write would have raised (a caller that can't write at all should still
     hear about it) but never leaves a partial file behind."""
     tmp = f"{path}.tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        # BaseException, not Exception: a KeyboardInterrupt mid-write is one
-        # of the very cases this exists to survive, and it must not leave the
-        # scratch file lying next to the real one.
+    with _lock:
         try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            # BaseException, not Exception: a KeyboardInterrupt mid-write is one
+            # of the cases this must handle, leaving no temporary file behind.
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
