@@ -43,3 +43,31 @@ def test_find_image_any_raises_when_every_template_is_missing(monkeypatch):
 
     with pytest.raises(vision.TemplateNotFound, match="missing"):
         vision.find_image_any(123, ("first", "second"))
+
+
+def test_template_cache_lru_eviction():
+    """Verify that _template_cache respects max capacity and evicts least recently used items."""
+    vision.clear_template_cache()
+    try:
+        max_size = vision.MAX_TEMPLATE_CACHE_SIZE
+        for i in range(max_size):
+            vision._template_cache[f"key_{i}"] = i
+
+        assert len(vision._template_cache) == max_size
+        assert "key_0" in vision._template_cache
+
+        # Access key_0 so it becomes recently used
+        _ = vision._template_cache["key_0"]
+
+        # Insert a new item beyond capacity
+        vision._template_cache["key_overflow"] = 999
+
+        assert len(vision._template_cache) == max_size
+        # key_1 was least recently used, so it must be evicted
+        assert "key_1" not in vision._template_cache
+        # key_0 was recently accessed, so it must be kept
+        assert "key_0" in vision._template_cache
+        assert "key_overflow" in vision._template_cache
+    finally:
+        vision.clear_template_cache()
+
