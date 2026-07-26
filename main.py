@@ -1093,18 +1093,29 @@ class Api:
         return tpl.list_templates()
 
     def save_template(self, name: str, blocks: list) -> dict:
-        saved_name = tpl.save_template(name, blocks)
-        self.push_log(f"Saved template '{saved_name}'.")
-        return {"ok": True, "name": saved_name}
+        try:
+            saved_name = tpl.save_template(name, blocks)
+            self.push_log(f"Saved template '{saved_name}'.")
+            return {"ok": True, "name": saved_name}
+        except ValueError as exc:
+            self.push_log(f"Failed to save template: {exc}")
+            return {"ok": False, "reason": str(exc)}
 
     def load_template(self, name: str) -> dict:
-        return tpl.load_template(name)
+        try:
+            return tpl.load_template(name)
+        except ValueError:
+            return {"name": tpl._safe_name(name), "blocks": []}
 
     def delete_template(self, name: str) -> dict:
-        ok = tpl.delete_template(name)
-        if ok:
-            self.push_log(f"Deleted template '{name}'.")
-        return {"ok": ok}
+        try:
+            ok = tpl.delete_template(name)
+            if ok:
+                self.push_log(f"Deleted template '{name}'.")
+            return {"ok": ok}
+        except ValueError as exc:
+            self.push_log(f"Failed to delete template: {exc}")
+            return {"ok": False, "reason": str(exc)}
 
     def get_webhook_settings(self) -> dict:
         data = cfg.load()
