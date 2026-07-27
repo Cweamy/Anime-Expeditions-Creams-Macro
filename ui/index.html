@@ -3,10 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <title>Cream's Macro | Anime Expeditions</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<!-- Tailwind is VENDORED locally (ui/tailwind.js), not loaded from
+     cdn.tailwindcss.com. The whole layout is Tailwind utility classes, and a
+     synchronous <script> to an unreachable CDN (offline, school/work firewall,
+     DNS, CDN hiccup) blocks parsing and leaves the UI as unstyled stacked text.
+     A local file always resolves, so the app renders identically with no
+     internet. Same reason the Google Fonts <link> was dropped -- the CSS below
+     falls back to system-ui when Inter/Sora aren't present. -->
+<script src="tailwind.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body class="h-full w-full flex flex-col">
