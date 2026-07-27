@@ -14,6 +14,7 @@ from . import keys
 from . import paths as walk_paths
 from . import vision
 from . import window as wm
+from .config import FIXED_WIN_H, FIXED_WIN_W  # the 1152x756 reference client area
 from .runner_constants import *  # noqa: F401,F403 -- the shared constants namespace
 
 
@@ -80,6 +81,13 @@ class BlockOps:
             if block.get("type") == "place_unit":
                 self._last_unit_ordinal += 1
             if block.get("once") and not first_repeat:
+                # Breaks a quick-place chain: the previous placement held Shift
+                # because THIS block was the next same-hotkey place_unit, but
+                # it never runs, so nothing downstream would release it. Left
+                # held, the next Place Unit block skips its own hotkey and
+                # places the previous unit instead. Releasing here costs that
+                # one chain its speed-up and nothing else.
+                self._release_quick_place_shift()
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} -- '
                            f'marked "Once" and this isn\'t the first repeat.')
                 self._battle_block_index += 1
@@ -538,6 +546,14 @@ class BlockOps:
                     # starter placement that shouldn't be re-placed (and would
                     # just get rejected as a duplicate/waste a click) on every
                     # repeat of the same stage.
+                    #
+                    # Skipping it also breaks any quick-place chain it was part
+                    # of. The finally: below guarantees Shift never escapes this
+                    # function, but that fires after the whole list -- far too
+                    # late for the next Place Unit block, which would otherwise
+                    # run with Shift still down and place the PREVIOUS unit on
+                    # its tile. Release it here, where the chain actually breaks.
+                    self._release_quick_place_shift()
                     self._log(f'[Macro] Skipping block #{i} -- marked "Once" and this isn\'t the first repeat.')
                     continue
                 btype = block.get("type")
@@ -629,25 +645,45 @@ class BlockOps:
 
     def _scan_place_search_box(self, left: int, top: int, orig_x: int, orig_y: int):
         """One capture of the PLACE_SEARCH_BOX_SIZE x PLACE_SEARCH_BOX_SIZE
-        region centered on (orig_x, orig_y) -- window-client coords --
-        scanned in memory for a pixel at/near 0xffffff (white, within
-        PLACE_VALID_PIXEL_TOLERANCE per channel). Returns the (dx, dy)
-        offset of whichever valid pixel is CLOSEST to the center, or None
-        if nothing valid was found anywhere in the box."""
+        region around (orig_x, orig_y) -- window-client coords -- scanned in
+        memory for a pixel at/near 0xffffff (white, within
+        PLACE_VALID_PIXEL_TOLERANCE per channel). Returns the (dx, dy) offset
+        of whichever valid pixel is CLOSEST to (orig_x, orig_y), or None if
+        nothing valid was found anywhere in the box.
+
+        The box is CLAMPED to the game window. Centering it blindly meant a
+        spot within half a box of an edge captured pixels from outside the
+        game entirely -- on Windows the docked game sits inside this app's
+        own frame, so the neighbouring pixels are the macro's control panel,
+        which is near-white in the Light theme and reads as a perfectly good
+        placement tile. The spiral escalation already refuses to stop within
+        PLACE_SPIRAL_MARGIN of an edge for the same reason; this is the
+        initial scan finally agreeing with it.
+
+        Clamping shifts the box, so the "closest" test and the returned
+        offset are both measured from where the caller actually asked about,
+        not from the middle of the captured region."""
         import numpy as np
         from core.ocr import capture_region
-        half = PLACE_SEARCH_BOX_SIZE // 2
-        patch = capture_region(left + orig_x - half, top + orig_y - half,
-                                 PLACE_SEARCH_BOX_SIZE, PLACE_SEARCH_BOX_SIZE)
+        size = PLACE_SEARCH_BOX_SIZE
+        half = size // 2
+        # Top-left of the box, pulled back inside the window if centering it
+        # would hang over an edge. max(0, ...) second so a window somehow
+        # narrower than the box degrades to "start at 0" rather than negative.
+        box_x = max(0, min(orig_x - half, FIXED_WIN_W - size))
+        box_y = max(0, min(orig_y - half, FIXED_WIN_H - size))
+        patch = capture_region(left + box_x, top + box_y, size, size)
         b, g, r = patch[:, :, 0].astype(int), patch[:, :, 1].astype(int), patch[:, :, 2].astype(int)
         floor = 255 - PLACE_VALID_PIXEL_TOLERANCE
         valid_mask = (r >= floor) & (g >= floor) & (b >= floor)
         ys, xs = np.where(valid_mask)
         if len(xs) == 0:
             return None
-        dists = (xs - half) ** 2 + (ys - half) ** 2
+        # Where the requested spot sits inside the (possibly shifted) box.
+        cx, cy = orig_x - box_x, orig_y - box_y
+        dists = (xs - cx) ** 2 + (ys - cy) ** 2
         best = int(np.argmin(dists))
-        return int(xs[best]) - half, int(ys[best]) - half
+        return int(xs[best]) - cx, int(ys[best]) - cy
 
     def _find_valid_place_spot(self, hwnd, stop_event: threading.Event, left: int, top: int,
                                  orig_x: int, orig_y: int, name: str):
@@ -711,8 +747,8 @@ class BlockOps:
                 angle = i * math.pi / 4
                 px = int(orig_x + radius * math.cos(angle))
                 py = int(orig_y + radius * math.sin(angle))
-                if not (PLACE_SPIRAL_MARGIN <= px <= 1152 - PLACE_SPIRAL_MARGIN
-                        and PLACE_SPIRAL_MARGIN <= py <= 756 - PLACE_SPIRAL_MARGIN):
+                if not (PLACE_SPIRAL_MARGIN <= px <= FIXED_WIN_W - PLACE_SPIRAL_MARGIN
+                        and PLACE_SPIRAL_MARGIN <= py <= FIXED_WIN_H - PLACE_SPIRAL_MARGIN):
                     continue
                 self._mouse.move_to(left + px, top + py)
                 self._mouse.nudge()  # the highlight needs real relative motion to render
@@ -739,6 +775,14 @@ class BlockOps:
 
         if not (orig_x or orig_y):
             self._log(f'[Macro] Place Unit "{name}" has no position set -- skipping.')
+            # Every other early return below honours this guard; this one used
+            # to return before reaching any of them. If this block was a
+            # quick-place chain member, Shift stayed held with nothing left to
+            # release it, and the NEXT Place Unit block -- a different unit --
+            # took the "Shift is down, same unit is still selected" path,
+            # skipped its own hotkey, and put THIS unit on that unit's tile.
+            if not next_is_same_unit:
+                self._release_quick_place_shift()
             return
         orig_x, orig_y = int(orig_x), int(orig_y)
 

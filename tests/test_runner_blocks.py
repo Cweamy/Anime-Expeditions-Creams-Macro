@@ -2,6 +2,7 @@
 from unittest.mock import MagicMock, patch
 import pytest
 
+from core import keys
 from core.runner_blocks import BlockOps
 
 
@@ -103,3 +104,139 @@ def test_walk_block_no_path_is_skipped(monkeypatch):
 
     assert called["replay"] is False
     assert any("no path selected" in m for m in runner.logs)
+
+# ---------------------------------------------------------------------------
+# Placement: the scan box must stay inside the game window
+# ---------------------------------------------------------------------------
+# Centering a PLACE_SEARCH_BOX_SIZE box on a saved spot within half a box of an
+# edge used to capture pixels from outside the game entirely. On Windows the
+# docked game sits inside this app's own frame, so those pixels are the macro's
+# control panel -- near-white in the Light theme, and therefore accepted as a
+# valid placement tile.
+
+class _ScanRunner(BlockOps):
+    def __init__(self):
+        self.logs = []
+
+    def _log(self, msg):
+        self.logs.append(msg)
+
+
+def _record_capture(white_at=None):
+    """capture_region stand-in: records the region asked for, and optionally
+    paints one white pixel at a given WINDOW coordinate."""
+    import numpy as np
+    seen = {}
+
+    def capture_region(x, y, w, h):
+        seen.clear()
+        seen.update(x=x, y=y, w=w, h=h)
+        patch = np.zeros((h, w, 3), np.uint8)
+        if white_at is not None:
+            px, py = white_at[0] - x, white_at[1] - y
+            if 0 <= px < w and 0 <= py < h:
+                patch[py, px] = (255, 255, 255)
+        return patch
+
+    return capture_region, seen
+
+
+@pytest.mark.parametrize("spot", [
+    (5, 400), (400, 3), (1149, 400), (400, 753), (2, 2), (1150, 754), (576, 378),
+])
+def test_scan_box_never_reads_outside_the_window(spot, monkeypatch):
+    from core.config import FIXED_WIN_H, FIXED_WIN_W
+    capture, seen = _record_capture()
+    monkeypatch.setattr("core.ocr.capture_region", capture)
+
+    _ScanRunner()._scan_place_search_box(0, 0, *spot)
+
+    assert seen["x"] >= 0 and seen["y"] >= 0, f"captured off the top/left: {seen}"
+    assert seen["x"] + seen["w"] <= FIXED_WIN_W, f"captured past the right edge: {seen}"
+    assert seen["y"] + seen["h"] <= FIXED_WIN_H, f"captured past the bottom edge: {seen}"
+
+
+def test_scan_box_does_not_accept_a_white_pixel_outside_the_window(monkeypatch):
+    # x=5 used to capture x=-14..24; a white pixel at x=-6 is the macro's own
+    # panel, and was returned as a placement tile at offset (-11, 0).
+    capture, _ = _record_capture(white_at=(-6, 400))
+    monkeypatch.setattr("core.ocr.capture_region", capture)
+    assert _ScanRunner()._scan_place_search_box(0, 0, 5, 400) is None
+
+
+@pytest.mark.parametrize("spot,white,expected", [
+    ((576, 378), (580, 378), (4, 0)),    # no clamping needed
+    ((576, 378), (576, 373), (0, -5)),
+    ((5, 400), (9, 400), (4, 0)),        # box shifted right by the clamp
+    ((4, 6), (7, 9), (3, 3)),            # shifted on both axes
+])
+def test_scan_box_offset_is_measured_from_the_requested_spot(spot, white, expected, monkeypatch):
+    """Clamping moves the box, so the offset has to be relative to the spot the
+    caller asked about -- not the middle of whatever region got captured. Get
+    this wrong and every placement near an edge lands somewhere else."""
+    capture, _ = _record_capture(white_at=white)
+    monkeypatch.setattr("core.ocr.capture_region", capture)
+    assert _ScanRunner()._scan_place_search_box(0, 0, *spot) == expected
+
+
+# ---------------------------------------------------------------------------
+# Placement: a broken quick-place chain must not leave Shift held
+# ---------------------------------------------------------------------------
+# Consecutive Place Unit blocks with the same hotkey hold Left Shift so the unit
+# stays selected and later placements can skip re-pressing the hotkey. If the
+# next member never runs -- marked "Once" on a repeat, or missing its position --
+# nothing released Shift, and the FOLLOWING Place Unit block (a different unit)
+# took the "Shift is down, same unit still selected" path and placed the
+# previous unit on its tile.
+
+class _ShiftRunner(BlockOps):
+    def __init__(self):
+        self.logs = []
+        self.keyboard_events = []
+        self._quick_place_shift_down = True      # a chain is in progress
+        self._battle_block_index = 0
+        self._battle_block_state = {}
+        self._last_unit_ordinal = 0
+        self._keyboard = MagicMock()
+        self._keyboard.key_up = lambda vk: self.keyboard_events.append(("up", vk))
+
+    def _log(self, msg):
+        self.logs.append(msg)
+
+    def _set_status(self, **kw):
+        pass
+
+
+def test_once_skipped_battle_block_releases_the_quick_place_shift():
+    runner = _ShiftRunner()
+    blocks = [{"type": "place_unit", "once": True, "hotkey": "1",
+               "params": {"name": "Archer", "x": 100, "y": 100}}]
+
+    runner._run_battle_blocks_tick(1, MagicMock(is_set=lambda: False), blocks, first_repeat=False)
+
+    assert runner._quick_place_shift_down is False, "Shift left held after the chain broke"
+    assert ("up", keys.VK_SHIFT) in runner.keyboard_events
+
+
+def test_place_unit_with_no_position_releases_the_quick_place_shift():
+    runner = _ShiftRunner()
+    block = {"type": "place_unit", "hotkey": "1", "params": {"name": "Archer"}}   # no x/y
+
+    runner._run_place_unit_block(1, MagicMock(is_set=lambda: False), 0, 0, block,
+                                 index=1, macro_name="m", next_is_same_unit=False)
+
+    assert runner._quick_place_shift_down is False, "Shift left held after a no-position skip"
+    assert ("up", keys.VK_SHIFT) in runner.keyboard_events
+
+
+def test_place_unit_with_no_position_keeps_shift_when_the_chain_continues():
+    """The guard is conditional on purpose: if the NEXT block is the same unit,
+    the chain is still alive and Shift must stay down, exactly as the other
+    early returns in this function already do."""
+    runner = _ShiftRunner()
+    block = {"type": "place_unit", "hotkey": "1", "params": {"name": "Archer"}}
+
+    runner._run_place_unit_block(1, MagicMock(is_set=lambda: False), 0, 0, block,
+                                 index=1, macro_name="m", next_is_same_unit=True)
+
+    assert runner._quick_place_shift_down is True
