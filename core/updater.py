@@ -829,11 +829,19 @@ set LOG="{log_path}"
 echo ---- %date% %time% ---- > %LOG%
 echo Updating Cream's Macro -- please wait, this window closes itself...
 echo [1/5] Stopping the running app (image: {exe_name})... >> %LOG%
-rem Force-kill as a safety net -- main.Api.apply_update already calls
-rem close_window() (which un-parents the docked Roblox window before
-rem closing, so it doesn't get taken down with this process) before
-rem launching this, so by the time this runs the app should already be
-rem gone. The wait loop below just covers a slow shutdown.
+rem taskkill is meant to be a SAFETY NET for a shutdown that hangs, not the
+rem way the app normally closes: main.Api.apply_update launches this helper
+rem and only then schedules close_window() at +0.4s, which un-parents the
+rem docked Roblox window, persists all-time stats, and closes the capture
+rem and log handles.
+rem
+rem Without the wait below, taskkill was measured firing at +0.28s -- ahead
+rem of that 0.4s timer, every time -- so on a frozen build close_window
+rem simply never ran and none of that cleanup happened. Waiting first costs
+rem two seconds of an update that already takes a minute; the loop after it
+rem is what actually detects the app being gone, and it exits as soon as it
+rem is, so a clean shutdown is not slowed down by more than this.
+ping -n 3 127.0.0.1 >nul
 taskkill /F /IM "{exe_name}" >>%LOG% 2>&1
 rem "ping" instead of "timeout" -- timeout needs a real console input
 rem handle, which this .bat (launched detached, see launch_helper) doesn't
@@ -923,11 +931,59 @@ del "%~f0"
 
 # ---------------------------------------------------------------------------
 
+def relaunch_env() -> dict:
+    """This process's environment with PyInstaller's private bootloader
+    handshake removed, so a child can start a onefile exe from scratch.
+
+    A onefile build runs twice: the bootloader extracts the bundle to
+    %TEMP%\\_MEI<random>, sets
+
+        _PYI_ARCHIVE_FILE        the exe the bundle came out of
+        _PYI_APPLICATION_HOME_DIR   the _MEI dir it was extracted to
+        _PYI_PARENT_PROCESS_LEVEL   how deep we are
+
+    and re-runs itself. Our Python code is that second process, so those
+    three are sitting in os.environ and every child we spawn inherits them.
+
+    That is what broke Update & Restart. The helper is a child of the app,
+    so `start "" "<exe>"` handed the fresh build an _PYI_ARCHIVE_FILE equal
+    to its OWN path -- because the update swaps the new exe onto the old
+    one's path. The bootloader reads that as "I am already extracted",
+    skips extraction, and loads the interpreter out of
+    _PYI_APPLICATION_HOME_DIR -- the previous process's _MEI dir, which
+    step [2/5] of the helper deletes. Measured, driving a real frozen build
+    through the real helper:
+
+        [PYI-28940:ERROR] Failed to load Python DLL
+            'C:\\Users\\...\\Temp\\_MEI302922\\python313.dll'.
+        LoadLibrary: The specified module could not be found.
+
+    The exe swap itself always worked; the app just never came back, with
+    that error going to a console nobody sees. It also explains why running
+    the same _update.bat by hand works -- Explorer starts it with a clean
+    environment.
+
+    The path match is the whole trigger, which is why this is specific to
+    updating and not to launching in general: bootstrap.exe starting the
+    app exe passes the same variables down and is fine, because
+    _PYI_ARCHIVE_FILE names bootstrap.exe rather than the exe being
+    started, and the bootloader extracts normally.
+
+    Matched by prefix rather than by listing the three names: PyInstaller
+    has renamed these before (5.x used a single _MEIPASS2, kept here for
+    anyone still building with it), they are private to the bootloader, and
+    a rename would bring this failure back silently.
+    """
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith("_PYI_") and k != "_MEIPASS2"}
+
+
 def launch_helper(helper_path: str) -> None:
     if sys.platform == "darwin":
         # start_new_session detaches from this process's group, so the helper
         # survives the app exiting right after this call.
-        subprocess.Popen(["/bin/bash", helper_path], start_new_session=True, close_fds=True)
+        subprocess.Popen(["/bin/bash", helper_path], start_new_session=True,
+                         close_fds=True, env=relaunch_env())
         return
     # CREATE_NO_WINDOW, *not* DETACHED_PROCESS.
     #
@@ -950,4 +1006,5 @@ def launch_helper(helper_path: str) -> None:
         ["cmd.exe", "/c", helper_path],
         creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
+        env=relaunch_env(),
     )
