@@ -69,6 +69,16 @@ class BlockOps:
         """
         while self._battle_block_index < len(battle_blocks):
             block = battle_blocks[self._battle_block_index]
+            # Counted BEFORE the "once" skip, exactly as _run_prestart_blocks
+            # already does it. ui/app.js's listPlacedUnits() numbers every
+            # place_unit block whether or not it runs, so skipping one here
+            # without counting it shifted every LATER unit's #ordinal down by
+            # one from the second repeat on -- and since
+            # _placed_unit_positions is keyed by that ordinal and never reset,
+            # the later placement overwrote the skipped unit's stored spot.
+            # Upgrade/Sell/Auto Upgrade Unit then clicked the wrong unit.
+            if block.get("type") == "place_unit":
+                self._last_unit_ordinal += 1
             if block.get("once") and not first_repeat:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} -- '
                            f'marked "Once" and this isn\'t the first repeat.')
@@ -94,7 +104,8 @@ class BlockOps:
                 # numbers place_unit blocks across both phases as one list),
                 # so Upgrade/Sell/Auto Upgrade Unit blocks targeting a
                 # unit placed here by #index still resolve correctly.
-                self._last_unit_ordinal += 1
+                # (The counting itself happens above, before the "once"
+                # skip -- a skipped block still owns its number.)
                 left, top, _, _ = wm.get_window_rect_screen(hwnd)
                 next_index = self._battle_block_index + 1
                 next_block = battle_blocks[next_index] if next_index < len(battle_blocks) else None
