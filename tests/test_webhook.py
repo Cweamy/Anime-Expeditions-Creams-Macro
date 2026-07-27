@@ -1,3 +1,4 @@
+import pytest
 from core.webhook import validate, validate_webhook_url, send, send_file, send_rich
 
 
@@ -80,3 +81,43 @@ def test_send_invalid_url_ssrf_prevention():
     assert send_file("http://127.0.0.1", {}, "nonexistent.png") == {"ok": False, "reason": invalid_reason}
     assert send_rich("https://evil.com/webhook") == {"ok": False, "reason": invalid_reason}
 
+
+
+# ---------------------------------------------------------------------------
+# API-versioned webhook URLs
+# ---------------------------------------------------------------------------
+# validate() anchored on parts[-4] == "api", which only holds for the
+# unversioned form. Discord also serves .../api/v10/webhooks/<id>/<token> --
+# what its own docs show -- and that has "api" one further back, so it came
+# back "bad_format". The comment on that very check already claimed a version
+# segment was handled.
+
+@pytest.mark.parametrize("url", [
+    "https://discord.com/api/v10/webhooks/123456789/tok",
+    "https://discord.com/api/v9/webhooks/123456789/tok/",
+    "https://discordapp.com/api/v10/webhooks/123456789/tok?wait=true",
+])
+def test_api_versioned_webhook_urls_are_accepted(url):
+    assert validate(url)["valid"] is True, validate(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://discord.com/api/webhooks/123456789/tok",
+    "https://discord.com/api/webhooks/123456789/tok/",
+    "https://discord.com/api/webhooks/123456789/tok?wait=true",
+])
+def test_unversioned_webhook_urls_still_accepted(url):
+    assert validate(url)["valid"] is True
+
+
+@pytest.mark.parametrize("url,reason", [
+    ("https://discord.com/foo/webhooks/123/tok", "bad_format"),    # not the API path
+    ("https://discord.com/api/vX/webhooks/123/tok", "bad_format"), # not a real version
+    ("https://discord.com/webhooks/123/tok", "bad_format"),        # no api segment
+    ("https://discord.com/api/v10/webhooks/abc/tok", "bad_format"),# id not numeric
+    ("https://evil.com/api/v10/webhooks/123/tok", "not_discord"),
+    ("http://discord.com/api/v10/webhooks/123/tok", "not_https"),
+])
+def test_loosening_the_check_did_not_let_junk_through(url, reason):
+    result = validate(url)
+    assert result["valid"] is False and result["reason"] == reason, result

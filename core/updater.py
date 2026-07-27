@@ -385,7 +385,15 @@ def _assets_rel_parts(filename: str):
     if asset_idx is None or len(parts) < asset_idx + 2:
         return None
     parts = parts[asset_idx + 1:]
-    if any(p in ("", ".", "..") for p in parts) or ":" in parts[0]:
+    if any(p in ("", ".", "..") for p in parts):
+        return None
+    # Containment checked on the RESOLVED destination rather than by pattern:
+    # the old `":" in parts[0]` only looked at the FIRST component, and
+    # os.path.join restarts at any later absolute one, so "a/b/D:/payload.exe"
+    # passed the check and resolved to "D:payload.exe" -- outside Assets/.
+    dest = os.path.realpath(os.path.join(constants.ASSETS_DIR, *parts))
+    root = os.path.realpath(constants.ASSETS_DIR)
+    if dest != root and not dest.startswith(root + os.sep):
         return None
     if parts[0] == "item_icons":
         return None

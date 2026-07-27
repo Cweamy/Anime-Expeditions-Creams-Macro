@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -73,11 +74,24 @@ def validate(url: str) -> dict:
     if not any(host == suffix or host.endswith("." + suffix) for suffix in DISCORD_HOST_SUFFIXES):
         return {"valid": False, "reason": "not_discord"}
 
-    # .../api/webhooks/<id>/<token>, checked from the end so a trailing slash,
-    # `?wait=true`-style query string, or an API version segment don't matter.
+    # .../api/webhooks/<id>/<token>, checked from the end so a trailing slash
+    # or a `?wait=true`-style query string don't matter.
+    #
+    # Anchored on "webhooks", not on "api" being exactly four from the end:
+    # Discord also serves the versioned form, .../api/v10/webhooks/<id>/<tok>,
+    # which is what its own docs show and what the developer portal copies for
+    # some flows. That has "api" at parts[-5], so the old check rejected it as
+    # bad_format -- despite the comment right here claiming a version segment
+    # was already handled.
     parts = [p for p in parsed.path.split("/") if p]
-    if len(parts) < 4 or parts[-4] != "api" or parts[-3] != "webhooks":
+    if len(parts) < 3 or parts[-3] != "webhooks":
         return {"valid": False, "reason": "bad_format"}
+    # Whatever precedes "webhooks" must still be the API path, optionally with
+    # one version segment -- so a lookalike like /foo/webhooks/1/t is refused.
+    before = parts[:-3]
+    if not before or before[-1] != "api":
+        if len(before) < 2 or before[-2] != "api" or not re.fullmatch(r"v\d+", before[-1]):
+            return {"valid": False, "reason": "bad_format"}
     webhook_id, token = parts[-2], parts[-1]
     if not webhook_id.isdigit() or not token:
         return {"valid": False, "reason": "bad_format"}
