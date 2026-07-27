@@ -1677,3 +1677,57 @@ body.compact-mode #compact-strip {
 .cs-pause.on { color: var(--amber); border-color: var(--amber); }
 .cs-expand { color: var(--brand); }
 
+/* ============ FAQ Modal Accordion Styles ============ */
+.faq-item {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+.faq-item:hover {
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--border));
+}
+.faq-question {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  gap: 8px;
+}
+.faq-icon {
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+.faq-item.open .faq-icon {
+  transform: rotate(180deg);
+  color: var(--brand);
+}
+.faq-answer {
+  display: none;
+  padding: 0 14px 12px 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  border-top: 1px dashed var(--border);
+  margin-top: 2px;
+  padding-top: 10px;
+}
+.faq-item.open .faq-answer {
+  display: block;
+}
+.faq-answer p {
+  margin-bottom: 6px;
+}
+.faq-answer p:last-child {
+  margin-bottom: 0;
+}
+

@@ -9,7 +9,68 @@
 // at the keydown so it never engages.
 window.addEventListener('keydown', (e) => {
   if (e.key === 'F11') e.preventDefault();
+  if (e.key === 'F1') {
+    e.preventDefault();
+    toggleFaqModal();
+  }
+  if (e.key === 'Escape') {
+    const faqModal = document.getElementById('faq-modal');
+    if (faqModal && faqModal.style.display !== 'none') {
+      closeFaqModal();
+    }
+  }
 });
+
+// ---------------------------------------------------------------------------
+// Help & FAQ Modal
+// ---------------------------------------------------------------------------
+function openFaqModal() {
+  const el = document.getElementById('faq-modal');
+  if (el) el.style.display = 'flex';
+}
+
+function closeFaqModal() {
+  const el = document.getElementById('faq-modal');
+  if (el) el.style.display = 'none';
+}
+
+function toggleFaqModal() {
+  const el = document.getElementById('faq-modal');
+  if (!el) return;
+  if (el.style.display === 'none' || !el.style.display) {
+    openFaqModal();
+  } else {
+    closeFaqModal();
+  }
+}
+
+function toggleFaqItem(btn) {
+  const item = btn.closest('.faq-item');
+  if (!item) return;
+  const isOpen = item.classList.contains('open');
+  document.querySelectorAll('.faq-item.open').forEach(el => {
+    if (el !== item) el.classList.remove('open');
+  });
+  if (isOpen) {
+    item.classList.remove('open');
+  } else {
+    item.classList.add('open');
+  }
+}
+
+function filterFaqItems() {
+  const query = (document.getElementById('faq-search-input')?.value || '').toLowerCase().trim();
+  const items = document.querySelectorAll('.faq-item');
+  items.forEach(item => {
+    const text = item.textContent.toLowerCase();
+    const keywords = (item.getAttribute('data-keywords') || '').toLowerCase();
+    if (!query || text.includes(query) || keywords.includes(query)) {
+      item.style.display = 'block';
+    } else {
+      item.style.display = 'none';
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // HTML Sanitization
@@ -2317,54 +2378,55 @@ function renderTaskBuilder() {
     return;
   }
   const d = TASK_DATA[t.mode];
-  const sel = (key, options, fmt) => `
-    <select class="task-select" onchange="setTaskProp('${t.id}', '${key}', this.value)">
+  const sel = (key, options, fmt, tooltip = '') => `
+    <select class="task-select" onchange="setTaskProp('${t.id}', '${key}', this.value)" ${tooltip ? `data-tooltip="${escapeHtml(tooltip)}"` : ''}>
       ${taskOpts(options, t[key], fmt)}
     </select>`;
-  const field = (label, control) => `<div class="task-field"><span>${label}</span>${control}</div>`;
+  const field = (label, control, tooltip = '') => `<div class="task-field" ${tooltip ? `data-tooltip="${escapeHtml(tooltip)}"` : ''}><span>${label}</span>${control}</div>`;
 
   const fields = [
-    field('Mode', sel('mode', Object.keys(TASK_DATA), k => TASK_DATA[k].label)),
+    field('Mode', sel('mode', Object.keys(TASK_DATA), k => TASK_DATA[k].label, 'Select game mode: Story, Raid, Expedition, or Event'), 'Choose game mode'),
     field('Repeat', `<div class="task-rep-group" style="width: 100%;">&times;<input type="number" min="1" value="${t.repeat}"
-      oninput="setTaskProp('${t.id}', 'repeat', Math.max(1, parseInt(this.value, 10) || 1))"></div>`),
+      oninput="setTaskProp('${t.id}', 'repeat', Math.max(1, parseInt(this.value, 10) || 1))"></div>`, 'Number of times to run this task'),
   ];
 
   if (t.mode === 'story' || t.mode === 'raid') {
-    fields.push(field('Map', sel('map', d.maps)));
-    fields.push(field('Stage', sel('stage', d.stages, s => /^\d+$/.test(s) ? 'Stage ' + s : s)));
+    fields.push(field('Map', sel('map', d.maps, null, 'Select map')));
+    const stageTooltip = t.mode === 'raid' ? 'Select Raid Act 1, Act 2, or Act 3' : 'Select Stage 1-5, Infinite, or Mastery';
+    fields.push(field('Stage', sel('stage', d.stages, s => /^\d+$/.test(s) ? 'Stage ' + s : s, stageTooltip), stageTooltip));
   } else if (t.mode === 'expedition') {
-    fields.push(field('Expedition', sel('map', d.maps)));
+    fields.push(field('Expedition', sel('map', d.maps, null, 'Select Expedition map')));
   } else if (t.mode === 'event') {
-    fields.push(field('Act', sel('stage', d.stages, s => 'Act ' + s)));
+    fields.push(field('Act', sel('stage', d.stages, s => 'Act ' + s, 'Select Event Act 1-4'), 'Select Event Act 1-4'));
   }
 
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
   if ((t.mode === 'story' && !specialStage) || t.mode === 'expedition') {
-    fields.push(field('Difficulty', sel('difficulty', d.difficulties)));
+    fields.push(field('Difficulty', sel('difficulty', d.difficulties, null, 'Select difficulty level')));
   } else if (d.fixedDifficulty || specialStage) {
-    fields.push(field('Difficulty', `<span class="task-chip" style="align-self: flex-start;">Hard &middot; locked</span>`));
+    fields.push(field('Difficulty', `<span class="task-chip" style="align-self: flex-start;">Hard &middot; locked</span>`, 'Difficulty locked to Hard for this mode'));
   }
 
   if (t.mode === 'expedition') {
     fields.push(field('Extract After', `<input type="number" class="block-input" min="0" value="${t.extract_after}"
-      oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`));
+      oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`, 'Number of extraction prompts to decline before extracting'));
   }
 
   const playSeg = `
-    <div class="seg-toggle">
+    <div class="seg-toggle" data-tooltip="Select Solo or Matchmaking / Party mode">
       <button type="button" class="seg-btn ${t.play_mode === 'solo' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'solo'); renderTaskBuilder()">Solo</button>
       <button type="button" class="seg-btn ${t.play_mode === 'matchmaking' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'matchmaking'); renderTaskBuilder()">Matchmaking</button>
     </div>`;
-  fields.push(field('Play Mode', playSeg));
+  fields.push(field('Play Mode', playSeg, 'Select Solo or Matchmaking / Party mode'));
 
   // Team Loadout rides with the chosen template (see the Macro Manager tab), so the
   // macro picker is the only loadout-related control left on a task.
   const macroSel = `
-    <select class="task-select" onchange="setTaskProp('${t.id}', 'macro', this.value)">
+    <select class="task-select" onchange="setTaskProp('${t.id}', 'macro', this.value)" data-tooltip="Select a pre-start placement macro template">
       <option value="">No Macro</option>
       ${taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === t.macro ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('')}
     </select>`;
-  fields.push(field('Macro Operation', macroSel));
+  fields.push(field('Macro Operation', macroSel, 'Select a pre-start placement macro template'));
 
   // Event farm tasks (Acts 1-3) can auto-divert to Villian Invasion Act 4
   // ("Crow - Dawn") when a Crow Relic drops. Not shown on an Act 4 task
