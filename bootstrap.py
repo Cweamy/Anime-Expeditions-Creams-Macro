@@ -25,7 +25,8 @@ import sys
 import ctypes
 import subprocess
 import zipfile
-import requests
+import urllib.request
+import json
 
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 GITHUB_REPO = "Cweamy/Anime-Expeditions-Creams-Macro"
@@ -66,14 +67,7 @@ def find_local_exe() -> str:
 
 
 def _is_inside(root: str, target: str) -> bool:
-    """Whether `target` really resolves to somewhere under `root`.
-
-    Replaces a pattern check that only inspected the FIRST path component
-    (`":" in parts[0]`). os.path.join restarts at any later absolute component,
-    so an entry like "a/b/D:/payload.exe" sailed past that check and landed at
-    "D:payload.exe" -- outside the install entirely. Asking where the path
-    actually ends up cannot be fooled by where the drive letter happens to sit.
-    """
+    """Whether `target` really resolves to somewhere under `root`."""
     root = os.path.realpath(root)
     target = os.path.realpath(target)
     return target == root or target.startswith(root + os.sep)
@@ -94,65 +88,55 @@ def _latest_tag() -> str | None:
     redirects to the tagged release, which tells us the latest version
     without touching the rate-limited api.github.com endpoint."""
     try:
-        resp = requests.head(RELEASES_PAGE, allow_redirects=False, timeout=10)
-        location = resp.headers.get("Location", "")
-        if "/releases/tag/" in location:
-            return location.rsplit("/releases/tag/", 1)[-1]
+        req = urllib.request.Request(RELEASES_PAGE, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            final_url = resp.geturl()
+            if "/releases/tag/" in final_url:
+                return final_url.rsplit("/releases/tag/", 1)[-1]
     except Exception:
         pass
     return None
 
 
 def _find_zip_asset_url() -> str | None:
-    """The packaged release zip's download URL (exe + Assets/, see module
-    docstring). Falls back to a constructed /releases/latest/download/ link
-    if the API call fails/rate-limits -- the asset name is fixed by
-    release.yml, so the constructed URL is just as good when the API isn't."""
+    """The packaged release zip's download URL (exe + Assets/)."""
     try:
-        resp = requests.get(API_URL, timeout=15)
-        if resp.status_code == 200:
-            for asset in resp.json().get("assets", []):
-                if asset.get("name", "").lower() == ZIP_ASSET_NAME.lower():
-                    return asset["browser_download_url"]
+        req = urllib.request.Request(API_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                for asset in data.get("assets", []):
+                    if asset.get("name", "").lower() == ZIP_ASSET_NAME.lower():
+                        return asset["browser_download_url"]
     except Exception:
         pass
     return f"https://github.com/{GITHUB_REPO}/releases/latest/download/{ZIP_ASSET_NAME}"
 
 
 def _download_and_extract(url: str) -> bool:
-    """Downloads the release zip and lays it out beside this bootstrapper:
-    the exe always overwritten (that's the update), Assets files add-only
-    (never clobbering an image the user has replaced/added -- see module
-    docstring). The zip is fetched to a temp name first so a half-finished
-    download can never masquerade as a good archive on the next run."""
+    """Downloads the release zip and lays it out beside this bootstrapper."""
     try:
-        with requests.get(url, stream=True, timeout=120) as r:
-            r.raise_for_status()
-            with open(LOCAL_ZIP, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=120) as r, open(LOCAL_ZIP, "wb") as f:
+            while True:
+                chunk = r.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
         with zipfile.ZipFile(LOCAL_ZIP) as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
-                # Normalize + sanity-check each entry path: zip filenames are
-                # untrusted input, so anything absolute or dotted-out of the
-                # install folder is skipped outright.
                 parts = info.filename.replace("\\", "/").split("/")
                 if not parts or any(p in ("", ".", "..") for p in parts):
                     continue
                 dest = os.path.join(APP_DIR, *parts)
-                # Containment is checked on the RESOLVED path, not by pattern
-                # matching -- see _is_inside.
                 if not _is_inside(APP_DIR, dest):
                     continue
                 is_asset = parts[0].lower() == "assets"
                 if is_asset and os.path.exists(dest):
                     continue  # user's own/edited reference image -- keep it
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with zf.open(info) as src, open(dest, "wb") as out:
-                    out.write(src.read())
         return os.path.isfile(find_local_exe())
     except Exception:
         return False
