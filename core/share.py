@@ -3,12 +3,33 @@ import json
 import urllib.request
 import zlib
 
-HEADER_PREFIX = "CREAM:v1:"
+HEADER_PREFIX_V1 = "CREAM:v1:"   # legacy: standard zlib, no preset dictionary
+HEADER_PREFIX_V2 = "CREAM:v2:"   # current: raw deflate + the shared _ZDICT below
+HEADER_PREFIX = HEADER_PREFIX_V2  # what new codes are emitted as
 MAX_URL_SIZE = 5 * 1024 * 1024  # 5 MB safety limit
 # Codes come from other people, so the decompressed size is capped: a tiny
 # zlib stream can otherwise expand to gigabytes (a "zip bomb") and OOM the app.
 # Real templates are a few KB; a big pack was ~30 KB, so 5 MB is generous.
 MAX_DECOMPRESSED_SIZE = 5 * 1024 * 1024
+
+# Shared compression dictionary (v2). A single template is far too short for
+# DEFLATE to *learn* the vocabulary every template repeats, so we prime it with
+# that vocabulary up front -- the compressor can back-reference these tokens
+# from byte one instead of spending output teaching itself. This roughly halves
+# a single-template code (e.g. ~350 -> ~210 chars) with zero schema change.
+#
+# FROZEN FOREVER: a v2 code is only decodable with the *exact* bytes used to
+# encode it. Never edit this string -- add a HEADER_PREFIX_V3 with its own dict
+# instead. Most-valuable tokens sit at the END (DEFLATE favours the dict tail).
+_ZDICT = (
+    b'"kind":"anime-expeditions-template-pack""anime-expeditions-template""version":1'
+    b'"templates":{}"team":"blocks":{"prestart":[],"battle":[]}"during":"after":"before":'
+    b'"mode":"auto""custom":"pathName":"path":"index":"target":"setting":"ms":"key":'
+    b'"hotkey":"name":"unit","x":,"y":,"once":false,"once":true'
+    b'{"type":"walk_path","params":{}}{"type":"place_unit","params":{"name":"","x":,"y":}}'
+    b'{"type":"upgrade_unit","params":{"index":}}{"type":"sell_unit","params":{"index":}}'
+    b'{"type":"auto_upgrade_unit"}{"type":"wait_ms","params":{"ms":}}{"type":"send_key"}'
+)
 
 
 def encode_template_code(data: dict) -> str:
@@ -21,9 +42,11 @@ def encode_template_code(data: dict) -> str:
         Encoded string starting with 'CREAM:v1:'.
     """
     json_bytes = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    compressed = zlib.compress(json_bytes, level=9)
+    # Raw DEFLATE (wbits=-15, no zlib header) + the shared preset dictionary.
+    co = zlib.compressobj(9, zlib.DEFLATED, -15, 9, zlib.Z_DEFAULT_STRATEGY, _ZDICT)
+    compressed = co.compress(json_bytes) + co.flush()
     b64 = base64.urlsafe_b64encode(compressed).decode("ascii").rstrip("=")
-    return f"{HEADER_PREFIX}{b64}"
+    return f"{HEADER_PREFIX_V2}{b64}"
 
 
 def decode_template_code(input_str: str) -> dict:
@@ -55,18 +78,23 @@ def decode_template_code(input_str: str) -> dict:
         except Exception as exc:
             return {"ok": False, "reason": f"Failed to download URL: {exc}"}
 
-    # Case 2: CREAM:v1: Compressed Code
-    if raw_str.startswith(HEADER_PREFIX):
-        b64_str = raw_str[len(HEADER_PREFIX) :].strip()
+    # Case 2: CREAM compressed code -- v2 (raw deflate + _ZDICT) or legacy v1
+    # (standard zlib, no dictionary). Both still import; only the container
+    # differs, so branch on the prefix and hand the right window/dict to zlib.
+    is_v2 = raw_str.startswith(HEADER_PREFIX_V2)
+    if is_v2 or raw_str.startswith(HEADER_PREFIX_V1):
+        prefix = HEADER_PREFIX_V2 if is_v2 else HEADER_PREFIX_V1
+        b64_str = raw_str[len(prefix):].strip()
         try:
             # Re-add base64 padding if needed
             padding = len(b64_str) % 4
             if padding:
                 b64_str += "=" * (4 - padding)
+            raw = base64.urlsafe_b64decode(b64_str)
             # Bounded decompress: stop at MAX_DECOMPRESSED_SIZE and treat any
             # leftover (unconsumed_tail) as an oversized/hostile stream.
-            dobj = zlib.decompressobj()
-            decompressed = dobj.decompress(base64.urlsafe_b64decode(b64_str), MAX_DECOMPRESSED_SIZE)
+            dobj = zlib.decompressobj(-15, _ZDICT) if is_v2 else zlib.decompressobj(zlib.MAX_WBITS)
+            decompressed = dobj.decompress(raw, MAX_DECOMPRESSED_SIZE)
             if dobj.unconsumed_tail:
                 return {"ok": False, "reason": "Code expands to more than the 5MB limit."}
             payload = json.loads(decompressed.decode("utf-8"))

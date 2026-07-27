@@ -13,7 +13,7 @@ def test_encode_and_decode_single_template():
     }
 
     code = share.encode_template_code(single_payload)
-    assert code.startswith("CREAM:v1:")
+    assert code.startswith(share.HEADER_PREFIX_V2)
 
     result = share.decode_template_code(code)
     assert result["ok"] is True
@@ -34,7 +34,7 @@ def test_encode_and_decode_multi_template_pack():
     }
 
     code = share.encode_template_code(pack_payload)
-    assert code.startswith("CREAM:v1:")
+    assert code.startswith(share.HEADER_PREFIX_V2)
 
     result = share.decode_template_code(code)
     assert result["ok"] is True
@@ -86,7 +86,7 @@ def test_api_bridge_export_and_import(tmp_path, monkeypatch):
     # Export via ApiBridge
     exp = api.export_template_code("ShareTestTpl")
     assert exp["ok"] is True
-    assert exp["code"].startswith("CREAM:v1:")
+    assert exp["code"].startswith(share.HEADER_PREFIX_V2)
 
     # Import via ApiBridge into new template name
     import_payload = share.decode_template_code(exp["code"])
@@ -210,13 +210,63 @@ def test_export_custom_selected_templates_list(tmp_path, monkeypatch):
 
 
 def test_decode_rejects_decompression_bomb():
-    """A tiny CREAM code that expands past the size cap is rejected, not OOM'd."""
+    """A tiny CREAM code that expands past the size cap is rejected, not OOM'd --
+    checked on both the v2 (dict) and legacy v1 containers."""
     import base64
     import zlib
     from core import share
 
-    bomb = zlib.compress(b"A" * (share.MAX_DECOMPRESSED_SIZE + 1024), level=9)
-    code = share.HEADER_PREFIX + base64.urlsafe_b64encode(bomb).decode("ascii").rstrip("=")
-    res = share.decode_template_code(code)
-    assert res["ok"] is False
-    assert "limit" in res["reason"].lower()
+    payload = b"A" * (share.MAX_DECOMPRESSED_SIZE + 1024)
+
+    # v2: raw deflate + preset dictionary
+    co = zlib.compressobj(9, zlib.DEFLATED, -15, 9, zlib.Z_DEFAULT_STRATEGY, share._ZDICT)
+    v2 = share.HEADER_PREFIX_V2 + base64.urlsafe_b64encode(co.compress(payload) + co.flush()).decode("ascii").rstrip("=")
+    res = share.decode_template_code(v2)
+    assert res["ok"] is False and "limit" in res["reason"].lower()
+
+    # v1: standard zlib
+    v1 = share.HEADER_PREFIX_V1 + base64.urlsafe_b64encode(zlib.compress(payload, 9)).decode("ascii").rstrip("=")
+    res = share.decode_template_code(v1)
+    assert res["ok"] is False and "limit" in res["reason"].lower()
+
+
+def test_legacy_v1_code_still_decodes():
+    """Codes shared before the v2 dictionary format must still import."""
+    import base64
+    import json
+    import zlib
+    from core import share
+
+    payload = {"kind": "anime-expeditions-template", "name": "Old Code", "blocks": [{"type": "walk_path"}]}
+    jb = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    v1 = share.HEADER_PREFIX_V1 + base64.urlsafe_b64encode(zlib.compress(jb, 9)).decode("ascii").rstrip("=")
+
+    res = share.decode_template_code(v1)
+    assert res["ok"] is True
+    assert res["type"] == "single"
+    assert "Old Code" in res["templates"]
+
+
+def test_v2_is_shorter_than_v1_for_a_single_template():
+    """The dictionary format must actually be smaller than the old one."""
+    import base64
+    import json
+    import zlib
+    from core import share
+
+    payload = {
+        "kind": "anime-expeditions-template",
+        "name": "Act3 Villian",
+        "blocks": {
+            "prestart": [{"type": "walk_path", "params": {}, "once": True}],
+            "battle": [
+                {"type": "place_unit", "params": {"name": "Goku", "x": 120, "y": 340}, "once": False},
+                {"type": "upgrade_unit", "params": {"index": "1"}, "once": False},
+                {"type": "sell_unit", "params": {"index": "1"}, "once": False},
+            ],
+        },
+    }
+    jb = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    v1_len = len(share.HEADER_PREFIX_V1 + base64.urlsafe_b64encode(zlib.compress(jb, 9)).decode("ascii").rstrip("="))
+    v2_len = len(share.encode_template_code(payload))
+    assert v2_len < v1_len, f"v2 ({v2_len}) should be shorter than v1 ({v1_len})"
