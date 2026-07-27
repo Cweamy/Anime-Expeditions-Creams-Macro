@@ -54,14 +54,10 @@ def _debug_dir() -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
-# Mirrors core.rewards.SCROLLBAR_PROBE/SCROLLBAR_COLOR (shared with core.
-# runner's automatic post-match reward read) -- kept as a plain literal here
-# rather than importing core.rewards at module level, which would force its
-# cv2/numpy import eagerly on every launch (including `--test`) instead of
-# only when a reward read actually happens, same as every other core.*
-# import in this file being deferred into the function that needs it.
-REWARD_SCROLLBAR_PROBE = (710, 428, 4, 2)  # (x, y, width, height)
-REWARD_SCROLLBAR_COLOR = 0x373737
+# Shared with core.rewards -- imported from core.constants (the single
+# source of truth) rather than duplicated here as plain literals.
+REWARD_SCROLLBAR_PROBE = constants.REWARD_SCROLLBAR_PROBE
+REWARD_SCROLLBAR_COLOR = constants.REWARD_SCROLLBAR_COLOR
 
 # Image Manager (Settings > General > Image Search) categories: tab key ->
 # (subfolder under Assets/, label shown on the tab). A whitelist, not an

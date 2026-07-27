@@ -90,3 +90,12 @@ ASSETS_DIR = os.path.join(APP_DIR, "Assets")
 # Folder", etc.) written against the old override-dir name -- same folder
 # now, see above.
 ASSETS_OVERRIDE_DIR = ASSETS_DIR
+
+# Fixed spot (relative to the docked game window's top-left) where the
+# Gained Rewards panel's scrollbar track renders -- shared by main.py's
+# on-demand read and core.runner's automatic post-match read.  Defined
+# here (not in core.rewards) to avoid forcing an eager cv2/numpy import
+# in every consumer.
+REWARD_SCROLLBAR_PROBE = (710, 428, 4, 2)   # (x, y, width, height)
+REWARD_SCROLLBAR_COLOR = 0x373737
+
