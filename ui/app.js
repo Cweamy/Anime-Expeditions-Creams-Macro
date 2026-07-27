@@ -1965,12 +1965,34 @@ async function importSettings() {
 // at nothing on someone else's machine). Import restores both, giving all
 // tasks fresh ids and never overwriting a template that already exists
 // locally under the same name.
+// Every macro a task can point at. act4_macro is Act 4's own Macro
+// Operation and was left out of the export entirely, so a shared queue
+// arrived referencing a macro the recipient did not have -- and the export
+// still reported success.
+function taskMacroNames(task) {
+  return [task.macro, task.act4_macro].filter(Boolean);
+}
+
 async function exportTasks() {
   if (taskCards.length === 0) { addLog('[Task] Nothing to export -- the queue is empty.'); return; }
+  let saved = [];
+  try { saved = await pywebview.api.list_templates(); } catch (e) {}
+  // Stop rather than ship a package that cannot work. load_template returns
+  // an empty object for a name with no file, and the failure used to be
+  // swallowed by `catch (e) {}`, so a task pointing at a renamed or deleted
+  // macro exported "successfully" and only broke for whoever imported it.
+  const missing = [...new Set(taskCards.flatMap(taskMacroNames))]
+    .filter(name => !saved.includes(name));
+  if (missing.length > 0) {
+    addLog(`[Task] Export stopped -- ${missing.length} macro(s) referenced by the queue `
+      + `no longer exist: ${missing.join(', ')}. Fix or remove those tasks first.`);
+    return;
+  }
   const templates = {};
   for (const t of taskCards) {
-    if (t.macro && !(t.macro in templates)) {
-      try { templates[t.macro] = await pywebview.api.load_template(t.macro); } catch (e) {}
+    for (const name of taskMacroNames(t)) {
+      if (name in templates) continue;
+      try { templates[name] = await pywebview.api.load_template(name); } catch (e) {}
     }
   }
   const paths = await exportCustomPaths(templates);
@@ -2000,11 +2022,27 @@ async function importTasks() {
     return;
   }
   if (!Array.isArray(data.tasks)) { addLog('[Task] Import failed: that file is not a task export.'); return; }
+  // A bundled macro whose name you already use was skipped in silence, so
+  // the imported task quietly pointed at YOUR macro of that name and ran
+  // something other than what the sender built. Ask, and treat Cancel as
+  // cancelling the whole import: keeping the tasks while declining their
+  // macros is exactly the mismatch this is here to prevent.
+  let existing = [];
+  try { existing = await pywebview.api.list_templates(); } catch (e) {}
+  const bundled = Object.entries(data.templates || {}).filter(([, t]) => t && t.blocks != null);
+  const clashes = bundled.filter(([name]) => existing.includes(name));
+  if (clashes.length > 0 && !confirm(
+      `${clashes.length} macro(s) in this file have the same name as yours:\n\n`
+      + clashes.map(([name]) => `    ${name}`).join('\n')
+      + '\n\nReplace yours with the imported versions?\n'
+      + 'Cancel stops the import, so the tasks cannot end up pointing at a different macro.')) {
+    addLog('[Task] Import cancelled -- your macros were left alone.');
+    return;
+  }
   const pathAdded = await importCustomPaths(data.paths);
   let tplAdded = 0;
   try {
-    const existing = await pywebview.api.list_templates();
-    for (const [name, t] of Object.entries(data.templates || {})) {
+    for (const [name, t] of bundled) {
       // `t.blocks` is an OBJECT ({team, equipment, prestart, battle}) for every
       // template saved since Pre Start/Battle phases existed -- Array.isArray
       // is only true for the oldest flat-list format, so this silently dropped
@@ -2012,7 +2050,6 @@ async function importTasks() {
       // queue does not arrive pointing at macros the recipient does not have,
       // and the whole point was being lost with no message. importTemplates
       // (same file) has always used the `!= null` form.
-      if (existing.includes(name) || !t || t.blocks == null) continue;
       try { await pywebview.api.save_template(name, t.blocks); tplAdded++; } catch (e) {}
     }
   } catch (e) {}
@@ -2190,6 +2227,10 @@ function removeTaskCard(id) {
 }
 
 function clearTaskQueue() {
+  // Wired to a "Clear All" danger button and there is no undo -- the whole
+  // queue went in one click, silently.
+  if (taskCards.length > 0 && !confirm(
+      `Remove all ${taskCards.length} task(s) from the queue? This can't be undone.`)) return;
   taskCards = [];
   selectedTaskId = null;
   renderTaskList();

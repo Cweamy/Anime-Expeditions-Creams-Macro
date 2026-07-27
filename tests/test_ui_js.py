@@ -394,3 +394,119 @@ def test_app_js_calls_no_undefined_top_level_function():
     missing = sorted(n for n in called - defined - browser_and_globals
                      if not n.startswith("_") and n[0].islower())
     assert not missing, f"ui/app.js calls functions it never defines: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Task export/import: a shared queue has to arrive usable
+# ---------------------------------------------------------------------------
+# exportTasks collected only `t.macro`. act4_macro -- Act 4's own Macro
+# Operation -- was never bundled, so a queue using one exported "successfully"
+# and arrived at the other end pointing at a macro the recipient does not
+# have. Reproduced against the shipped function:
+#
+#     task references : Main Farm (macro), Act4 Relic Run (act4_macro)
+#     actually bundled: ['Main Farm']
+#     log             : "[Task] Exported 1 task(s) to q.json"
+
+_TASK_EXPORT_WORLD = """
+const logs = []; let exported = null;
+global.addLog = m => logs.push(m);
+global.exportCustomPaths = async () => ({});
+global.taskCards = %s;
+global.pywebview = { api: {
+  list_templates: async () => %s,
+  load_template: async n => ({ name: n, blocks: { prestart: [], battle: [] } }),
+  export_tasks_file: async p => { exported = p; return { ok: true, path: 'q.json' }; },
+}};
+eval(extract('taskMacroNames'));
+eval(extract('exportTasks'));
+exportTasks().then(() => console.log(JSON.stringify({
+  bundled: exported ? Object.keys(exported.templates).sort() : null,
+  log: logs[logs.length - 1] })));
+"""
+
+_ONE_TASK = "[{id:1, mode:'story', macro:'Main Farm', act4_macro:'Act4 Relic Run'}]"
+
+
+def test_export_bundles_the_act4_macro_too(tmp_path):
+    out = run_js(_TASK_EXPORT_WORLD % (_ONE_TASK, "['Main Farm', 'Act4 Relic Run']"), tmp_path)
+    assert out["bundled"] == ["Act4 Relic Run", "Main Farm"], (
+        "the Act 4 macro was left out of the package again")
+
+
+def test_export_stops_when_a_referenced_macro_no_longer_exists(tmp_path):
+    """load_template returns an empty object for a name with no file and the
+    failure was swallowed, so the export "succeeded" and only broke for
+    whoever imported it."""
+    out = run_js(_TASK_EXPORT_WORLD % (_ONE_TASK, "['Main Farm']"), tmp_path)
+    assert out["bundled"] is None, "a package missing one of its macros must not be written"
+    assert "Act4 Relic Run" in out["log"] and "Export stopped" in out["log"]
+
+
+_TASK_IMPORT_WORLD = """
+const logs = []; const saved = {}; let confirmAnswer = %s;
+global.addLog = m => logs.push(m);
+global.confirm = () => confirmAnswer;
+global.importCustomPaths = async () => 0;
+global.refreshTaskTemplates = async () => {};
+global.renderTaskList = () => {}; global.renderTaskBuilder = () => {};
+global.saveTaskQueue = () => {};
+global.defaultTask = () => ({ id: 0, mode: 'story', macro: '' });
+let nextId = 100;
+global.newTaskId = () => ++nextId;
+global.taskCards = [];
+global.enteringTaskIds = new Set();
+global.pywebview = { api: {
+  import_tasks_file: async () => ({ ok: true, data: { kind: 'anime-expeditions-tasks',
+    tasks: [{ id: 7, mode: 'story', macro: 'Boss Rush' }],
+    templates: { 'Boss Rush': { blocks: { prestart: [], battle: [] } } } } }),
+  list_templates: async () => %s,
+  save_template: async (n, b) => { saved[n] = b; },
+}};
+eval(extract('importTasks'));
+importTasks().then(() => console.log(JSON.stringify({
+  macrosSaved: Object.keys(saved), tasks: taskCards.length,
+  ids: taskCards.map(t => t.id), log: logs[logs.length - 1] })));
+"""
+
+
+def test_a_bundled_macro_that_clashes_with_yours_is_no_longer_skipped(tmp_path):
+    out = run_js(_TASK_IMPORT_WORLD % ("true", "['Boss Rush']"), tmp_path)
+    assert out["macrosSaved"] == ["Boss Rush"], (
+        "the sender's macro was dropped, so the imported task points at a different one")
+    assert out["tasks"] == 1
+
+
+def test_declining_the_clash_cancels_the_whole_task_import(tmp_path):
+    """Keeping the tasks while declining their macros is exactly the mismatch
+    the prompt exists to prevent -- the task would silently run YOUR macro of
+    that name instead of the one it was built with."""
+    out = run_js(_TASK_IMPORT_WORLD % ("false", "['Boss Rush']"), tmp_path)
+    assert out["macrosSaved"] == [], "declining still overwrote a macro"
+    assert out["tasks"] == 0, "tasks were imported without the macros they reference"
+    assert "cancelled" in out["log"]
+
+
+def test_imported_tasks_get_fresh_ids(tmp_path):
+    """Already true before this change -- pinned so it stays true."""
+    out = run_js(_TASK_IMPORT_WORLD % ("true", "[]"), tmp_path)
+    assert out["ids"] == [101], "an imported task kept its id from the file"
+
+
+_CLEAR_WORLD = """
+let confirms = 0;
+global.confirm = () => { confirms++; return %s; };
+global.renderTaskList = () => {}; global.renderTaskBuilder = () => {};
+global.saveTaskQueue = () => {};
+global.selectedTaskId = 1;
+global.taskCards = [{id:1},{id:2},{id:3}];
+eval(extract('clearTaskQueue'));
+clearTaskQueue();
+console.log(JSON.stringify({ remaining: taskCards.length, confirms }));
+"""
+
+
+def test_clear_all_asks_before_wiping_the_queue(tmp_path):
+    """Wired to a "Clear All" danger button with no undo."""
+    assert run_js(_CLEAR_WORLD % "false", tmp_path) == {"remaining": 3, "confirms": 1}
+    assert run_js(_CLEAR_WORLD % "true", tmp_path) == {"remaining": 0, "confirms": 1}
