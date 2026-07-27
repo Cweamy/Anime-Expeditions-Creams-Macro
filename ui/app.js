@@ -2344,6 +2344,16 @@ function renderTaskBuilder() {
           ${taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === t.act4_macro ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('')}
         </select>`;
       fields.push(field('Act 4 Macro Operation', act4MacroSel));
+      // Act 4 gets its own play mode -- e.g. farm Solo but clear Act 4 in
+      // Matchmaking, or vice versa. Defaults to the task's own play mode until
+      // set (t.act4_play_mode absent -> runner falls back to t.play_mode).
+      const act4Play = t.act4_play_mode || t.play_mode;
+      const act4PlaySeg = `
+        <div class="seg-toggle">
+          <button type="button" class="seg-btn ${act4Play === 'solo' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_play_mode', 'solo'); renderTaskBuilder()">Solo</button>
+          <button type="button" class="seg-btn ${act4Play === 'matchmaking' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_play_mode', 'matchmaking'); renderTaskBuilder()">Matchmaking</button>
+        </div>`;
+      fields.push(field('Act 4 Play Mode', act4PlaySeg));
     }
   }
 

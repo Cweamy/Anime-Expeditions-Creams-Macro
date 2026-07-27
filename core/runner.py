@@ -2770,7 +2770,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         navigation failure just logs and returns to let the farm resume."""
         until_locked = (farm_task.get("act4_mode") == "until_locked")
         act4_macro = farm_task.get("act4_macro") or ""
-        play_mode = farm_task.get("play_mode") or "solo"
+        # Act 4 can run in its own play mode (Solo/Matchmaking); falls back to
+        # the farm task's play mode when it was never set (older tasks, or the
+        # user leaving it on the inherited default). See the Act 4 Play Mode
+        # control in ui/app.js renderTaskBuilder.
+        play_mode = farm_task.get("act4_play_mode") or farm_task.get("play_mode") or "solo"
         runs = 0
         while True:
             if self._checkpoint(stop_event):
