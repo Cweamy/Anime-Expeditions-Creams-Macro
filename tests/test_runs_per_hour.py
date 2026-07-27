@@ -5,7 +5,7 @@ from main import Api
 def test_empty_history_returns_dash():
     # Empty history list should return "-"
     assert Api._calculate_runs_per_hour([], current_time=10000.0) == "-"
-    
+
     # History with entries missing the "at" timestamp key should return "-"
     invalid_history = [{"result": "win"}, {"map": "Story"}]
     assert Api._calculate_runs_per_hour(invalid_history, current_time=10000.0) == "-"
@@ -13,7 +13,7 @@ def test_empty_history_returns_dash():
 
 def test_single_run_within_1h():
     now = 10000.0
-    
+
     # Single run 30s ago (clamped to minimum 60s time span)
     # rate = (1 * 3600) / 60 = 60.0 -> "60"
     history_recent = [{"at": now - 30.0}]
@@ -27,7 +27,7 @@ def test_single_run_within_1h():
 
 def test_multiple_runs_within_1h():
     now = 10000.0
-    
+
     # 3 runs within 1200 seconds time span
     # oldest_at = now - 1200.0, rate = (3 * 3600) / 1200 = 9.0 -> "9"
     history = [
@@ -40,7 +40,7 @@ def test_multiple_runs_within_1h():
 
 def test_filtering_out_runs_older_than_3600_seconds():
     now = 10000.0
-    
+
     # 2 runs older than 3600s, 1 run within 3600s
     history = [
         {"at": now - 1800.0},  # Recent (within 1h)
@@ -61,7 +61,7 @@ def test_filtering_out_runs_older_than_3600_seconds():
 
 def test_non_integer_rate_formatting():
     now = 10000.0
-    
+
     # 1 run 1000 seconds ago -> time_span = 1000.0
     # rate = (1 * 3600) / 1000 = 3.6 -> "3.6"
     history = [{"at": now - 1000.0}]
@@ -70,7 +70,7 @@ def test_non_integer_rate_formatting():
 
 def test_edge_cases_and_invalid_data():
     now = 10000.0
-    
+
     # None or non-list history
     assert Api._calculate_runs_per_hour(None, current_time=now) == "-"
     assert Api._calculate_runs_per_hour("invalid_history", current_time=now) == "-"
