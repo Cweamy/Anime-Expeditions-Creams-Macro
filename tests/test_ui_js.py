@@ -275,6 +275,12 @@ def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
           const logs = []; const restored = []; let exported = null;
           function addLog(message) { logs.push(message); }
           async function refreshTemplateList() {}
+          // importTemplates now confirms before replacing a macro you
+          // already have, and opens the first imported one in the editor.
+          function confirm() { return true; }
+          function creationEditorHasUnsavedChanges() { return false; }
+          async function loadSelectedTemplate() {}
+          const document = { getElementById: () => ({ value: '' }) };
           const template = { name: 'Farm', blocks: {
             prestart: [{ type: 'walk_path', mode: 'custom', pathName: 'Boss Route' }],
             battle: [],
@@ -394,3 +400,124 @@ def test_app_js_calls_no_undefined_top_level_function():
     missing = sorted(n for n in called - defined - browser_and_globals
                      if not n.startswith("_") and n[0].islower())
     assert not missing, f"ui/app.js calls functions it never defines: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# importTemplates: a same-name macro was skipped in silence
+# ---------------------------------------------------------------------------
+# Export a macro, edit it, import it back: nothing happened. The loop did
+# `if (existing.includes(name) ...) continue`, so every macro you already had
+# was dropped, and the log still reported a successful import. Reproduced
+# against the shipped function before the fix:
+#
+#     saved_to_disk: ['New Macro']          <- the edited "Boss Rush" is gone
+#     logs: ['[Macro Manager] Imported 1 template(s).']
+#
+# Overwriting without asking is the opposite failure -- a shared pack
+# containing "Boss Rush" would take out the one you built -- so conflicts are
+# now confirmed once, and the log says what was replaced and what was kept.
+
+_MACRO_IMPORT_HARNESS = """
+const logs = [], saved = {};
+let confirmAnswer = %s, confirmsSeen = [], loadedIntoEditor = null;
+global.addLog = m => logs.push(m);
+global.confirm = m => { confirmsSeen.push(m); return confirmAnswer; };
+global.importCustomPaths = async () => 0;
+global.refreshTemplateList = async () => {};
+global.loadSelectedTemplate = async () => { loadedIntoEditor = selectValue; };
+global.creationEditorHasUnsavedChanges = () => %s;
+let selectValue = '';
+global.document = { getElementById: id => id === 'template-select'
+  ? { get value() { return selectValue; }, set value(v) { selectValue = v; } } : null };
+global.pywebview = { api: {
+  import_tasks_file: async () => ({ ok: true, data: { templates: %s } }),
+  list_templates: async () => %s,
+  save_template: async (n, b) => { saved[n] = b; },
+}};
+eval(extract('importTemplates'));
+importTemplates().then(() => console.log(JSON.stringify(
+  { saved: Object.keys(saved).sort(), savedBossRush: saved['Boss Rush'] || null,
+    logs, confirms: confirmsSeen.length, loadedIntoEditor })));
+"""
+
+_TWO = ("{'Boss Rush': {blocks: {start: ['EDITED v2']}}, "
+        "'New Macro': {blocks: {start: ['brand new']}}}")
+
+
+def test_reimporting_an_edited_macro_actually_overwrites_it(tmp_path):
+    out = run_js(_MACRO_IMPORT_HARNESS % ("true", "false", _TWO, "['Boss Rush']"), tmp_path)
+    assert out["saved"] == ["Boss Rush", "New Macro"], "the edited macro was dropped again"
+    assert out["savedBossRush"] == {"start": ["EDITED v2"]}, "the OLD version survived"
+    assert out["confirms"] == 1, "replacing what you already have must be confirmed"
+    assert "1 replaced" in out["logs"][-1]
+
+
+def test_declining_the_prompt_keeps_your_macro_and_still_imports_the_new_ones(tmp_path):
+    out = run_js(_MACRO_IMPORT_HARNESS % ("false", "false", _TWO, "['Boss Rush']"), tmp_path)
+    assert out["saved"] == ["New Macro"], "declining must not silently drop the new macros too"
+    assert out["savedBossRush"] is None, "declining still overwrote the user's macro"
+    assert "kept your existing 1" in out["logs"][-1]
+
+
+def test_no_prompt_when_nothing_collides(tmp_path):
+    out = run_js(_MACRO_IMPORT_HARNESS % ("false", "false", _TWO, "[]"), tmp_path)
+    assert out["saved"] == ["Boss Rush", "New Macro"]
+    assert out["confirms"] == 0, "a clean import must not ask anything"
+
+
+def test_the_first_imported_macro_opens_in_the_editor(tmp_path):
+    """The dropdown used to refresh but keep its empty selection, so a fully
+    successful import still looked like it had done nothing."""
+    out = run_js(_MACRO_IMPORT_HARNESS % ("true", "false", _TWO, "[]"), tmp_path)
+    assert out["loadedIntoEditor"] == "Boss Rush"
+
+
+def test_import_warns_before_replacing_unsaved_editor_work(tmp_path):
+    """Because the import now loads a macro into the editor, it destroys
+    whatever was in there -- so it has to ask first."""
+    out = run_js(_MACRO_IMPORT_HARNESS % ("false", "true", _TWO, "[]"), tmp_path)
+    assert out["saved"] == [], "declining the warning must not import anything"
+    assert "cancelled" in out["logs"][-1]
+
+
+def test_a_file_with_no_macros_reports_that_instead_of_importing_nothing(tmp_path):
+    out = run_js(_MACRO_IMPORT_HARNESS % ("true", "false", "{'Broken': {}}", "[]"), tmp_path)
+    assert out["saved"] == []
+    assert "no macros" in out["logs"][-1]
+
+
+# ---------------------------------------------------------------------------
+# The unsaved-changes check itself
+# ---------------------------------------------------------------------------
+
+_DIRTY_HARNESS = """
+global.PHASES = ['prestart', 'battle'];
+let nameValue = 'Boss Rush';
+global.document = { getElementById: () => ({ get value() { return nameValue; } }) };
+global.creationTeam = ''; global.creationEquipment = 'include';
+global.creationPhases = { prestart: [], battle: [] };
+eval(extract('currentCreationPayload'));
+eval(extract('currentCreationSnapshot'));
+eval(extract('markCreationEditorSaved'));
+eval(extract('creationEditorHasUnsavedChanges'));
+let creationSavedSnapshot = null;
+const before = creationEditorHasUnsavedChanges();
+markCreationEditorSaved();
+const afterSave = creationEditorHasUnsavedChanges();
+creationPhases.battle.push({ type: 'attack', params: {} });
+const afterEdit = creationEditorHasUnsavedChanges();
+creationPhases.battle.pop();
+const afterUndo = creationEditorHasUnsavedChanges();
+nameValue = 'Renamed';
+const afterRename = creationEditorHasUnsavedChanges();
+console.log(JSON.stringify({ before, afterSave, afterEdit, afterUndo, afterRename }));
+"""
+
+
+def test_unsaved_changes_tracking(tmp_path):
+    out = run_js(_DIRTY_HARNESS, tmp_path)
+    assert out["before"] is False, "no baseline yet -- must not warn on a fresh editor"
+    assert out["afterSave"] is False
+    assert out["afterEdit"] is True
+    assert out["afterUndo"] is False, "edit-then-undo must not leave a false warning"
+    assert out["afterRename"] is True, "renaming is an unsaved change too"
