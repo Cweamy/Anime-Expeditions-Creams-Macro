@@ -1633,6 +1633,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             # match that follows it.
             self._keyboard.tap(ord("H"))
             self._log("[Macro] Closed the Team Loadout panel.")
+            time.sleep(1.5)
 
     def _apply_team_loadout_panel(self, hwnd, stop_event: threading.Event, team_match, team_num: int,
                                     equipment: str) -> bool:
