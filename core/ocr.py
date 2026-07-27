@@ -37,7 +37,7 @@ def _tesseract_runs(cmd: str) -> bool:
     try:
         subprocess.run(
             [cmd, "--version"], capture_output=True, timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return True
     except Exception:

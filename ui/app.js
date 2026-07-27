@@ -923,14 +923,14 @@ function renderThemePicker() {
     baseEl.innerHTML = Object.entries(THEME_BASES).map(([name, t]) => `
       <button class="theme-base-tile ${name === activeThemeBase ? 'active' : ''}"
               style="--tb-bg: ${t.bg}; --tb-border: ${t.border};"
-              onclick="setThemeBase('${name}')" data-tooltip="${t.label}"></button>
+              onclick="setThemeBase('${name}')" title="${t.label}"></button>
     `).join('');
   }
   const accentEl = document.getElementById('theme-accent-picker');
   if (accentEl) {
     accentEl.innerHTML = Object.entries(THEME_ACCENTS).map(([name, color]) => `
       <button class="theme-swatch ${name === activeThemeAccent ? 'active' : ''}" style="--sw: ${color};"
-              onclick="setThemeAccent('${name}')" data-tooltip="${name[0].toUpperCase() + name.slice(1)}"></button>
+              onclick="setThemeAccent('${name}')" title="${name[0].toUpperCase() + name.slice(1)}"></button>
     `).join('');
   }
 }
