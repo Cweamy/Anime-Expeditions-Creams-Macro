@@ -1,4 +1,5 @@
 import os
+import sys
 
 from core.updater import _parse_version
 
@@ -75,3 +76,53 @@ def test_stage_exe_update_script_contains_retries(tmp_path, monkeypatch):
     assert ":movenewloop" in content
     assert "start \"\"" in content
 
+
+
+# ---------------------------------------------------------------------------
+# launch_helper's process-creation flags
+# ---------------------------------------------------------------------------
+# The update helper is a .bat. DETACHED_PROCESS gives it no console at all, so
+# the first plain `echo` (no redirect) writes to a stdout handle that does not
+# exist, cmd stops there, and none of the five steps after it run. Reported as:
+# "Update & Restart downloads everything, then nothing happens -- it doesn't
+# reopen, and it's still the old version." The only trace left is a one-line
+# _update.log, an un-consumed "<exe>.update" and the helper .bat still sitting
+# next to the exe.
+#
+# CREATE_NO_WINDOW is the fix: still invisible, still outlives the app (which
+# exits ~0.4s later), but it has a real console. Redirecting stdio to DEVNULL
+# is NOT sufficient -- the taskkill/tasklist steps want a console too.
+
+def test_launch_helper_gives_the_helper_a_console(monkeypatch):
+    import subprocess as sp
+
+    from core import updater
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    seen = {}
+
+    def fake_popen(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["flags"] = kwargs.get("creationflags", 0)
+        return object()
+
+    monkeypatch.setattr(sp, "Popen", fake_popen)
+    monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
+
+    updater.launch_helper(r"C:\somewhere\_update.bat")
+
+    assert seen["cmd"][:2] == ["cmd.exe", "/c"]
+    assert seen["flags"] & updater.CREATE_NO_WINDOW, "helper must get a (hidden) console"
+    assert seen["flags"] & updater.CREATE_NEW_PROCESS_GROUP, "helper must outlive the app"
+    # 0x8 is DETACHED_PROCESS. Naming it directly rather than importing it,
+    # because the point of this test is that the module no longer defines it.
+    assert not seen["flags"] & 0x00000008, (
+        "DETACHED_PROCESS leaves the .bat without a console; it dies at the "
+        "first unredirected echo, before the exe is ever swapped"
+    )
+
+
+def test_updater_no_longer_exposes_detached_process():
+    """Guards against it being reintroduced by name."""
+    from core import updater
+    assert not hasattr(updater, "DETACHED_PROCESS")

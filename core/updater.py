@@ -77,8 +77,10 @@ VERSION_FILE = os.path.join(constants.BUNDLE_DIR, "VERSION")
 _EXCLUDE_DIRS = ["debug", "Paths", "Templates", "__pycache__", ".git", "item_icons"]
 _EXCLUDE_FILES = ["settings.json", "*.log", "assets_manifest.json"]
 
-DETACHED_PROCESS = 0x00000008
+# Win32 process-creation flags (see launch_helper for why the update helper
+# uses CREATE_NO_WINDOW rather than DETACHED_PROCESS).
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_NO_WINDOW = 0x08000000
 
 
 def get_current_version() -> str:
@@ -915,15 +917,29 @@ del "%~f0"
 
 def launch_helper(helper_path: str) -> None:
     if sys.platform == "darwin":
-        # start_new_session detaches from this process's group the same way
-        # DETACHED_PROCESS does below -- the helper must survive the app
-        # exiting right after this call.
+        # start_new_session detaches from this process's group, so the helper
+        # survives the app exiting right after this call.
         subprocess.Popen(["/bin/bash", helper_path], start_new_session=True, close_fds=True)
         return
-    # DETACHED_PROCESS: no console of its own, survives this process exiting
-    # (which happens right after this call -- see main.Api.apply_update).
+    # CREATE_NO_WINDOW, *not* DETACHED_PROCESS.
+    #
+    # Both hide the window and both outlive this process (which exits ~0.4s
+    # after this call -- see main.Api.apply_update). The difference is that
+    # DETACHED_PROCESS gives the helper no console AT ALL, and the helper is
+    # a .bat: the first plain `echo` with no redirect writes to a stdout
+    # handle that does not exist, cmd gives up there, and nothing after it
+    # runs. That is one line into a five-step script -- before the exe is
+    # ever swapped -- so the app just closed and never came back, the
+    # downloaded "<exe>.update" stayed on disk, and relaunching still ran the
+    # old build with no error anywhere except a one-line _update.log.
+    #
+    # Redirecting stdio to DEVNULL is not enough on its own; the taskkill/
+    # tasklist steps want a console too. CREATE_NO_WINDOW gives the helper a
+    # real (hidden) console, which is what the rest of this codebase already
+    # uses for silent child processes -- see core/ocr.py and
+    # core/tesseract_installer.py.
     subprocess.Popen(
         ["cmd.exe", "/c", helper_path],
-        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
     )
