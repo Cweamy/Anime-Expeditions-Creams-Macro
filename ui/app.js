@@ -4933,13 +4933,10 @@ function onBlockDrop(e, phase, targetId) {
   moveBlockToPhase(draggedId, phase, toIdx === -1 ? null : toIdx);
 }
 
-async function saveCurrentTemplate() {
-  const nameInput = document.getElementById('template-name');
-  const name = nameInput.value.trim();
-  if (!name) return;
-  // No more separate top-level "walk" config -- Walk Path is a real block
-  // now, so its mode/pathName save as part of the block itself, same as
-  // every other block's own fields.
+// No more separate top-level "walk" config -- Walk Path is a real block
+// now, so its mode/pathName save as part of the block itself, same as
+// every other block's own fields.
+function currentCreationPayload() {
   const payload = { team: creationTeam, equipment: creationEquipment };
   PHASES.forEach(phase => {
     payload[phase] = creationPhases[phase].map(b => ({
@@ -4948,9 +4945,39 @@ async function saveCurrentTemplate() {
       sprint: b.sprint, key: b.key,
     }));
   });
+  return payload;
+}
+
+// What the editor held the last time it was in sync with disk (saved, loaded
+// or reset). Compared against, rather than a dirty flag set from every input
+// handler, so edit-then-undo doesn't leave a false "unsaved" warning -- and
+// so nothing has to remember to set the flag when a new control is added.
+let creationSavedSnapshot = null;
+
+function currentCreationSnapshot() {
+  const name = document.getElementById('template-name')?.value.trim() || '';
+  return JSON.stringify({ name, blocks: currentCreationPayload() });
+}
+
+function markCreationEditorSaved() {
+  creationSavedSnapshot = currentCreationSnapshot();
+}
+
+// null until the editor has been in a known state once: with no baseline
+// there is nothing to compare against, and warning then would fire on a
+// fresh, empty editor.
+function creationEditorHasUnsavedChanges() {
+  return creationSavedSnapshot != null && currentCreationSnapshot() !== creationSavedSnapshot;
+}
+
+async function saveCurrentTemplate() {
+  const nameInput = document.getElementById('template-name');
+  const name = nameInput.value.trim();
+  if (!name) return;
   try {
-    const result = await pywebview.api.save_template(name, payload);
+    const result = await pywebview.api.save_template(name, currentCreationPayload());
     addLog(`Saved template "${result.name}".`);
+    markCreationEditorSaved();
     refreshTemplateList();
   } catch (e) {}
 }
@@ -4969,6 +4996,7 @@ function newTemplate() {
   creationFreshLoad = true;
   renderPhases();
   renderCreationLoadout();
+  markCreationEditorSaved();
 }
 
 async function deleteSelectedTemplate() {
@@ -5017,16 +5045,59 @@ async function importTemplates() {
   const data = result.data || {};
   const templates = data.templates && typeof data.templates === 'object' ? data.templates : null;
   if (!templates) { addLog('[Macro Manager] Import failed: that file is not a template export.'); return; }
-  const pathAdded = await importCustomPaths(data.paths);
+  const entries = Object.entries(templates).filter(([, t]) => t && t.blocks != null);
+  if (entries.length === 0) {
+    addLog('[Macro Manager] Import failed: that file contains no macros.');
+    return;
+  }
+  // The import loads a macro into the editor at the end, so anything
+  // unsaved there is about to be replaced. Ask first.
+  if (creationEditorHasUnsavedChanges() && !confirm(
+      'The Macro Manager editor has unsaved changes, and importing will replace them. Continue?')) {
+    addLog('[Macro Manager] Import cancelled -- your unsaved editor changes were kept.');
+    return;
+  }
   let existing = [];
   try { existing = await pywebview.api.list_templates(); } catch (e) {}
-  let added = 0;
-  for (const [name, t] of Object.entries(templates)) {
-    if (existing.includes(name) || !t || t.blocks == null) continue;
-    try { await pywebview.api.save_template(name, t.blocks); added++; } catch (e) {}
+  // A same-name macro used to be skipped in silence: re-importing your own
+  // edited export did nothing at all, and the log still said it imported
+  // fine. Overwriting without asking is the other way to lose work, though
+  // -- a shared pack that happens to contain "Boss Rush" would take out the
+  // one you built. So ask once, for all of them, and say which is which.
+  const conflicts = entries.filter(([name]) => existing.includes(name));
+  const replaceExisting = conflicts.length === 0 || confirm(
+    `${conflicts.length} of these already exist:\n\n`
+    + conflicts.map(([name]) => `    ${name}`).join('\n')
+    + '\n\nReplace them with the imported versions? '
+    + 'Choose Cancel to keep yours and import only the new ones.');
+  const pathAdded = await importCustomPaths(data.paths);
+  const imported = [];
+  let replaced = 0;
+  for (const [name, t] of entries) {
+    const isConflict = existing.includes(name);
+    if (isConflict && !replaceExisting) continue;
+    try {
+      await pywebview.api.save_template(name, t.blocks);
+      imported.push(name);
+      if (isConflict) replaced++;
+    } catch (e) {}
   }
   await refreshTemplateList();
-  addLog(`[Macro Manager] Imported ${added} template(s)${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
+  if (imported.length > 0) {
+    // Open the first one. The dropdown used to refresh but keep its empty
+    // selection, so even a fully successful import looked like nothing had
+    // happened.
+    const sel = document.getElementById('template-select');
+    if (sel) {
+      sel.value = imported[0];
+      await loadSelectedTemplate();
+    }
+  }
+  const kept = conflicts.length - replaced;
+  addLog(`[Macro Manager] Imported ${imported.length} macro(s)`
+    + `${replaced ? ` (${replaced} replaced)` : ''}`
+    + `${kept ? `; kept your existing ${kept}` : ''}`
+    + `${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
 }
 
 async function refreshTemplateList() {
@@ -5103,6 +5174,9 @@ async function loadSelectedTemplate() {
     creationFreshLoad = true;
     renderPhases();
     document.getElementById('template-name').value = data.name || name;
+    // Freshly in sync with disk -- this is the baseline the unsaved-changes
+    // check compares against.
+    markCreationEditorSaved();
   } catch (e) {}
 }
 
