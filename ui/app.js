@@ -4823,3 +4823,208 @@ window.addEventListener('pywebviewready', async () => {
   refreshStatus();
   setInterval(refreshStatus, 1500);
 });
+
+// --- Share Code (Export / Import via Code or URL) ---
+async function openShareCodeModal(initialTab = 'export') {
+  const modal = document.getElementById('share-code-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  switchShareTab(initialTab || 'export');
+  if (initialTab === 'export') {
+    updateExportCode();
+  }
+}
+
+function closeShareCodeModal() {
+  const modal = document.getElementById('share-code-modal');
+  if (modal) modal.style.display = 'none';
+  const statusEl = document.getElementById('share-import-status');
+  if (statusEl) statusEl.style.display = 'none';
+  const previewBox = document.getElementById('share-import-preview-box');
+  if (previewBox) previewBox.style.display = 'none';
+  const inputEl = document.getElementById('share-import-input');
+  if (inputEl) inputEl.value = '';
+}
+
+function switchShareTab(tab) {
+  const btnExport = document.getElementById('share-tab-export');
+  const btnImport = document.getElementById('share-tab-import');
+  const contentExport = document.getElementById('share-content-export');
+  const contentImport = document.getElementById('share-content-import');
+
+  if (tab === 'export') {
+    btnExport.className = 'task-toolbar-btn primary';
+    btnImport.className = 'task-toolbar-btn';
+    contentExport.style.display = 'flex';
+    contentImport.style.display = 'none';
+  } else {
+    btnImport.className = 'task-toolbar-btn primary';
+    btnExport.className = 'task-toolbar-btn';
+    contentImport.style.display = 'flex';
+    contentExport.style.display = 'none';
+    const inputEl = document.getElementById('share-import-input');
+    if (inputEl) inputEl.focus();
+  }
+}
+
+async function pasteFromClipboardPython() {
+  const inputEl = document.getElementById('share-import-input');
+  if (!inputEl) return;
+  try {
+    const res = await pywebview.api.read_clipboard_text();
+    if (res && res.ok && res.text) {
+      inputEl.value = res.text.trim();
+      onShareImportInput();
+    }
+  } catch (e) {}
+}
+
+let importPreviewTimer = null;
+function onShareImportInput() {
+  if (importPreviewTimer) clearTimeout(importPreviewTimer);
+  importPreviewTimer = setTimeout(updateImportPreview, 200);
+}
+
+async function updateImportPreview() {
+  const inputEl = document.getElementById('share-import-input');
+  const previewBox = document.getElementById('share-import-preview-box');
+  const badgeEl = document.getElementById('share-import-preview-badge');
+  const countEl = document.getElementById('share-import-preview-count');
+  const itemsEl = document.getElementById('share-import-preview-items');
+  const statusEl = document.getElementById('share-import-status');
+  const btnSubmit = document.getElementById('btn-submit-import-share');
+
+  if (!inputEl) return;
+  const val = inputEl.value.trim();
+
+  if (!val) {
+    if (previewBox) previewBox.style.display = 'none';
+    if (statusEl) statusEl.style.display = 'none';
+    if (btnSubmit) btnSubmit.textContent = 'Import Now';
+    return;
+  }
+
+  try {
+    const res = await pywebview.api.preview_template_code(val);
+    if (res && res.ok && res.items && res.items.length > 0) {
+      if (statusEl) statusEl.style.display = 'none';
+      if (previewBox) previewBox.style.display = 'flex';
+
+      const isSingle = res.type === 'single';
+      if (badgeEl) {
+        badgeEl.textContent = isSingle ? 'Single Template' : 'Template Pack';
+        badgeEl.style.background = isSingle ? 'color-mix(in srgb, var(--emerald) 20%, transparent)' : 'color-mix(in srgb, var(--cyan) 20%, transparent)';
+        badgeEl.style.color = isSingle ? 'var(--emerald)' : 'var(--cyan)';
+      }
+      if (countEl) countEl.textContent = `${res.total_templates} template(s)`;
+
+      if (itemsEl) {
+        itemsEl.innerHTML = res.items.map(item =>
+          `<div style="display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px dashed var(--border);">` +
+            `<span>📄 <b>${item.name}</b></span>` +
+            `<span style="color: var(--text-muted);">${item.blocks_count} block(s)</span>` +
+          `</div>`
+        ).join('');
+      }
+
+      if (btnSubmit) btnSubmit.textContent = `Import ${res.total_templates} Template(s)`;
+    } else {
+      if (previewBox) previewBox.style.display = 'none';
+      if (statusEl) {
+        statusEl.textContent = res.reason || 'Invalid code, URL, or JSON schema.';
+        statusEl.style.display = 'block';
+      }
+      if (btnSubmit) btnSubmit.textContent = 'Import Now';
+    }
+  } catch (e) {
+    if (previewBox) previewBox.style.display = 'none';
+    if (statusEl) {
+      statusEl.textContent = 'Invalid input format.';
+      statusEl.style.display = 'block';
+    }
+    if (btnSubmit) btnSubmit.textContent = 'Import Now';
+  }
+}
+
+async function updateExportCode() {
+  const outputEl = document.getElementById('share-export-code-output');
+  const sizeEl = document.getElementById('share-export-size-info');
+  if (!outputEl) return;
+
+  outputEl.value = 'Generating code...';
+  const selectedScope = document.querySelector('input[name="share-export-scope"]:checked');
+  const scope = selectedScope ? selectedScope.value : 'single';
+
+  let tName = null;
+  if (scope === 'single') {
+    const inputName = (document.getElementById('template-name')?.value || '').trim();
+    const selectName = document.getElementById('template-select')?.value || '';
+    tName = inputName || selectName || null;
+  }
+
+  try {
+    const res = await pywebview.api.export_template_code(tName);
+    if (res && res.ok && res.code) {
+      outputEl.value = res.code;
+      if (sizeEl) sizeEl.textContent = `Size: ${res.code.length} chars (${res.count} template(s))`;
+    } else {
+      outputEl.value = 'Failed to generate code.';
+    }
+  } catch (e) {
+    outputEl.value = 'Error generating code.';
+  }
+}
+
+async function copyShareCodeOutput() {
+  const outputEl = document.getElementById('share-export-code-output');
+  const btn = document.getElementById('btn-copy-share-code');
+  if (!outputEl || !outputEl.value) return;
+
+  try {
+    await navigator.clipboard.writeText(outputEl.value);
+    if (btn) {
+      const origText = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = origText; }, 1500);
+    }
+  } catch (e) {
+    outputEl.select();
+    document.execCommand('copy');
+  }
+}
+
+async function submitImportShareCode() {
+  const inputEl = document.getElementById('share-import-input');
+  const statusEl = document.getElementById('share-import-status');
+  if (!inputEl) return;
+
+  const rawInput = inputEl.value.trim();
+  if (!rawInput) {
+    if (statusEl) {
+      statusEl.textContent = 'Please enter a code, JSON, or URL.';
+      statusEl.style.display = 'block';
+    }
+    return;
+  }
+
+  if (statusEl) statusEl.style.display = 'none';
+
+  try {
+    const res = await pywebview.api.import_template_code(rawInput);
+    if (res && res.ok) {
+      addLog(`[Macro Manager] Imported ${res.count} template(s) via Share Code.`);
+      await refreshTemplateList();
+      closeShareCodeModal();
+    } else {
+      if (statusEl) {
+        statusEl.textContent = res.reason || 'Import failed.';
+        statusEl.style.display = 'block';
+      }
+    }
+  } catch (e) {
+    if (statusEl) {
+      statusEl.textContent = `Import error: ${e.message || e}`;
+      statusEl.style.display = 'block';
+    }
+  }
+}

@@ -462,8 +462,10 @@
         </select>
         <button onclick="newTemplate()" class="task-toolbar-btn" title="Clear the editor and start a new template">New</button>
         <button onclick="deleteSelectedTemplate()" class="task-toolbar-btn danger" title="Delete the loaded template">Delete</button>
-        <button onclick="importTemplates()" class="task-toolbar-btn" title="Load templates from a shared .json file">Import</button>
-        <button onclick="exportTemplates()" class="task-toolbar-btn" title="Save every template to a .json file to back up or share">Export</button>
+        <button onclick="importTemplates()" class="task-toolbar-btn" title="Load templates from a shared .json file">Import File</button>
+        <button onclick="exportTemplates()" class="task-toolbar-btn" title="Save every template to a .json file to back up or share">Export File</button>
+        <button onclick="openShareCodeModal('import')" class="task-toolbar-btn primary" title="Import templates via code string, raw JSON, or web link">Import Code</button>
+        <button onclick="openShareCodeModal('export')" class="task-toolbar-btn primary" title="Share templates via compressed code string or web link">Share Code</button>
         <span class="flex-1"></span>
         <!-- Team Loadout lives with the template (it's part of what the routine
              runs with), not on each Task card -- the task just picks a template
@@ -1759,6 +1761,64 @@
         </div>
         <div class="flex items-center gap-2" style="justify-content: flex-end; margin-top: 14px;">
           <button type="button" class="rp-btn rp-btn-start" style="padding: 6px 14px;" onclick="dismissScaleWarning()">Got it</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Share Code Modal -->
+  <div id="share-code-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-panel" style="width: 520px; max-width: 90vw;">
+      <div class="modal-head">
+        <span class="modal-title">Share via Code / Link</span>
+        <span class="modal-close" onclick="closeShareCodeModal()">&times;</span>
+      </div>
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px;">
+        <div class="flex items-center gap-2" style="border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+          <button id="share-tab-export" class="task-toolbar-btn primary" onclick="switchShareTab('export')">Export Code</button>
+          <button id="share-tab-import" class="task-toolbar-btn" onclick="switchShareTab('import')">Import Code / Link</button>
+        </div>
+
+        <!-- Export Tab Content -->
+        <div id="share-content-export" style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="font-size: 11px; color: var(--text-dim);">Select what you want to share:</div>
+          <div class="flex items-center gap-4">
+            <label style="font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+              <input type="radio" name="share-export-scope" value="single" checked onchange="updateExportCode()"> Current Template
+            </label>
+            <label style="font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+              <input type="radio" name="share-export-scope" value="all" onchange="updateExportCode()"> All Templates (Pack)
+            </label>
+          </div>
+          <textarea id="share-export-code-output" readonly rows="4" style="width: 100%; font-family: monospace; font-size: 11px; padding: 8px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; resize: none;" placeholder="Generating code..."></textarea>
+          <div class="flex items-center gap-2" style="justify-content: space-between;">
+            <span id="share-export-size-info" style="font-size: 11px; color: var(--text-muted);">Size: 0 chars</span>
+            <button id="btn-copy-share-code" onclick="copyShareCodeOutput()" class="task-toolbar-btn primary" style="padding: 4px 14px;">Copy Code</button>
+          </div>
+        </div>
+
+        <!-- Import Tab Content -->
+        <div id="share-content-import" style="display: none; flex-direction: column; gap: 10px;">
+          <div class="flex items-center justify-between">
+            <span style="font-size: 11px; color: var(--text-dim);">Paste code (`CREAM:v1:`), raw JSON, or web URL (Pastebin/Gist/Discord):</span>
+            <button type="button" class="task-toolbar-btn" style="padding: 2px 8px; font-size: 10px;" onclick="pasteFromClipboardPython()">Paste Clipboard</button>
+          </div>
+          <textarea id="share-import-input" rows="3" style="width: 100%; font-family: monospace; font-size: 11px; padding: 8px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; resize: vertical;" placeholder="Paste code or URL here..." oninput="onShareImportInput()"></textarea>
+
+          <!-- Live Preview Container -->
+          <div id="share-import-preview-box" style="display: none; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; flex-direction: column; gap: 6px;">
+            <div class="flex items-center justify-between">
+              <span id="share-import-preview-badge" style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: color-mix(in srgb, var(--emerald) 20%, transparent); color: var(--emerald);">Single Template</span>
+              <span id="share-import-preview-count" style="font-size: 11px; color: var(--text-muted);">1 item</span>
+            </div>
+            <div id="share-import-preview-items" style="font-size: 11px; color: var(--text); max-height: 90px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; font-family: monospace;"></div>
+          </div>
+
+          <div id="share-import-status" style="font-size: 11px; color: var(--rose); display: none;"></div>
+
+          <div class="flex items-center gap-2" style="justify-content: flex-end; margin-top: 4px;">
+            <button id="btn-submit-import-share" onclick="submitImportShareCode()" class="task-toolbar-btn primary" style="padding: 6px 16px;">Import Now</button>
+          </div>
         </div>
       </div>
     </div>
