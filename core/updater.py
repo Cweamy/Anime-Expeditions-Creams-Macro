@@ -809,16 +809,7 @@ def stage_exe_update(new_exe_path: str) -> str:
     old_exe = current_exe + ".old"
     log_path = os.path.join(exe_dir, "_update.log")
     helper_path = os.path.join(exe_dir, "_update.bat")
-    # This whole script runs fully detached (see launch_helper -- no
-    # console window at all, by design, so the app can close cleanly right
-    # after launching it), which means every "echo" below was previously
-    # going nowhere: a failed move, a taskkill that didn't actually work,
-    # anything at all -- all silent, with the only visible symptom being
-    # "closed the app and then nothing happened" and a folder full of
-    # leftover .update/.old files with zero explanation why. Every step
-    # below is now ALSO appended to _update.log (next to the exe) with
-    # >>"{log_path}" 2>&1, so a failure here is finally something that can
-    # actually be diagnosed instead of a black box.
+    # This script runs fully detached, allowing the main app process to exit while the batch script waits for Windows file handle locks to release.
     script = f"""@echo off
 setlocal enabledelayedexpansion
 set LOG="{log_path}"
@@ -852,23 +843,53 @@ taskkill /F /IM "{exe_name}" >>%LOG% 2>&1
 ping -n 2 127.0.0.1 >nul
 :proceed
 echo [2/5] Old process confirmed gone (or timed out waiting). >>%LOG%
-rem Clean up leftover onefile self-extraction folders from old runs.
+rem Wait mandatory cooldown for Windows file system and antivirus real-time scanner to release file handles.
+ping -n 3 127.0.0.1 >nul
 for /d %%i in ("%TEMP%\\_MEI*") do rd /s /q "%%i" >nul 2>&1
 for /d %%i in ("%TEMP%\\onefile_*") do rd /s /q "%%i" >nul 2>&1
 if exist "{old_exe}" del /f "{old_exe}" >>%LOG% 2>&1
 echo [3/5] Moving current exe to "{old_exe}"... >>%LOG%
+set _moveretries=0
+:moveoldloop
 move /y "{current_exe}" "{old_exe}" >>%LOG% 2>&1
+if exist "{old_exe}" goto moveolddone
+set /a _moveretries+=1
+if !_moveretries! lss 15 (
+    ping -n 2 127.0.0.1 >nul
+    goto moveoldloop
+)
+:moveolddone
 if not exist "{old_exe}" (
-    echo [FAILED] Could not move the running exe aside -- it may still be locked. >>%LOG%
-    echo Update aborted. The app was NOT relaunched -- start it manually from "{current_exe}". >>%LOG%
+    echo [FAILED] Could not move the running exe aside after retries -- it may still be locked. >>%LOG%
+    echo Update aborted. Attempting to relaunch original app... >>%LOG%
+    cd /d "{exe_dir}"
+    start "" "{current_exe}"
     goto :eof
 )
 echo [4/5] Moving downloaded update into place... >>%LOG%
+set _movenewretries=0
+:movenewloop
 move /y "{new_exe_path}" "{current_exe}" >>%LOG% 2>&1
+if exist "{current_exe}" goto movenewdone
+set /a _movenewretries+=1
+if !_movenewretries! lss 15 (
+    ping -n 2 127.0.0.1 >nul
+    goto movenewloop
+)
+:movenewdone
 if not exist "{current_exe}" (
-    echo [FAILED] Could not move the downloaded update into place. >>%LOG%
+    echo [FAILED] Could not move the downloaded update into place after retries. >>%LOG%
     echo Restoring the previous exe from "{old_exe}" so the app still runs... >>%LOG%
+    set _restoreretries=0
+    :restoreloop
     move /y "{old_exe}" "{current_exe}" >>%LOG% 2>&1
+    if exist "{current_exe}" goto restoredone
+    set /a _restoreretries+=1
+    if !_restoreretries! lss 10 (
+        ping -n 2 127.0.0.1 >nul
+        goto restoreloop
+    )
+    :restoredone
     cd /d "{exe_dir}"
     start "" "{current_exe}"
     echo Update failed -- reverted to the previous version and relaunched it. >>%LOG%
@@ -876,6 +897,7 @@ if not exist "{current_exe}" (
 )
 echo [5/5] Relaunching... >>%LOG%
 cd /d "{exe_dir}"
+ping -n 2 127.0.0.1 >nul
 start "" "{current_exe}"
 del /f "{old_exe}" >>%LOG% 2>&1
 echo Update finished successfully. >>%LOG%

@@ -51,3 +51,27 @@ def test_failed_download_does_not_leak_a_temp_dir(tmp_path, monkeypatch):
     assert updater.merge_assets_update("https://example.invalid/x.zip", lambda msg: None) is False
     leftovers = [d for d in os.listdir(tmp_path) if d.startswith("aecm_")]
     assert leftovers == [], f"left {leftovers} behind in TEMP"
+
+
+def test_stage_exe_update_script_contains_retries(tmp_path, monkeypatch):
+    """Ensure the exe update script includes move retries and auto-relaunch commands."""
+    from core import updater
+
+    fake_exe = str(tmp_path / "MacroApp.exe")
+    fake_new_exe = str(tmp_path / "MacroApp.exe.update")
+    with open(fake_exe, "w") as f:
+        f.write("fake binary")
+    with open(fake_new_exe, "w") as f:
+        f.write("fake new binary")
+
+    monkeypatch.setattr(updater, "_current_exe_path", lambda: fake_exe)
+    helper_path = updater.stage_exe_update(fake_new_exe)
+
+    assert os.path.exists(helper_path)
+    with open(helper_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert ":moveoldloop" in content
+    assert ":movenewloop" in content
+    assert "start \"\"" in content
+
