@@ -19,6 +19,7 @@ from core import constants
 from core import keys
 from core import settings as cfg
 from core import templates as tpl
+from core import share
 from core import webhook
 from core.window import WindowManager
 from core.dock import GameDocker
@@ -1249,6 +1250,95 @@ class Api:
         if ok:
             self.push_log(f"Deleted template '{name}'.")
         return {"ok": ok}
+
+    def export_template_code(self, names=None) -> dict:
+        if isinstance(names, str) and names.strip():
+            single_tpl = tpl.load_template(names)
+            blocks = single_tpl.get("blocks", {})
+            payload = {
+                "kind": "anime-expeditions-template",
+                "version": 1,
+                "name": names,
+                "blocks": blocks,
+            }
+            code = share.encode_template_code(payload)
+            return {"ok": True, "code": code, "count": 1}
+        elif isinstance(names, list) and len(names) > 0:
+            if len(names) == 1:
+                t_name = names[0]
+                single_tpl = tpl.load_template(t_name)
+                blocks = single_tpl.get("blocks", {})
+                payload = {
+                    "kind": "anime-expeditions-template",
+                    "version": 1,
+                    "name": t_name,
+                    "blocks": blocks,
+                }
+                code = share.encode_template_code(payload)
+                return {"ok": True, "code": code, "count": 1}
+            else:
+                templates = {}
+                for t_name in names:
+                    loaded = tpl.load_template(t_name)
+                    templates[t_name] = loaded.get("blocks", {})
+                payload = {
+                    "kind": "anime-expeditions-template-pack",
+                    "version": 1,
+                    "templates": templates,
+                }
+                code = share.encode_template_code(payload)
+                return {"ok": True, "code": code, "count": len(templates)}
+        else:
+            all_names = tpl.list_templates()
+            templates = {}
+            for t_name in all_names:
+                loaded = tpl.load_template(t_name)
+                templates[t_name] = loaded.get("blocks", {})
+            payload = {
+                "kind": "anime-expeditions-template-pack",
+                "version": 1,
+                "templates": templates,
+            }
+            code = share.encode_template_code(payload)
+            return {"ok": True, "code": code, "count": len(templates)}
+
+    def import_template_code(self, code_str: str) -> dict:
+        res = share.decode_template_code(code_str)
+        if not res.get("ok"):
+            return {"ok": False, "reason": res.get("reason", "Failed to decode input.")}
+
+        templates = res.get("templates", {})
+        if not templates:
+            return {"ok": False, "reason": "No valid templates found in code/URL."}
+
+        imported_names = []
+        for tname, blocks in templates.items():
+            saved = tpl.save_template(tname, blocks)
+            imported_names.append(saved)
+
+        self.push_log(f"Imported {len(imported_names)} template(s) via Share Code: {', '.join(imported_names)}")
+        return {"ok": True, "count": len(imported_names), "templates": imported_names}
+
+    def preview_template_code(self, code_str: str) -> dict:
+        return share.preview_template_code(code_str)
+
+    def read_clipboard_text(self) -> dict:
+        try:
+            import win32clipboard
+            win32clipboard.OpenClipboard()
+            text = win32clipboard.GetClipboardData()
+            win32clipboard.CloseClipboard()
+            return {"ok": True, "text": text or ""}
+        except Exception:
+            try:
+                import tkinter as tk
+                root = tk.Tk()
+                root.withdraw()
+                text = root.clipboard_get()
+                root.destroy()
+                return {"ok": True, "text": text or ""}
+            except Exception as e:
+                return {"ok": False, "text": "", "reason": str(e)}
 
     def get_webhook_settings(self) -> dict:
         data = cfg.load()
