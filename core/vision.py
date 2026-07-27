@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 import time
+from collections import OrderedDict
 
 import cv2
 import numpy as np
@@ -138,7 +139,35 @@ class TemplateNotFound(Exception):
     <template_dir>/<name>.png file."""
 
 
-_template_cache = {}
+MAX_TEMPLATE_CACHE_SIZE = 128
+
+
+class TemplateCache(OrderedDict):
+    """LRU cache bounded to MAX_TEMPLATE_CACHE_SIZE entries to prevent memory leaks."""
+
+    def __init__(self, maxsize: int = MAX_TEMPLATE_CACHE_SIZE, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.maxsize = maxsize
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.maxsize:
+            self.popitem(last=False)
+
+    def get(self, key, default=None):
+        if key in self:
+            return self[key]
+        return default
+
+
+_template_cache = TemplateCache(MAX_TEMPLATE_CACHE_SIZE)
 
 
 def template_variant_paths(name: str, template_dir: str = UI_ASSETS_DIR) -> list:
