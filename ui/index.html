@@ -855,12 +855,51 @@
                full-window screenshot to debug/ EVERY time, which adds up
                fast over a real run. Turn it on only while you're actively
                diagnosing a bad match. -->
-          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+          <div class="setting-row" style="padding: 14px;">
             <div>
               <div class="setting-label">Debug Match Screenshots</div>
               <div class="setting-desc">Save a screenshot every time the macro finds something while running. Off by default -- gets spammy fast.</div>
             </div>
             <button id="toggle-debug-screenshots" class="toggle-switch" onclick="toggleSetting('debug_screenshots', this)"></button>
+          </div>
+
+          <!-- These three decide HOW the game gets captured, which is what
+               this panel is for. They used to sit under "Expedition Wave
+               Check", where someone hitting a black/blank capture would never
+               think to look -- the Hardware Capture Fix below is the
+               documented answer to exactly that symptom. -->
+          <!-- Windows only, applies at next launch: capture the game via
+               PrintWindow instead of a screen BitBlt, which flashes the
+               display white on some GPU setups. Default on. -->
+          <div class="setting-row" style="padding: 14px;" data-win-only>
+            <div>
+              <div class="setting-label">Flicker-Free Capture</div>
+              <div class="setting-desc">Read the game from its own window instead of grabbing the screen -- stops the white screen-flashing some setups get while the macro runs. Leave this on unless image detection stops working, then turn it off and restart. Applies after restarting the macro.</div>
+            </div>
+            <button id="toggle-flicker-free" class="toggle-switch" onclick="toggleSetting('flicker_free_capture', this)"></button>
+          </div>
+
+          <!-- Windows-only, applies at next launch: Roblox glued BEHIND a
+               literal hole cut in the GUI over the game slot instead of
+               being reparented inside it -- see core/dock.py's cutout notes. -->
+          <div class="setting-row" style="padding: 14px;" data-win-only>
+            <div>
+              <div class="setting-label">Game Cutout Mode (experimental)</div>
+              <div class="setting-desc">Show Roblox through a cutout in the macro window instead of embedding it inside. Gentler on the game window and modals can never be covered. Applies after restarting the macro.</div>
+            </div>
+            <button id="toggle-game-cutout" class="toggle-switch" onclick="toggleSetting('game_cutout', this)"></button>
+          </div>
+
+          <!-- Windows-only, applies at next launch: Windows.Graphics.Capture
+               backend for setups where the game captures fully black -- see
+               core/wgc_capture.py. Forces cutout mode (needs the game
+               top-level to find it by title). -->
+          <div class="setting-row" style="padding: 14px; border-bottom: none;" data-win-only>
+            <div>
+              <div class="setting-label">Hardware Capture Fix (Windows.Graphics.Capture)</div>
+              <div class="setting-desc">Turn this on only if image detection fails on a black/blank game (common with NVIDIA GPU scheduling or fullscreen optimizations) even with Flicker-Free Capture off. Reads the game a different way that survives those setups. Also turns on Game Cutout Mode, since it needs Roblox as its own window. Applies after restarting the macro.</div>
+            </div>
+            <button id="toggle-wgc-capture" class="toggle-switch" onclick="toggleSetting('use_wgc_capture', this)"></button>
           </div>
         </section>
       </div>
@@ -916,40 +955,6 @@
                off-center Continue means Extract is offered at the mirrored
                position -- fast, template-free) vs the original per-image
                template searches. See core/runner.py's EXP_COLOR_* block. -->
-          <!-- Windows only, applies at next launch: capture the game via
-               PrintWindow instead of a screen BitBlt, which flashes the
-               display white on some GPU setups. Default on. -->
-          <div class="setting-row" style="padding: 14px;" data-win-only>
-            <div>
-              <div class="setting-label">Flicker-Free Capture</div>
-              <div class="setting-desc">Read the game from its own window instead of grabbing the screen -- stops the white screen-flashing some setups get while the macro runs. Leave this on unless image detection stops working, then turn it off and restart. Applies after restarting the macro.</div>
-            </div>
-            <button id="toggle-flicker-free" class="toggle-switch" onclick="toggleSetting('flicker_free_capture', this)"></button>
-          </div>
-
-          <!-- Windows-only, applies at next launch: Roblox glued BEHIND a
-               literal hole cut in the GUI over the game slot instead of
-               being reparented inside it -- see core/dock.py's cutout notes. -->
-          <div class="setting-row" style="padding: 14px;" data-win-only>
-            <div>
-              <div class="setting-label">Game Cutout Mode (experimental)</div>
-              <div class="setting-desc">Show Roblox through a cutout in the macro window instead of embedding it inside. Gentler on the game window and modals can never be covered. Applies after restarting the macro.</div>
-            </div>
-            <button id="toggle-game-cutout" class="toggle-switch" onclick="toggleSetting('game_cutout', this)"></button>
-          </div>
-
-          <!-- Windows-only, applies at next launch: Windows.Graphics.Capture
-               backend for setups where the game captures fully black -- see
-               core/wgc_capture.py. Forces cutout mode (needs the game
-               top-level to find it by title). -->
-          <div class="setting-row" style="padding: 14px;" data-win-only>
-            <div>
-              <div class="setting-label">Hardware Capture Fix (Windows.Graphics.Capture)</div>
-              <div class="setting-desc">Turn this on only if image detection fails on a black/blank game (common with NVIDIA GPU scheduling or fullscreen optimizations) even with Flicker-Free Capture off. Reads the game a different way that survives those setups. Also turns on Game Cutout Mode, since it needs Roblox as its own window. Applies after restarting the macro.</div>
-            </div>
-            <button id="toggle-wgc-capture" class="toggle-switch" onclick="toggleSetting('use_wgc_capture', this)"></button>
-          </div>
-
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
             <div>
               <div class="setting-label">Expedition Color Detection</div>
@@ -974,17 +979,6 @@
             <button id="btn-wave-monitor" onclick="openWaveMonitor(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--teal); border-color: var(--border);">Open Monitor</button>
           </div>
 
-          <!-- Manually fires the same deep-link rejoin a real disconnect
-               triggers -- resets Roblox back to the lobby on demand, so
-               testing a code change doesn't mean alt-tabbing over and
-               closing/reopening Roblox by hand every time. -->
-          <div class="setting-row" style="padding: 14px; border-bottom: none;">
-            <div>
-              <div class="setting-label">Force Rejoin</div>
-              <div class="setting-desc">Relaunches Roblox straight back into the lobby via the same deep link a real disconnect uses -- handy for resetting between test runs.</div>
-            </div>
-            <button id="btn-debug-force-rejoin" onclick="forceRejoin(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);">Rejoin Now</button>
-          </div>
         </section>
       </div>
 
@@ -1047,7 +1041,7 @@
             </div>
             <input id="story-scroll-power" type="number" min="1" max="10" step="1"
                    class="block-input" style="width: 60px;"
-                   onchange="pywebview.api.set_setting('story_scroll_power', parseInt(this.value) || 1)">
+                   onchange="saveStoryScrollPower(this)">
           </div>
 
           <div class="setting-row" style="padding: 14px; border-bottom: none;">
@@ -1057,7 +1051,7 @@
             </div>
             <input id="story-scroll-nudges" type="number" min="1" max="30" step="1"
                    class="block-input" style="width: 60px;"
-                   onchange="pywebview.api.set_setting('story_scroll_nudges', parseInt(this.value) || 1)">
+                   onchange="saveStoryScrollNudges(this)">
           </div>
         </section>
       </div>
@@ -1086,12 +1080,26 @@
             <button id="btn-attach-roblox" onclick="attachSelectedRoblox(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Attach</button>
           </div>
 
-          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+          <div class="setting-row" style="padding: 14px;">
             <div>
               <div class="setting-label">Un-Attach Roblox</div>
               <div class="setting-desc">Detach the currently docked Roblox window from the macro window.</div>
             </div>
             <button id="btn-unattach-roblox" onclick="unattachRoblox(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);">Un-Attach</button>
+          </div>
+
+          <!-- Manually fires the same deep-link rejoin a real disconnect
+               triggers -- resets Roblox back to the lobby on demand, so
+               testing a code change doesn't mean alt-tabbing over and
+               closing/reopening Roblox by hand every time. Belongs with the
+               other Roblox-window controls, not under "Expedition Wave
+               Check" where it used to sit. -->
+          <div class="setting-row" style="padding: 14px; border-bottom: none;">
+            <div>
+              <div class="setting-label">Force Rejoin</div>
+              <div class="setting-desc">Relaunches Roblox straight back into the lobby via the same deep link a real disconnect uses -- handy for resetting between test runs.</div>
+            </div>
+            <button id="btn-debug-force-rejoin" onclick="forceRejoin(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--rose); border-color: var(--border);">Rejoin Now</button>
           </div>
         </section>
       </div>

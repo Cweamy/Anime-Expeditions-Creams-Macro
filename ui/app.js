@@ -1006,7 +1006,13 @@ async function loadSettingsUI() {
     updateKeybindDisplay('debug_screenshot', hk.debug_screenshot || '');
     updateKeybindDisplay('image_manager', hk.image_manager || '');
     updateKeybindDisplay('toggle_compact', hk.toggle_compact || '');
-    updateDashboardHotkeys(hk);
+    // (There was an updateDashboardHotkeys(hk) call here. No such function has
+    // ever existed in this file, so every load of Settings threw a
+    // ReferenceError that this bare catch swallowed. Nothing broke visibly
+    // because updateKeybindDisplay already syncs the Dashboard's Start/Stop/
+    // Pause key badges -- see the dashboardKeyEl lookup inside it -- but the
+    // catch meant anything appended after that line would also have silently
+    // never run.)
   } catch (e) {}
   try {
     const r = await pywebview.api.get_reward_region();
@@ -1491,6 +1497,29 @@ async function exportFailureReport(btn) {
 // Settings > Debug > "Expedition Camera Zoom" -- how long O is held during
 // Expedition's Pre Start camera setup. Saved through the generic
 // set_setting; the runner reads it at the next Start.
+// Settings > Debug > Story Map Search. Clamped in JS, like every other
+// numeric setting here (saveActionDelay, saveExpeditionOZoom) -- the min/max
+// attributes on a number input do NOT constrain a typed or pasted value.
+// They mark it :invalid and set validity.rangeOverflow, but .value still
+// reads whatever was typed and nothing in this app calls checkValidity().
+//
+// It matters because the consumer only bounds these from below:
+// stage_select.find_and_click_map does max(1, scroll_power) and
+// max(0, scroll_nudges), then loops `for nudge in range(scroll_nudges + 1)`
+// across MAX_PASSES with an image search each time. A typo'd 9999 turns a
+// map lookup into roughly fifteen minutes of a run that just looks hung.
+async function saveStoryScrollPower(el) {
+  const n = Math.max(1, Math.min(10, parseInt(el.value, 10) || 1));
+  el.value = n;
+  try { await pywebview.api.set_setting('story_scroll_power', n); } catch (e) {}
+}
+
+async function saveStoryScrollNudges(el) {
+  const n = Math.max(1, Math.min(30, parseInt(el.value, 10) || 1));
+  el.value = n;
+  try { await pywebview.api.set_setting('story_scroll_nudges', n); } catch (e) {}
+}
+
 async function saveExpeditionOZoom(el) {
   const ms = Math.max(0, Math.min(3000, parseInt(el.value, 10) || 0));
   el.value = ms;
@@ -1606,9 +1635,21 @@ async function runTestPath(btn) {
 
 async function stopTestPath(btn) {
   try { await pywebview.api.stop_test_path(); } catch (e) {}
-  btn.style.display = 'none';
-  document.getElementById('btn-test-path').style.display = '';
+  showTestPathIdle();
 }
+
+// Restores the Run/Stop pair to its idle state. Called both by the Stop button
+// and by Python when the replay ends on its own (see debug_test_path's
+// finally: push_ui("testPathFinished")) -- previously only the former existed,
+// so a walk that simply finished left Stop showing for the rest of the session.
+function showTestPathIdle() {
+  const stop = document.getElementById('btn-stop-test-path');
+  const run = document.getElementById('btn-test-path');
+  if (stop) stop.style.display = 'none';
+  if (run) { run.style.display = ''; run.disabled = false; run.textContent = 'Run'; }
+}
+
+window.testPathFinished = showTestPathIdle;
 
 async function loadWebhookUI() {
   try {
@@ -1905,12 +1946,26 @@ async function importTasks() {
     return;
   }
   const data = result.data || {};
+  // importSettings/importTemplates both check what kind of file this is before
+  // trusting its contents; this one only ever checked for a `tasks` array, so
+  // any JSON with that key was accepted as a task export.
+  if (data.kind && data.kind !== 'anime-expeditions-tasks') {
+    addLog('[Task] Import failed: that file is not a task export.');
+    return;
+  }
   if (!Array.isArray(data.tasks)) { addLog('[Task] Import failed: that file is not a task export.'); return; }
   let tplAdded = 0;
   try {
     const existing = await pywebview.api.list_templates();
     for (const [name, t] of Object.entries(data.templates || {})) {
-      if (existing.includes(name) || !t || !Array.isArray(t.blocks)) continue;
+      // `t.blocks` is an OBJECT ({team, equipment, prestart, battle}) for every
+      // template saved since Pre Start/Battle phases existed -- Array.isArray
+      // is only true for the oldest flat-list format, so this silently dropped
+      // every modern template. exportTasks bundles them precisely so a shared
+      // queue does not arrive pointing at macros the recipient does not have,
+      // and the whole point was being lost with no message. importTemplates
+      // (same file) has always used the `!= null` form.
+      if (existing.includes(name) || !t || t.blocks == null) continue;
       try { await pywebview.api.save_template(name, t.blocks); tplAdded++; } catch (e) {}
     }
   } catch (e) {}
@@ -2695,11 +2750,23 @@ function removeBlock(id) {
   }
   const el = document.querySelector(`#creation-phases .block-row[data-id="${id}"]`);
   const drop = () => {
-    creationPhases[loc.phase].splice(loc.idx, 1);
+    // Re-resolve by id rather than reusing loc.idx from 180ms ago. The row
+    // stays in the DOM for the whole exit animation -- that is the point of
+    // the delay -- so its X button is still clickable, and any other removal
+    // in that window shifts every index after it. With the stale index this
+    // deleted whichever block had moved into that slot: double-clicking one
+    // block's X destroyed the block after it too, and removing two blocks
+    // quickly removed one the user never touched. The sibling removeTaskCard
+    // already filters by id for exactly this reason.
+    const cur = findBlockLocation(id);
+    if (!cur) return;                       // already gone -- nothing to do
+    creationPhases[cur.phase].splice(cur.idx, 1);
     renderPhases();
   };
-  // Let the exit animation play before the row actually disappears.
-  if (el) { el.classList.add('removing'); setTimeout(drop, 170); } else drop();
+  // Let the exit animation play before the row actually disappears. 180ms is
+  // the .block-row opacity/transform transition in style.css; it used to be
+  // 170, which cut the fade off 10ms early.
+  if (el) { el.classList.add('removing'); setTimeout(drop, 180); } else drop();
 }
 
 // Duplicates a block right below itself, params and modifiers included --
