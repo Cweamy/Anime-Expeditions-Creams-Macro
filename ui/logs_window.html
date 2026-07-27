@@ -21,47 +21,28 @@
     <div id="log-list" class="rp-log-list overflow-y-auto font-mono font-medium text-[11px] p-2 space-y-0.5"
          style="color: var(--text-dim);">
     </div>
+    <!-- Same jump-to-newest pill the dashboard log has -- this window is the
+         one people actually leave open to watch a run, so following-only-
+         while-at-the-bottom matters more here, not less. -->
+    <button id="log-jump" class="log-jump" onclick="jumpLogToLatest()" title="Jump to the newest line">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"/>
+      </svg>
+      <span id="log-jump-count">0</span> new
+    </button>
   </section>
 
+  <!-- addLog/renderLogLine/the line cap/the scroll behaviour are shared with
+       the dashboard (ui/index.html loads the same file). This page has no
+       js_api of its own -- Python pushes lines straight into window.addLog
+       via evaluate_js (see Api.push_log / Api.pop_out_logs in main.py). -->
+  <script src="log_view.js"></script>
   <script>
-    // Standalone copy of the logic in ui/app.js: this page has no js_api of
-    // its own, Python pushes lines into it directly via evaluate_js (see
-    // Api.push_log / Api.pop_out_logs in main.py).
-    const LOG_TAG_COLORS = ['var(--brand)', 'var(--teal)', 'var(--amber)', 'var(--lilac)', 'var(--rose)', 'var(--slate)'];
-
-    function logTagColor(tag) {
-      let h = 0;
-      for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
-      return LOG_TAG_COLORS[h % LOG_TAG_COLORS.length];
-    }
-
-    function renderLogLine(div, line) {
-      const match = /^\[([^\]]+)\](.*)$/.exec(line);
-      div.appendChild(document.createTextNode('> '));
-      if (match) {
-        div.style.setProperty('--cat', logTagColor(match[1]));
-        const tag = document.createElement('span');
-        tag.className = 'log-tag';
-        tag.textContent = `[${match[1]}]`;
-        div.appendChild(tag);
-        div.appendChild(document.createTextNode(match[2]));
-      } else {
-        div.appendChild(document.createTextNode(line));
-      }
-    }
-
-    function addLog(line) {
-      const list = document.getElementById('log-list');
-      const div = document.createElement('div');
-      div.className = 'log-entry';
-      renderLogLine(div, line);
-      list.appendChild(div);
-      while (list.childElementCount > 400) list.removeChild(list.firstElementChild);
-      list.scrollTop = list.scrollHeight;
-    }
-
+    // Only the part that differs from the dashboard: there, Clear also tells
+    // Python to drop its history buffer; here it just empties this view.
     function clearLogs() {
-      document.getElementById('log-list').innerHTML = '';
+      clearLogView();
     }
   </script>
 </body>

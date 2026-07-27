@@ -373,7 +373,10 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 /* rp-panel variant that stretches to fill its column (used by Process Log,
    which -- unlike the fixed-height stat panels -- needs to grow and scroll
    internally) instead of sizing to its natural content height. */
-.rp-panel-fill { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* position: relative so the log's floating "N new" pill (.log-jump) anchors
+   to the panel rather than the page. No layout effect on the other panels
+   that use this variant. */
+.rp-panel-fill { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
 .rp-panel-fill .rp-panel-head { flex-shrink: 0; }
 /* Everything else in the app is user-select: none (see body rule) so button/
    label clicks don't fight text selection -- the log list is the one place
@@ -411,6 +414,47 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   color: var(--text);
 }
 .log-tag { color: var(--cat); font-weight: 700; }
+
+/* ---- "N new" jump-to-newest pill (see ui/log_view.js) ----
+   The log only follows the newest line while you are already at the bottom,
+   so once you scroll up to read something this is what says lines are still
+   coming in. Floats over the bottom of the list rather than sitting in the
+   panel header: it has to be where your eye already is (the newest end of
+   the text) and it must not take layout space, or every log panel would
+   reserve a strip for a control that is usually hidden.
+   .rp-panel-fill carries position: relative so this anchors to the panel;
+   the panel's own overflow: hidden keeps it clipped to the rounded corners. */
+.log-jump {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translate(-50%, 8px);
+  display: none;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  z-index: 5;
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 20%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--brand) 55%, var(--border));
+  box-shadow: 0 4px 14px -4px color-mix(in srgb, var(--bg-deep) 80%, black),
+              0 0 10px -3px color-mix(in srgb, var(--brand) 55%, transparent);
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s, border-color 0.15s;
+}
+.log-jump.show { display: flex; opacity: 1; transform: translate(-50%, 0); }
+.log-jump:hover {
+  background: color-mix(in srgb, var(--brand) 32%, var(--bg-card));
+  border-color: var(--brand);
+}
+.log-jump:active { transform: translate(-50%, 1px) scale(0.96); }
+.log-jump svg { width: 11px; height: 11px; flex-shrink: 0; }
+.log-jump span { font-variant-numeric: tabular-nums; }
 
 /* ---- Run history (Dashboard right rail) ----
    --rh is set per row from the run's result: teal for a win, rose for a loss. */

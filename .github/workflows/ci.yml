@@ -48,7 +48,13 @@ jobs:
 
       - name: Syntax-check the frontend
         shell: bash
-        run: node --check ui/app.js
+        # Every ui/*.js, not just app.js -- the log view lives in its own file
+        # now (ui/log_view.js, shared with the popped-out log window), and a
+        # named-file check silently stops covering the frontend the moment one
+        # is added.
+        run: |
+          set -e
+          for f in ui/*.js; do node --check "$f"; done
 
       - name: Post to Discord git log
         # Only for actual pushes to main, not PRs (a fork's PR run has no
