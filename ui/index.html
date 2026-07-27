@@ -178,15 +178,27 @@
       </div>
       <div class="text-xs font-medium" style="color: var(--text-muted); margin-top: 4px;">Launch Roblox, it'll dock in automatically</div>
 
-      <button onclick="skipWaiting()" class="loading-skip-btn flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full border transition"
-              style="color: var(--text-dim); border-color: var(--border); background: var(--bg-surface); margin-top: 16px;"
-              onmouseover="this.style.borderColor='var(--brand)'; this.style.color='var(--text)';"
-              onmouseout="this.style.borderColor='var(--border)'; this.style.color='var(--text-dim)';">
-        Skip
-        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M5 5l7 7-7 7M15 5l7 7-7 7"/>
-        </svg>
-      </button>
+      <div class="flex items-center gap-2" style="margin-top: 16px;">
+        <button onclick="launchRoblox()" class="loading-skip-btn flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full border transition"
+                style="color: var(--brand); border-color: var(--brand); background: rgba(255, 255, 255, 0.05);"
+                onmouseover="this.style.background='var(--brand)'; this.style.color='#000';"
+                onmouseout="this.style.background='rgba(255, 255, 255, 0.05)'; this.style.color='var(--brand)';">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Launch Roblox
+        </button>
+
+        <button onclick="skipWaiting()" class="loading-skip-btn flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full border transition"
+                style="color: var(--text-dim); border-color: var(--border); background: var(--bg-surface);"
+                onmouseover="this.style.borderColor='var(--brand)'; this.style.color='var(--text)';"
+                onmouseout="this.style.borderColor='var(--border)'; this.style.color='var(--text-dim)';">
+          Skip
+          <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 5l7 7-7 7M15 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
 
       <div id="ver-badge-loading" class="text-[10px] font-semibold" style="color: var(--text-muted); margin-top: 14px; letter-spacing: 0.04em;"></div>
     </div>
