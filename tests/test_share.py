@@ -147,7 +147,7 @@ def test_all_real_templates_lossless_roundtrip(tmp_path, monkeypatch):
 
     # 2. Export all via Api
     api_orig = main.Api()
-    exp_res = api_orig.export_template_code(name=None)
+    exp_res = api_orig.export_template_code(names=None)
     assert exp_res["ok"] is True
     assert exp_res["count"] == len(orig_files)
     code = exp_res["code"]
@@ -169,4 +169,28 @@ def test_all_real_templates_lossless_roundtrip(tmp_path, monkeypatch):
             imported_json = json.load(f)
 
         assert imported_json == expected_json, f"Mismatch in {fname} after roundtrip!"
+
+
+def test_export_custom_selected_templates_list(tmp_path, monkeypatch):
+    import main
+    from core import templates as tpl
+
+    monkeypatch.setattr(tpl, "TEMPLATES_DIR", str(tmp_path))
+    api = main.Api()
+
+    tpl.save_template("T1", [{"type": "walk_path"}])
+    tpl.save_template("T2", [{"type": "place_unit"}])
+    tpl.save_template("T3", [{"type": "upgrade_unit"}])
+
+    # Export specific subset [T1, T3]
+    exp = api.export_template_code(names=["T1", "T3"])
+    assert exp["ok"] is True
+    assert exp["count"] == 2
+
+    # Decode and check contents
+    decoded = share.decode_template_code(exp["code"])
+    assert decoded["ok"] is True
+    assert "T1" in decoded["templates"]
+    assert "T3" in decoded["templates"]
+    assert "T2" not in decoded["templates"]
 

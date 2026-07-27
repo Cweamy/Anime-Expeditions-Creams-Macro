@@ -1781,15 +1781,31 @@
 
         <!-- Export Tab Content -->
         <div id="share-content-export" style="display: flex; flex-direction: column; gap: 10px;">
-          <div style="font-size: 11px; color: var(--text-dim);">Select what you want to share:</div>
-          <div class="flex items-center gap-4">
+          <div style="font-size: 11px; color: var(--text-dim);">Select templates to include in share code:</div>
+          <div class="flex items-center gap-4 flex-wrap">
             <label style="font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
-              <input type="radio" name="share-export-scope" value="single" checked onchange="updateExportCode()"> Current Template
+              <input type="radio" name="share-export-scope" value="single" checked onchange="onExportScopeChange()"> Current Template
             </label>
             <label style="font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
-              <input type="radio" name="share-export-scope" value="all" onchange="updateExportCode()"> All Templates (Pack)
+              <input type="radio" name="share-export-scope" value="custom" onchange="onExportScopeChange()"> Select Templates
+            </label>
+            <label style="font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+              <input type="radio" name="share-export-scope" value="all" onchange="onExportScopeChange()"> All Templates
             </label>
           </div>
+
+          <!-- Template Checklist Box -->
+          <div id="share-export-checklist-box" style="display: none; flex-direction: column; gap: 6px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px; max-height: 110px; overflow-y: auto;">
+            <div class="flex items-center justify-between" style="border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-bottom: 4px;">
+              <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Check templates to share:</span>
+              <div class="flex items-center gap-2">
+                <button type="button" class="task-toolbar-btn" style="font-size: 10px; padding: 1px 6px;" onclick="toggleExportAllCheckboxes(true)">Select All</button>
+                <button type="button" class="task-toolbar-btn" style="font-size: 10px; padding: 1px 6px;" onclick="toggleExportAllCheckboxes(false)">Clear</button>
+              </div>
+            </div>
+            <div id="share-export-checklist-items" style="display: flex; flex-direction: column; gap: 4px;"></div>
+          </div>
+
           <textarea id="share-export-code-output" readonly rows="4" style="width: 100%; font-family: monospace; font-size: 11px; padding: 8px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; resize: none;" placeholder="Generating code..."></textarea>
           <div class="flex items-center gap-2" style="justify-content: space-between;">
             <span id="share-export-size-info" style="font-size: 11px; color: var(--text-muted);">Size: 0 chars</span>

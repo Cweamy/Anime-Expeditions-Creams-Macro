@@ -4946,6 +4946,44 @@ async function updateImportPreview() {
   }
 }
 
+async function onExportScopeChange() {
+  const selectedScope = document.querySelector('input[name="share-export-scope"]:checked');
+  const scope = selectedScope ? selectedScope.value : 'single';
+  const box = document.getElementById('share-export-checklist-box');
+  const itemsContainer = document.getElementById('share-export-checklist-items');
+
+  if (scope === 'custom') {
+    if (box) box.style.display = 'flex';
+    if (itemsContainer) {
+      itemsContainer.innerHTML = 'Loading templates...';
+      try {
+        const names = await pywebview.api.list_templates();
+        if (names.length === 0) {
+          itemsContainer.innerHTML = '<span style="font-size: 11px; color: var(--text-muted);">No saved templates found.</span>';
+        } else {
+          itemsContainer.innerHTML = names.map(name =>
+            `<label style="font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 2px 0;">` +
+              `<input type="checkbox" class="share-export-check" value="${name}" checked onchange="updateExportCode()">` +
+              `<span>📄 ${name}</span>` +
+            `</label>`
+          ).join('');
+        }
+      } catch (e) {
+        itemsContainer.innerHTML = '<span style="font-size: 11px; color: var(--rose);">Error loading templates.</span>';
+      }
+    }
+  } else {
+    if (box) box.style.display = 'none';
+  }
+  updateExportCode();
+}
+
+function toggleExportAllCheckboxes(check) {
+  const checkboxes = document.querySelectorAll('.share-export-check');
+  checkboxes.forEach(cb => { cb.checked = check; });
+  updateExportCode();
+}
+
 async function updateExportCode() {
   const outputEl = document.getElementById('share-export-code-output');
   const sizeEl = document.getElementById('share-export-size-info');
@@ -4955,15 +4993,25 @@ async function updateExportCode() {
   const selectedScope = document.querySelector('input[name="share-export-scope"]:checked');
   const scope = selectedScope ? selectedScope.value : 'single';
 
-  let tName = null;
+  let targetNames = null;
   if (scope === 'single') {
     const inputName = (document.getElementById('template-name')?.value || '').trim();
     const selectName = document.getElementById('template-select')?.value || '';
-    tName = inputName || selectName || null;
+    targetNames = inputName || selectName || null;
+  } else if (scope === 'custom') {
+    const checked = Array.from(document.querySelectorAll('.share-export-check:checked')).map(cb => cb.value);
+    targetNames = checked;
+    if (checked.length === 0) {
+      outputEl.value = 'Please select at least one template.';
+      if (sizeEl) sizeEl.textContent = 'Size: 0 chars (0 templates)';
+      return;
+    }
+  } else {
+    targetNames = null; // all
   }
 
   try {
-    const res = await pywebview.api.export_template_code(tName);
+    const res = await pywebview.api.export_template_code(targetNames);
     if (res && res.ok && res.code) {
       outputEl.value = res.code;
       if (sizeEl) sizeEl.textContent = `Size: ${res.code.length} chars (${res.count} template(s))`;

@@ -1107,24 +1107,49 @@ class Api:
             self.push_log(f"Deleted template '{name}'.")
         return {"ok": ok}
 
-    def export_template_code(self, name: str = None) -> dict:
-        if name and name.strip():
-            single_tpl = tpl.load_template(name)
-            blocks = single_tpl.get("blocks", [])
+    def export_template_code(self, names=None) -> dict:
+        if isinstance(names, str) and names.strip():
+            single_tpl = tpl.load_template(names)
+            blocks = single_tpl.get("blocks", {})
             payload = {
                 "kind": "anime-expeditions-template",
                 "version": 1,
-                "name": name,
+                "name": names,
                 "blocks": blocks,
             }
             code = share.encode_template_code(payload)
             return {"ok": True, "code": code, "count": 1}
+        elif isinstance(names, list) and len(names) > 0:
+            if len(names) == 1:
+                t_name = names[0]
+                single_tpl = tpl.load_template(t_name)
+                blocks = single_tpl.get("blocks", {})
+                payload = {
+                    "kind": "anime-expeditions-template",
+                    "version": 1,
+                    "name": t_name,
+                    "blocks": blocks,
+                }
+                code = share.encode_template_code(payload)
+                return {"ok": True, "code": code, "count": 1}
+            else:
+                templates = {}
+                for t_name in names:
+                    loaded = tpl.load_template(t_name)
+                    templates[t_name] = loaded.get("blocks", {})
+                payload = {
+                    "kind": "anime-expeditions-template-pack",
+                    "version": 1,
+                    "templates": templates,
+                }
+                code = share.encode_template_code(payload)
+                return {"ok": True, "code": code, "count": len(templates)}
         else:
             all_names = tpl.list_templates()
             templates = {}
             for t_name in all_names:
                 loaded = tpl.load_template(t_name)
-                templates[t_name] = loaded.get("blocks", [])
+                templates[t_name] = loaded.get("blocks", {})
             payload = {
                 "kind": "anime-expeditions-template-pack",
                 "version": 1,
