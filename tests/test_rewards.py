@@ -31,7 +31,11 @@ def test_detect_icon_cells_synthetic():
 
 
 def test_scrollbar_constants():
+    from core import constants
     assert isinstance(rewards.SCROLLBAR_PROBE, tuple)
     assert len(rewards.SCROLLBAR_PROBE) == 4
     assert rewards.SCROLLBAR_COLOR == 0x373737
     assert rewards.SCROLLBAR_TOLERANCE == 1
+    assert rewards.SCROLLBAR_PROBE == constants.REWARD_SCROLLBAR_PROBE
+    assert rewards.SCROLLBAR_COLOR == constants.REWARD_SCROLLBAR_COLOR
+
