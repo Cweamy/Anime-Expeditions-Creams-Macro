@@ -186,13 +186,16 @@ def test_launch_helper_starts_the_helper_with_that_env(monkeypatch):
     assert "_PYI_APPLICATION_HOME_DIR" not in seen["env"]
 
 
-def test_helper_waits_before_force_killing_the_app(tmp_path, monkeypatch):
-    """taskkill is a safety net for a hung shutdown, not the normal path.
+def test_helper_waits_for_the_app_before_force_killing_it(tmp_path, monkeypatch):
+    """taskkill is the safety net for a hung shutdown, not the normal path.
 
-    main.Api.apply_update schedules close_window() at +0.4s; without a wait
-    here taskkill was measured firing at +0.28s, so close_window -- which
-    un-parents the docked Roblox window, persists all-time stats and closes
-    the capture/log handles -- never ran at all on a frozen build.
+    main.Api.apply_update schedules close_window() at +0.4s; the helper used
+    to force-kill at a measured +0.28s, so close_window -- which un-parents
+    the docked Roblox window, persists all-time stats and closes the
+    capture/log handles -- never ran at all on a frozen build. A fixed grace
+    period is not enough either: the real build takes seconds to tear down,
+    so the helper has to poll for the app to go and only force it if it
+    genuinely hangs.
     """
     from core import updater
 
@@ -204,7 +207,10 @@ def test_helper_waits_before_force_killing_the_app(tmp_path, monkeypatch):
     with open(updater.stage_exe_update(fake_exe + ".update"), encoding="utf-8") as f:
         content = f.read()
 
-    wait = content.index("ping -n 3 127.0.0.1 >nul")
-    force_kill = content.index('taskkill /F /IM "MacroApp.exe"')
-    assert wait < force_kill, (
-        "the helper force-kills the app before close_window gets a chance to run")
+    kills = [i for i in range(len(content))
+             if content.startswith('taskkill /F /IM "MacroApp.exe"', i)]
+    assert kills, "the helper still needs a force-kill for a shutdown that hangs"
+    assert content.index(":waitloop") < kills[0], (
+        "the helper force-kills the app before waiting for it to close itself")
+    assert content.index("goto closeditself") < kills[0], (
+        "the wait loop must be able to finish without ever force-killing")
