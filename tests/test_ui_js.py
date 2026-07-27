@@ -198,6 +198,53 @@ def test_import_tasks_still_accepts_an_export_without_a_kind_field(tmp_path):
     assert out["cards"] == 1
 
 
+@pytest.mark.parametrize(
+    "replace_existing, expected_saved, expected_opened",
+    [
+        (True, ["Farm", "New Farm"], ["Farm"]),
+        (False, ["New Farm"], ["New Farm"]),
+    ],
+)
+def test_macro_manager_import_handles_existing_names_and_opens_import(
+        replace_existing, expected_saved, expected_opened, tmp_path):
+    data = {
+        "kind": "anime-expeditions-templates",
+        "templates": {
+            "Farm": {"name": "Farm", "blocks": {"prestart": [], "battle": [{"type": "wait_ms"}]}},
+            "New Farm": {"name": "New Farm", "blocks": {"prestart": [], "battle": []}},
+        },
+    }
+    out = run_js(f"""
+        const w = new Function('data', `
+          const saved = []; const opened = []; const logs = [];
+          const templateSelect = {{ value: '' }};
+          function addLog(message) {{ logs.push(message); }}
+          function confirm() {{ return {str(replace_existing).lower()}; }}
+          const document = {{ getElementById: () => templateSelect }};
+          async function refreshTemplateList() {{}}
+          async function loadSelectedTemplate() {{ opened.push(templateSelect.value); }}
+          const pywebview = {{ api: {{
+            import_tasks_file: async () => ({{ ok: true, data }}),
+            list_templates: async () => ['Farm'],
+            save_template: async name => {{ saved.push(name); return {{ ok: true }}; }},
+          }} }};
+          ${{extract('importTemplates')}}
+          return {{ importTemplates, saved, opened, logs }};
+        `)({json.dumps(data)});
+        (async () => {{
+          await w.importTemplates();
+          console.log(JSON.stringify({{ saved: w.saved, opened: w.opened, logs: w.logs }}));
+        }})();
+    """, tmp_path)
+
+    assert out["saved"] == expected_saved
+    assert out["opened"] == expected_opened
+    if replace_existing:
+        assert any("1 replaced" in message for message in out["logs"])
+    else:
+        assert any("kept 1 existing" in message for message in out["logs"])
+
+
 # ---------------------------------------------------------------------------
 # Story Map Search: the min/max attributes do not constrain a typed value
 # ---------------------------------------------------------------------------
