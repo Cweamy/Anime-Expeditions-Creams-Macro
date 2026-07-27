@@ -35,9 +35,48 @@ API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 # purpose -- GitHub rewrites spaces in asset filenames to dots, dashes
 # stay put). The bootstrapper is Windows-only, so always the -Windows zip.
 ZIP_ASSET_NAME = "Creams-Macro-Anime-Expeditions-Windows.zip"
-LOCAL_EXE = os.path.join(APP_DIR, "Creams Macro - Anime Expeditions.exe")
 LOCAL_ZIP = os.path.join(APP_DIR, ".bootstrap_download.zip")
 VERSION_FILE = os.path.join(APP_DIR, ".bootstrap_version")
+
+# The app's own filename is NOT hardcoded. core/updater.py deliberately finds
+# the build by extension "so a future exe rename doesn't silently break
+# updating"; this file used to name it literally, so the same rename would make
+# the bootstrapper extract everything correctly and then report
+# "Couldn't download Cream's Macro" because it was looking for the old name.
+_EXE_HINT = "Creams Macro - Anime Expeditions.exe"   # tried first; just a hint
+
+
+def find_local_exe() -> str:
+    """Path of the installed app exe, preferring the known name and otherwise
+    taking the only .exe next to this bootstrapper. Returns the hinted path
+    when nothing is installed yet, so callers can still use it as the
+    "where it will land" target."""
+    hinted = os.path.join(APP_DIR, _EXE_HINT)
+    if os.path.isfile(hinted):
+        return hinted
+    try:
+        me = os.path.basename(os.path.abspath(sys.argv[0])).lower()
+        found = [f for f in os.listdir(APP_DIR)
+                 if f.lower().endswith(".exe") and f.lower() != me]
+    except OSError:
+        found = []
+    if len(found) == 1:
+        return os.path.join(APP_DIR, found[0])
+    return hinted
+
+
+def _is_inside(root: str, target: str) -> bool:
+    """Whether `target` really resolves to somewhere under `root`.
+
+    Replaces a pattern check that only inspected the FIRST path component
+    (`":" in parts[0]`). os.path.join restarts at any later absolute component,
+    so an entry like "a/b/D:/payload.exe" sailed past that check and landed at
+    "D:payload.exe" -- outside the install entirely. Asking where the path
+    actually ends up cannot be fooled by where the drive letter happens to sit.
+    """
+    root = os.path.realpath(root)
+    target = os.path.realpath(target)
+    return target == root or target.startswith(root + os.sep)
 
 MB_OK = 0x40
 MB_ERROR = 0x10
@@ -101,16 +140,20 @@ def _download_and_extract(url: str) -> bool:
                 # untrusted input, so anything absolute or dotted-out of the
                 # install folder is skipped outright.
                 parts = info.filename.replace("\\", "/").split("/")
-                if not parts or any(p in ("", ".", "..") for p in parts) or ":" in parts[0]:
+                if not parts or any(p in ("", ".", "..") for p in parts):
                     continue
                 dest = os.path.join(APP_DIR, *parts)
+                # Containment is checked on the RESOLVED path, not by pattern
+                # matching -- see _is_inside.
+                if not _is_inside(APP_DIR, dest):
+                    continue
                 is_asset = parts[0].lower() == "assets"
                 if is_asset and os.path.exists(dest):
                     continue  # user's own/edited reference image -- keep it
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with zf.open(info) as src, open(dest, "wb") as out:
                     out.write(src.read())
-        return os.path.exists(LOCAL_EXE)
+        return os.path.isfile(find_local_exe())
     except Exception:
         return False
     finally:
@@ -141,7 +184,7 @@ def ensure_app() -> bool:
     date. Returns True if it's ready to launch, False if there's nothing
     usable at all."""
     latest = _latest_tag()
-    have_exe = os.path.exists(LOCAL_EXE)
+    have_exe = os.path.isfile(find_local_exe())
     # The Assets check matters for installs made by an OLD bootstrapper
     # (which only ever downloaded the bare exe): same tag, but no Assets
     # folder on disk -- re-extracting the zip fills it in without touching
@@ -167,7 +210,7 @@ def main():
         )
         sys.exit(1)
 
-    subprocess.Popen([LOCAL_EXE], cwd=APP_DIR)
+    subprocess.Popen([find_local_exe()], cwd=APP_DIR)
 
 
 if __name__ == "__main__":

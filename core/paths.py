@@ -186,19 +186,77 @@ def load_shipped_default_walk_paths() -> dict:
     return merged
 
 
+def _stored_name(path: str, fallback: str) -> str:
+    """The display name recorded inside a path file, or the filename if it has
+    none (the shipped defaults, hand-dropped files) or won't parse."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get("name") or fallback
+    except (OSError, json.JSONDecodeError):
+        return fallback
+
+
+def _resolve(name: str, directory: str) -> str:
+    """Absolute path of the recording called `name` inside `directory`.
+
+    "<safe name>.json" is tried FIRST -- that is where every recording made
+    before this existed lives, and the shipped defaults are named that way too,
+    so an existing install resolves on the first check exactly as it always
+    did. The directory scan only runs when that file is absent or holds a
+    different display name (the collision case _free_slug creates)."""
+    base = os.path.join(directory, f"{_safe_name(name)}.json")
+    if os.path.isfile(base) and _stored_name(base, _safe_name(name)) == name:
+        return base
+    if os.path.isdir(directory):
+        for fname in sorted(os.listdir(directory)):
+            if not fname.endswith(".json"):
+                continue
+            full = os.path.join(directory, fname)
+            if _stored_name(full, fname[:-5]) == name:
+                return full
+    return base
+
+
+def _free_slug(name: str) -> str:
+    """Filename to record `name` under -- its own slug if free or already
+    hers, otherwise the next "<slug> (n)".
+
+    _safe_name maps several distinct names onto one file ("King's Tomb" and
+    "Kings Tomb" both become "Kings Tomb.json"), so the second recording used
+    to silently destroy the first. Worse here than for templates: load_path
+    treats a missing file as a miss and falls through to the shipped default,
+    so a lost recording doesn't just do nothing -- it walks a different route
+    through the map."""
+    slug = _safe_name(name)
+    candidate, n = slug, 2
+    while True:
+        path = os.path.join(PATHS_DIR, f"{candidate}.json")
+        # A shipped default owns its slug too -- never shadow one with a
+        # different recording under the same filename.
+        shipped = os.path.join(DEFAULT_PATHS_DIR, f"{candidate}.json")
+        taken = ((os.path.isfile(path) and _stored_name(path, candidate) != name)
+                 or (os.path.isfile(shipped) and _stored_name(shipped, candidate) != name))
+        if not taken:
+            return candidate
+        candidate = f"{slug} ({n})"
+        n += 1
+
+
 def list_paths() -> list:
     names = set()
-    if os.path.isdir(DEFAULT_PATHS_DIR):
-        names.update(f[:-5] for f in os.listdir(DEFAULT_PATHS_DIR) if f.endswith(".json"))
-    if os.path.isdir(PATHS_DIR):
-        names.update(f[:-5] for f in os.listdir(PATHS_DIR) if f.endswith(".json"))
+    for directory in (DEFAULT_PATHS_DIR, PATHS_DIR):
+        if not os.path.isdir(directory):
+            continue
+        for fname in os.listdir(directory):
+            if fname.endswith(".json"):
+                names.add(_stored_name(os.path.join(directory, fname), fname[:-5]))
     return sorted(names)
 
 
 def save_path(name: str, events: list) -> str:
-    name = _safe_name(name)
+    name = (name or "").strip() or "path"
     os.makedirs(PATHS_DIR, exist_ok=True)
-    path = os.path.join(PATHS_DIR, f"{name}.json")
+    path = os.path.join(PATHS_DIR, f"{_free_slug(name)}.json")
     # Atomic: an interrupted save must not truncate the recording that was
     # already there. load_path() treats a corrupt file as a miss and falls
     # through to the shipped default, so for a name that ships one the
@@ -209,14 +267,12 @@ def save_path(name: str, events: list) -> str:
 
 
 def load_path(name: str) -> dict:
-    safe = _safe_name(name)
     # Your own recording (Paths/<name>.json) wins if one exists under this
     # name -- only falls back to the shipped default when you haven't
     # recorded your own version of it.
     for directory in (PATHS_DIR, DEFAULT_PATHS_DIR):
-        path = os.path.join(directory, f"{safe}.json")
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(_resolve(name, directory), "r", encoding="utf-8") as f:
                 return json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
