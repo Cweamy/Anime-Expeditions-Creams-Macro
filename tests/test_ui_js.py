@@ -129,7 +129,7 @@ def test_remove_block_still_works_one_at_a_time(tmp_path):
 
 _IMPORT_HARNESS = """
 const world = (data) => new Function('data', `
-  const saved = []; const logs = []; let taskCards = [];
+  const saved = []; const restoredPaths = []; const logs = []; let taskCards = [];
   const enteringTaskIds = new Set();
   function addLog(m) { logs.push(m); }
   function newTaskId() { return 't' + saved.length + Math.random(); }
@@ -139,11 +139,17 @@ const world = (data) => new Function('data', `
   const pywebview = { api: {
     import_tasks_file: async () => ({ ok: true, data }),
     list_templates: async () => [],
+    list_custom_paths: async () => [],
+    save_walk_path: async (name, events) => {
+      restoredPaths.push([name, events]);
+      return { ok: true };
+    },
     save_template: async (n, b) => { saved.push(n); return { ok: true }; },
     save_tasks: async () => ({ ok: true }),
   } };
+  ${extract('importCustomPaths')}
   ${extract('importTasks')}
-  return { importTasks, saved, logs, cards: () => taskCards };
+  return { importTasks, saved, restoredPaths, logs, cards: () => taskCards };
 `)(data);
 """
 
@@ -196,6 +202,119 @@ def test_import_tasks_still_accepts_an_export_without_a_kind_field(tmp_path):
         }})();
     """, tmp_path)
     assert out["cards"] == 1
+
+
+def test_custom_path_transfer_helpers_export_and_restore_referenced_paths(tmp_path):
+    templates = {
+        "Modern": {"blocks": {"prestart": [
+            {"type": "walk_path", "mode": "custom", "pathName": "Boss Route"},
+            {"type": "walk_path", "mode": "auto", "pathName": "Ignore Me"},
+        ], "battle": []}},
+        "Legacy": {"blocks": [
+            {"type": "walk_path", "mode": "custom", "pathName": "Old Route"},
+            {"type": "walk_path", "mode": "custom", "pathName": "Boss Route"},
+        ]},
+    }
+    out = run_js(f"""
+        const w = new Function(`
+          const restored = [];
+          const source = {{
+            'Boss Route': {{ name: 'Boss Route', events: [{{ t: 0, key: 'w', state: 'down' }}] }},
+            'Old Route': {{ name: 'Old Route', events: [{{ t: 0, key: 'a', state: 'down' }}] }},
+          }};
+          const pywebview = {{ api: {{
+            load_walk_path: async name => source[name],
+            list_custom_paths: async () => [],
+            save_walk_path: async (name, events) => {{
+              restored.push([name, events]);
+              return {{ ok: true }};
+            }},
+          }} }};
+          ${{extract('collectCustomPathNames')}}
+          ${{extract('exportCustomPaths')}}
+          ${{extract('importCustomPaths')}}
+          return {{ exportCustomPaths, importCustomPaths, restored }};
+        `)();
+        (async () => {{
+          const bundle = await w.exportCustomPaths({json.dumps(templates)});
+          const added = await w.importCustomPaths(bundle);
+          console.log(JSON.stringify({{ names: Object.keys(bundle).sort(), added, restored: w.restored }}));
+        }})();
+    """, tmp_path)
+
+    assert out["names"] == ["Boss Route", "Old Route"]
+    assert out["added"] == 2
+    assert [entry[0] for entry in out["restored"]] == ["Boss Route", "Old Route"]
+
+
+def test_task_import_restores_bundled_custom_path(tmp_path):
+    data = {
+        "kind": "anime-expeditions-tasks",
+        "version": 2,
+        "tasks": [{"mode": "story", "macro": "Farm"}],
+        "templates": {},
+        "paths": {"Boss Route": {
+            "name": "Boss Route",
+            "events": [{"t": 0, "key": "w", "state": "down"}],
+        }},
+    }
+    out = run_js(_IMPORT_HARNESS + f"""
+        (async () => {{
+          const w = world({json.dumps(data)});
+          await w.importTasks();
+          console.log(JSON.stringify({{ restored: w.restoredPaths }}));
+        }})();
+    """, tmp_path)
+
+    assert out["restored"] == [["Boss Route", data["paths"]["Boss Route"]["events"]]]
+
+
+def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
+    out = run_js("""
+        const w = new Function(`
+          const logs = []; const restored = []; let exported = null;
+          function addLog(message) { logs.push(message); }
+          async function refreshTemplateList() {}
+          const template = { name: 'Farm', blocks: {
+            prestart: [{ type: 'walk_path', mode: 'custom', pathName: 'Boss Route' }],
+            battle: [],
+          }};
+          const route = { name: 'Boss Route', events: [{ t: 0, key: 'w', state: 'down' }] };
+          const pywebview = { api: {
+            list_templates: async () => ['Farm'],
+            load_template: async () => template,
+            load_walk_path: async () => route,
+            export_tasks_file: async payload => { exported = payload; return { ok: true, path: 'x.json' }; },
+            import_tasks_file: async () => ({ ok: true, data: exported }),
+            list_custom_paths: async () => [],
+            save_walk_path: async (name, events) => {
+              restored.push([name, events]);
+              return { ok: true };
+            },
+            save_template: async () => ({ ok: true }),
+          }};
+          ${extract('collectCustomPathNames')}
+          ${extract('exportCustomPaths')}
+          ${extract('importCustomPaths')}
+          ${extract('exportTemplates')}
+          ${extract('importTemplates')}
+          return {
+            exportTemplates, importTemplates, restored,
+            exported: () => exported,
+          };
+        `)();
+        (async () => {
+          await w.exportTemplates();
+          await w.importTemplates();
+          console.log(JSON.stringify({
+            pathNames: Object.keys(w.exported().paths),
+            restored: w.restored,
+          }));
+        })();
+    """, tmp_path)
+
+    assert out["pathNames"] == ["Boss Route"]
+    assert out["restored"][0][0] == "Boss Route"
 
 
 # ---------------------------------------------------------------------------

@@ -1149,6 +1149,10 @@ class Api:
         from core import paths
         return paths.list_paths()
 
+    def list_custom_paths(self) -> list:
+        from core import paths
+        return paths.list_custom_paths()
+
     def set_setting(self, key: str, value) -> dict:
         cfg.update({key: value})  # atomic -- see cfg.update (fixes settings not saving)
         if key == "action_delay_ms":
@@ -1188,6 +1192,13 @@ class Api:
     # template Export/Import (see ui/app.js's exportTemplates) -- the file
     # shape is just whatever payload/dict the caller hands in, so nothing
     # here is actually task-specific except the default filename.
+    @staticmethod
+    def _transfer_directory(folder_kind: str) -> str:
+        if folder_kind == "tasks":
+            from core import task_presets
+            return task_presets.PRESETS_DIR
+        return tpl.TEMPLATES_DIR
+
     def export_tasks_file(self, payload: dict, filename_prefix: str = "tasks") -> dict:
         import json
         import time as _time
@@ -1195,15 +1206,11 @@ class Api:
         if not self._window:
             return {"ok": False, "reason": "no_window"}
         fname = f"AnimeExpeditions-{filename_prefix}-{_time.strftime('%Y%m%d-%H%M%S')}.json"
-        # Defaults to the Templates folder -- Export/Import already deals in
-        # Macro Operation templates half the time (a task export bundles
-        # every template its tasks reference; Macro Manager's own Export/Import
-        # reuses this same dialog for templates alone), so that's the more
-        # useful starting point than whatever generic default the OS picks.
-        os.makedirs(tpl.TEMPLATES_DIR, exist_ok=True)
+        transfer_dir = self._transfer_directory(filename_prefix)
+        os.makedirs(transfer_dir, exist_ok=True)
         dialog_type = getattr(getattr(webview, "FileDialog", None), "SAVE", getattr(webview, "SAVE_DIALOG", 2))
         result = self._window.create_file_dialog(
-            dialog_type, directory=tpl.TEMPLATES_DIR, save_filename=fname,
+            dialog_type, directory=transfer_dir, save_filename=fname,
             file_types=("JSON files (*.json)",))
         if not result:
             return {"ok": False, "reason": "cancelled"}
@@ -1215,15 +1222,16 @@ class Api:
             return {"ok": False, "reason": str(exc)}
         return {"ok": True, "path": path}
 
-    def import_tasks_file(self) -> dict:
+    def import_tasks_file(self, folder_kind: str = "templates") -> dict:
         import json
         import webview
         if not self._window:
             return {"ok": False, "reason": "no_window"}
-        os.makedirs(tpl.TEMPLATES_DIR, exist_ok=True)
+        transfer_dir = self._transfer_directory(folder_kind)
+        os.makedirs(transfer_dir, exist_ok=True)
         dialog_type = getattr(getattr(webview, "FileDialog", None), "OPEN", getattr(webview, "OPEN_DIALOG", 1))
         result = self._window.create_file_dialog(
-            dialog_type, directory=tpl.TEMPLATES_DIR, file_types=("JSON files (*.json)",))
+            dialog_type, directory=transfer_dir, file_types=("JSON files (*.json)",))
         if not result:
             return {"ok": False, "reason": "cancelled"}
         path = result[0] if isinstance(result, (list, tuple)) else result
@@ -1233,6 +1241,16 @@ class Api:
         except (OSError, json.JSONDecodeError) as exc:
             return {"ok": False, "reason": str(exc)}
         return {"ok": True, "data": data}
+
+    def load_walk_path(self, name: str) -> dict:
+        from core import paths
+        return paths.load_path(name)
+
+    def save_walk_path(self, name: str, events: list) -> dict:
+        from core import paths
+        if not isinstance(events, list):
+            return {"ok": False, "reason": "bad_events"}
+        return {"ok": True, "name": paths.save_path(name, events)}
 
     def list_templates(self) -> list:
         return tpl.list_templates()

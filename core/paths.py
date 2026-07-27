@@ -253,6 +253,17 @@ def list_paths() -> list:
     return sorted(names)
 
 
+def list_custom_paths() -> list:
+    """Names stored in the user-owned Paths folder, excluding shipped defaults."""
+    if not os.path.isdir(PATHS_DIR):
+        return []
+    names = []
+    for fname in os.listdir(PATHS_DIR):
+        if fname.endswith(".json"):
+            names.append(_stored_name(os.path.join(PATHS_DIR, fname), fname[:-5]))
+    return sorted(set(names))
+
+
 def save_path(name: str, events: list) -> str:
     name = (name or "").strip() or "path"
     os.makedirs(PATHS_DIR, exist_ok=True)
