@@ -9,10 +9,6 @@
 // at the keydown so it never engages.
 window.addEventListener('keydown', (e) => {
   if (e.key === 'F11') e.preventDefault();
-  if (e.key === 'F1') {
-    e.preventDefault();
-    toggleFaqModal();
-  }
   if (e.key === 'Escape') {
     const faqModal = document.getElementById('faq-modal');
     if (faqModal && faqModal.style.display !== 'none') {
