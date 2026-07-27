@@ -105,3 +105,19 @@ def test_is_roblox_process_or_title(monkeypatch):
     monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "robloxplayerbeta.exe")
     assert window_win.is_roblox_process_or_title(1, "Discord") is False
 
+
+
+def test_base_window_manager_and_factory():
+    """Verifies BaseWindowManager abstraction, WindowsWindowManager inheritance, and get_window_manager factory function."""
+    from core.window import BaseWindowManager, get_window_manager, WindowsWindowManager, WindowManager
+
+    wm = get_window_manager("Roblox")
+    assert isinstance(wm, BaseWindowManager)
+    assert isinstance(wm, WindowsWindowManager)
+    assert isinstance(wm, WindowManager)
+    assert wm.title_substring == "Roblox"
+
+    assert hasattr(wm, "find_window")
+    assert hasattr(wm, "activate")
+    assert hasattr(wm, "get_rect")
+    assert hasattr(wm, "set_bounds")

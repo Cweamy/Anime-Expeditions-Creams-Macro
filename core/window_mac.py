@@ -45,6 +45,7 @@ except Exception:  # pragma: no cover -- older pyobjc layouts; AX features degra
     _HAVE_AX = False
 
 from . import config
+from .window import BaseWindowManager
 
 ROBLOX_PROCESS_NAME = "roblox"  # matched case-insensitively against the owning app's name -- macOS
 # registers the app with the window server (kCGWindowOwnerName) as "Roblox", NOT the executable's
@@ -382,13 +383,26 @@ def client_size_to_window_size(window_id: int, width: int, height: int):
     return width, height + _TITLEBAR_PT
 
 
-class WindowManager:
+class MacWindowManager(BaseWindowManager):
     """Same shape as window_win.WindowManager -- locate a window by title
     (or, for Roblox, by owning app) and do coordinate/resize helpers."""
 
     def __init__(self, title_substring: str = config.ROBLOX_WINDOW_TITLE):
-        self.title_substring = title_substring
+        super().__init__(title_substring=title_substring)
         self.hwnd = None
+
+    def find_window(self):
+        return self.find()
+
+    def activate(self) -> None:
+        self.bring_to_front()
+
+    def get_rect(self):
+        return self.get_window_rect()
+
+    def set_bounds(self, x: int, y: int, width: int, height: int) -> None:
+        window_id = self._require_hwnd()
+        move_window(window_id, x, y, width, height)
 
     def find(self):
         wanted = self.title_substring.lower()
@@ -434,3 +448,5 @@ class WindowManager:
 
     def bring_to_front(self) -> None:
         activate_window(self._require_hwnd())
+
+WindowManager = MacWindowManager
