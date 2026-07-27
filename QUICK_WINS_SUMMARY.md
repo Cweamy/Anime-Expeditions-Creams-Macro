@@ -1,120 +1,120 @@
-# Resumo dos Quick Wins (`fix/quick-wins`)
+# Quick Wins Summary (`fix/quick-wins`)
 
-Este documento detalha as 6 melhorias rápidas (Quick Wins) aplicadas à branch `fix/quick-wins`, explicando o que foi feito, os benefícios técnicos e práticos de cada alteração, e o guia completo de como testá-las.
-
----
-
-## 📋 Resumo das Alterações & Benefícios
-
-### 1. **Quick Win A: Compatibilidade Cross-Platform no OCR (`core/ocr.py`)**
-- **O que foi feito:** Substituição do acesso direto `subprocess.CREATE_NO_WINDOW` por `getattr(subprocess, "CREATE_NO_WINDOW", 0)`.
-- **Por que foi feito / Benefícios:**
-  - O flag `CREATE_NO_WINDOW` só existe na biblioteca padrão do Python em sistemas Windows.
-  - No macOS/Linux, tentar acessar `subprocess.CREATE_NO_WINDOW` lança um erro `AttributeError`.
-  - Garante resiliência em qualquer sistema operacional suportado pelo macro.
+This document details the 6 Quick Wins applied to the `fix/quick-wins` branch, explaining what was changed, the technical and operational benefits of each enhancement, and a comprehensive guide on how to test them.
 
 ---
 
-### 2. **Quick Win B: Centralização das Constantes de Scrollbar (`core/constants.py`, `core/rewards.py`, `main.py`)**
-- **O que foi feito:** Definição das constantes `REWARD_SCROLLBAR_PROBE` e `REWARD_SCROLLBAR_COLOR` em `core/constants.py` e importação única em `main.py` e `core/rewards.py`.
-- **Por que foi feito / Benefícios:**
-  - **Eliminação de duplicação perigosa:** `main.py` e `core/rewards.py` mantinham valores literais idênticos duplicados. Se a posição na UI mudar no futuro, bastará alterar em um único lugar (`constants.py`).
-  - Evita dessincronia silenciosa entre a leitura sob demanda da UI e a leitura automática pós-partida do runner.
+## 📋 Overview of Changes & Benefits
+
+### 1. **Quick Win A: Cross-Platform Compatibility in OCR (`core/ocr.py`)**
+- **Changes Made:** Replaced direct access to `subprocess.CREATE_NO_WINDOW` with `getattr(subprocess, "CREATE_NO_WINDOW", 0)`.
+- **Rationale & Benefits:**
+  - `CREATE_NO_WINDOW` flag only exists in Python's standard library on Windows platforms.
+  - On macOS/Linux, attempting to access `subprocess.CREATE_NO_WINDOW` raises an `AttributeError`.
+  - Ensures seamless runtime execution across all supported operating systems.
 
 ---
 
-### 3. **Quick Win C: Type Hints em Módulos Críticos (`core/share.py`, `core/jsonstore.py`)**
-- **O que foi feito:** Adição do cabeçalho `from __future__ import annotations` e type annotations explícitas (`Any`, `dict | list`, etc.).
-- **Por que foi feito / Benefícios:**
-  - Melhora o suporte do autocompletar na IDE (VS Code / PyCharm / Antigravity).
-  - Permite análise estática de código (mypy/pyright/ruff) detectar bugs de tipo antes da execução.
-  - Torna os contratos das funções autoexplicativos para qualquer desenvolvedor.
+### 2. **Quick Win B: Centralization of Scrollbar Constants (`core/constants.py`, `core/rewards.py`, `main.py`)**
+- **Changes Made:** Defined `REWARD_SCROLLBAR_PROBE` and `REWARD_SCROLLBAR_COLOR` in `core/constants.py` and imported them in `main.py` and `core/rewards.py`.
+- **Rationale & Benefits:**
+  - **Eliminates fragile duplication:** Previously, `main.py` and `core/rewards.py` maintained identical literal values. If the UI layout changes in the future, updating a single file (`constants.py`) covers all locations.
+  - Prevents silent desynchronization between on-demand UI reward reads and automated post-match runner reads.
 
 ---
 
-### 4. **Quick Win D: Refatoração e Deduplicação no Runner (`core/runner.py`)**
-- **O que foi feito:** Criação do método privado `_click_gamemode_card(...)` para substituir 4 blocos redundantes de ~20 linhas cada (Expedition, Challenge, Raid e Story).
-- **Por que foi feito / Benefícios:**
-  - **Redução de ~40 linhas de código duplicado:** Menos código significa menos superfície para bugs.
-  - **Manutenibilidade:** Ajustes no fluxo de seleção de modo de jogo (como logging, tratamento de erro e tempo de espera/settle) agora afetam todos os modos consistentemente.
-  - Preserva o comportamento específico do modo *Story* (fallback para coordenada fixa) via callback.
+### 3. **Quick Win C: Type Hints in Core Modules (`core/share.py`, `core/jsonstore.py`)**
+- **Changes Made:** Added `from __future__ import annotations` header and explicit type annotations (`Any`, `dict | list`, etc.).
+- **Rationale & Benefits:**
+  - Improves IDE autocompletion and hover documentation (VS Code / PyCharm / Antigravity).
+  - Enables static analysis tools (mypy/pyright/ruff) to catch type errors before execution.
+  - Makes function signatures self-documenting for contributors.
 
 ---
 
-### 5. **Quick Win E: Expansão das Regras do Linter (`pyproject.toml`)**
-- **O que foi feito:** Configuração das regras do `ruff` incluindo selects para `I` (isort), `B` (bugbear), `SIM` (simplify) e `UP` (pyupgrade).
-- **Por que foi feito / Benefícios:**
-  - Alinha o ambiente de desenvolvimento local com os workflows automatizados do GitHub Actions (`.github/workflows`).
-  - Identifica automaticamente maus hábitos em código Python (imports fora de ordem, repetições desnecessárias, padrões legados).
+### 4. **Quick Win D: Runner Refactoring & Deduplication (`core/runner.py`)**
+- **Changes Made:** Created a private `_click_gamemode_card(...)` method replacing 4 redundant ~20-line blocks (Expedition, Challenge, Raid, and Story).
+- **Rationale & Benefits:**
+  - **~40 lines of duplicate code eliminated:** Reduces code surface and complexity.
+  - **Maintainability:** Any adjustments to gamemode navigation (logging, error handling, or settle delays) now apply consistently across all gamemodes.
+  - Preserves Story mode's custom fallback coordinate mechanism via a callback.
 
 ---
 
-### 6. **Quick Win F: Controle de Namespace com `__all__` (`core/runner_constants.py`)**
-- **O que foi feito:** Adição de uma lista `__all__` contendo exatamente as 125 constantes exportadas por `runner_constants.py`.
-- **Por que foi feito / Benefícios:**
-  - **Proteção contra poluição de namespace:** Star imports (`from core.runner_constants import *`) agora exportam somente o que é intencional.
-  - Torna o módulo auditável e documenta claramente todas as constantes disponíveis no projeto.
+### 5. **Quick Win E: Linter Rule Expansion (`pyproject.toml`)**
+- **Changes Made:** Configured `ruff` lint rules including selects for `I` (isort), `B` (bugbear), `SIM` (simplify), and `UP` (pyupgrade).
+- **Rationale & Benefits:**
+  - Aligns local development tooling with automated GitHub Actions workflows (`.github/workflows`).
+  - Automatically identifies code smells, un-sorted imports, and deprecated syntax patterns.
 
 ---
 
-## 🧪 Como Testar Tudo
+### 6. **Quick Win F: Controlled Namespace Export with `__all__` (`core/runner_constants.py`)**
+- **Changes Made:** Added an `__all__` list explicitly exporting the 125 constants defined in `runner_constants.py`.
+- **Rationale & Benefits:**
+  - **Namespace Pollution Protection:** Star imports (`from core.runner_constants import *`) now only export intended public constants.
+  - Makes the module fully auditable and clearly documents all available configuration constants.
 
-Podemos testar as alterações de duas formas: **Automatizada (Suíte de Testes/Python)** e **Manual (Em execução)**.
+---
 
-### 1. Testes Automatizados (Python / Pytest / Unittest)
+## 🧪 Testing Guide
 
-#### A. Testar Imports e Sintaxe (Sem Dependências Externas)
-Execute os seguintes comandos no terminal na raiz do projeto:
+You can test these changes using both **Automated (Python Verification)** and **Manual (Execution)** methods.
+
+### 1. Automated Verification (Python / Test Suite)
+
+#### A. Import & Syntax Verification (No External Dependencies)
+Run the following PowerShell commands from the project root:
 
 ```powershell
-# 1. Validar import das constantes centralizadas
+# 1. Validate centralized constants import
 python -c "from core import constants; print('Constants OK:', hasattr(constants, 'REWARD_SCROLLBAR_PROBE'))"
 
-# 2. Validar __all__ do runner_constants
+# 2. Validate runner_constants __all__ exports
 python -c "from core import runner_constants; print('runner_constants OK (Exports:', len(runner_constants.__all__), ')' )"
 
-# 3. Validar star import sem quebras
+# 3. Validate star import functionality
 python -c "from core.runner_constants import *; print('Star import OK, SETTLE_DELAY =', SETTLE_DELAY)"
 
-# 4. Validar OCR, share e jsonstore
-python -c "from core import ocr, share, jsonstore; print('Modulos base OK')"
+# 4. Validate OCR, share, and jsonstore modules
+python -c "from core import ocr, share, jsonstore; print('Core modules OK')"
 
-# 5. Validar a inicializacao e imports do main.py
+# 5. Validate main.py module import
 python -c "import main; print('main.py OK')"
 ```
 
-#### B. Executar a Suíte de Testes Automatizados do Repositório (com Pytest)
-Se você tiver o `pytest` instalado no seu ambiente Python:
+#### B. Running the Test Suite (with Pytest)
+If `pytest` is installed in your Python environment:
 
 ```powershell
 pip install pytest
 python -m pytest tests/ -v
 ```
 
-> **Nota:** Todos os 21 arquivos de teste em `tests/` validam codificação/decodificação de templates (`test_share.py`), escrita atômica de JSON (`test_jsonstore.py`), cálculo de runs por hora, parsing de recompensas e comportamentos do runner.
+> **Note:** The 21 test files in `tests/` validate template encoding (`test_share.py`), atomic JSON writes (`test_jsonstore.py`), runs-per-hour calculation, reward parsing, and runner behaviors.
 
 ---
 
-### 2. Testes Manuais (Com Roblox / Interface do Macro)
+### 2. Manual Verification (UI / Roblox Integration)
 
-Para testar visualmente e em runtime:
+To test runtime behavior visually:
 
-1. **Abrir a Aplicação:**
-   - Inicie o macro executando `python main.py`.
-   - Verifique se a interface (HTML/JS) carrega normalmente sem erros no console.
+1. **Launch Application:**
+   - Run `python main.py`.
+   - Ensure the HTML/JS webview interface loads cleanly without console errors.
 
-2. **Testar Navegação de Gamemode (`_click_gamemode_card`):**
-   - No Dashboard, altere a tarefa para cada modo diferente (*Story*, *Raid*, *Challenge*, *Expedition*).
-   - Inicie o Macro com o Roblox aberto no Lobby.
-   - Verifique nos logs se o Macro entra corretamente nos menus sem mensagens de exceção.
+2. **Gamemode Navigation Test (`_click_gamemode_card`):**
+   - Switch tasks between *Story*, *Raid*, *Challenge*, and *Expedition* in the Dashboard.
+   - Start the macro with Roblox in the Lobby.
+   - Confirm in the logs that the macro navigates into each gamemode menu cleanly.
 
-3. **Testar Leitura de Rewards (Scrollbar Probe):**
-   - Conclua uma partida no Roblox ou clique em "Read Rewards" na aba de debug (se disponível).
-   - Confirme se os itens e a detecção de scroll continuam operando normalmente sem erros de atributo.
+3. **Rewards Reading Test (Scrollbar Probe):**
+   - Complete a match or click "Read Rewards" in the Debug tab.
+   - Confirm item detection and scroll checking operate as expected without attribute errors.
 
 ---
 
-## 📦 Commits na branch `fix/quick-wins`
+## 📦 Commits on `fix/quick-wins` Branch
 
 ```
 fde67ba refactor(runner_constants): add __all__ to control star import namespace (125 exports)
