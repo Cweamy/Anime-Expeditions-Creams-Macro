@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 from core.updater import _parse_version
 
 
@@ -214,3 +216,106 @@ def test_helper_waits_for_the_app_before_force_killing_it(tmp_path, monkeypatch)
         "the helper force-kills the app before waiting for it to close itself")
     assert content.index("goto closeditself") < kills[0], (
         "the wait loop must be able to finish without ever force-killing")
+
+
+# ---------------------------------------------------------------------------
+# Source updates must not overwrite a checkout someone is working in
+# ---------------------------------------------------------------------------
+# The source update copies the release's files over the install. Verified by
+# running the real generated helper against a real install dir: a tracked
+# main.py carrying a local edit came back as the upstream version, while
+# settings.json and Paths/ were correctly left alone. There is no undo.
+#
+# Real git repos here rather than a mocked subprocess -- the thing being
+# tested IS how git reports its state, so faking that output would only
+# assert that the fake matches the assumption.
+
+import subprocess as _subprocess
+
+
+def _repo(path):
+    path.mkdir(parents=True, exist_ok=True)
+    run = lambda *a: _subprocess.run(a, cwd=str(path), capture_output=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "test@example.invalid")
+    run("git", "config", "user.name", "test")
+    (path / "main.py").write_text("original\n")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "initial")
+    return path
+
+
+def test_a_clean_checkout_is_not_treated_as_dirty(tmp_path):
+    from core import updater
+    assert updater._uncommitted_changes(str(_repo(tmp_path / "app"))) is False
+
+
+def test_an_untracked_file_does_not_block_the_update(tmp_path):
+    """The copy adds files, it never deletes them, so an untracked file of
+    your own is not at risk -- blocking on one would stop updates for people
+    who keep notes or exports next to the app."""
+    from core import updater
+    app = _repo(tmp_path / "app")
+    (app / "my_notes.txt").write_text("mine\n")
+    assert updater._uncommitted_changes(str(app)) is False
+
+
+def test_an_edited_tracked_file_blocks_the_update(tmp_path):
+    from core import updater
+    app = _repo(tmp_path / "app")
+    (app / "main.py").write_text("original\nmy own edit\n")
+    assert updater._uncommitted_changes(str(app)) is True
+
+
+def test_a_plain_install_is_never_blocked(tmp_path):
+    """Almost nobody runs from a clone. A non-git install must always
+    update."""
+    from core import updater
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert updater._uncommitted_changes(str(plain)) is False
+
+
+def test_git_missing_from_path_does_not_block_the_update(tmp_path, monkeypatch):
+    """Unknown is not dirty -- guessing would stop updates for people who
+    aren't affected."""
+    from core import updater
+
+    app = _repo(tmp_path / "app")
+    (app / "main.py").write_text("edited\n")
+
+    def no_git(*_args, **_kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(updater.subprocess, "run", no_git)
+    assert updater._uncommitted_changes(str(app)) is False
+
+
+def test_the_dirty_check_does_not_pop_a_console_window(tmp_path, monkeypatch):
+    """A windowed build has no console; spawning git without this flashes
+    one. Same flag core/ocr.py and core/tesseract_installer.py use."""
+    from core import updater
+
+    app = _repo(tmp_path / "app")
+    seen = {}
+
+    def capture(cmd, **kwargs):
+        seen.update(kwargs)
+        return _subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(updater.subprocess, "run", capture)
+    updater._uncommitted_changes(str(app))
+    assert seen.get("creationflags") == getattr(_subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def test_stage_source_update_refuses_before_downloading_anything(tmp_path):
+    from core import updater
+
+    app = _repo(tmp_path / "app")
+    (app / "main.py").write_text("original\nmy own edit\n")
+
+    with pytest.raises(RuntimeError, match="uncommitted changes"):
+        updater.stage_source_update("https://example.invalid/x.zip", str(app), print)
+
+    # Refused before the network call, and the edit is still there.
+    assert (app / "main.py").read_text() == "original\nmy own edit\n"

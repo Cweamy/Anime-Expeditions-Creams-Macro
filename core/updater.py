@@ -188,6 +188,38 @@ def check_for_update(timeout: float = 6.0, log=None) -> dict:
 # Source update (running from a git clone / python main.py)
 # ---------------------------------------------------------------------------
 
+def _uncommitted_changes(app_dir: str) -> bool:
+    """Whether app_dir is a git checkout carrying uncommitted work.
+
+    The source update copies the release's files over the install (see
+    _write_source_helper_script's robocopy/rsync), which silently
+    overwrites edited source. That is fine for the normal case -- an
+    unmodified clone -- and destroys work for anyone who has been editing
+    theirs, with nothing to restore from.
+
+    False whenever the answer isn't a confident yes: no .git, git missing
+    from PATH, a timeout, a non-zero exit. Guessing "dirty" would block
+    updates for people who are not affected at all, and this only ever
+    stops an update, never starts one.
+
+    --untracked-files=no on purpose: the copy adds files, it doesn't delete
+    them, so an untracked file of your own is not at risk and should not
+    block the update. Only tracked, modified files are.
+    """
+    if not os.path.isdir(os.path.join(app_dir, ".git")):
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "-C", app_dir, "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=10, check=False,
+            # Same as core/ocr.py and core/tesseract_installer.py -- without
+            # it this pops a console window on a windowed build.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
 def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> str:
     """Downloads + extracts the release source zip and writes the relaunch
     helper script. Returns the helper's path -- the caller launches it
@@ -198,7 +230,16 @@ def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> st
     Content-Length (rare, but not worth failing over -- callers should
     treat that as "unknown", e.g. an indeterminate spinner instead of a
     percentage).
+
+    Refuses outright if app_dir is a git checkout with uncommitted changes:
+    the copy below overwrites tracked source, and there is no undo. See
+    _uncommitted_changes.
     """
+    if _uncommitted_changes(app_dir):
+        raise RuntimeError(
+            "This install has uncommitted changes, so updating would overwrite them. "
+            "Commit or stash them first, then update.")
+
     tmp_root = tempfile.mkdtemp(prefix="aecm_update_")
     zip_path = os.path.join(tmp_root, "update.zip")
 

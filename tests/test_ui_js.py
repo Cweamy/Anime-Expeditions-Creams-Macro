@@ -275,6 +275,12 @@ def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
           const logs = []; const restored = []; let exported = null;
           function addLog(message) { logs.push(message); }
           async function refreshTemplateList() {}
+          // importTemplates now confirms before replacing a macro you
+          // already have, and opens the first imported one in the editor.
+          function confirm() { return true; }
+          function creationEditorHasUnsavedChanges() { return false; }
+          async function loadSelectedTemplate() {}
+          const document = { getElementById: () => ({ value: '' }) };
           const template = { name: 'Farm', blocks: {
             prestart: [{ type: 'walk_path', mode: 'custom', pathName: 'Boss Route' }],
             battle: [],
@@ -394,3 +400,240 @@ def test_app_js_calls_no_undefined_top_level_function():
     missing = sorted(n for n in called - defined - browser_and_globals
                      if not n.startswith("_") and n[0].islower())
     assert not missing, f"ui/app.js calls functions it never defines: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Task export/import: a shared queue has to arrive usable
+# ---------------------------------------------------------------------------
+# exportTasks collected only `t.macro`. act4_macro -- Act 4's own Macro
+# Operation -- was never bundled, so a queue using one exported "successfully"
+# and arrived at the other end pointing at a macro the recipient does not
+# have. Reproduced against the shipped function:
+#
+#     task references : Main Farm (macro), Act4 Relic Run (act4_macro)
+#     actually bundled: ['Main Farm']
+#     log             : "[Task] Exported 1 task(s) to q.json"
+
+_TASK_EXPORT_WORLD = """
+const logs = []; let exported = null;
+global.addLog = m => logs.push(m);
+global.exportCustomPaths = async () => ({});
+global.taskCards = %s;
+global.pywebview = { api: {
+  list_templates: async () => %s,
+  load_template: async n => ({ name: n, blocks: { prestart: [], battle: [] } }),
+  export_tasks_file: async p => { exported = p; return { ok: true, path: 'q.json' }; },
+}};
+eval(extract('taskMacroNames'));
+eval(extract('exportTasks'));
+exportTasks().then(() => console.log(JSON.stringify({
+  bundled: exported ? Object.keys(exported.templates).sort() : null,
+  log: logs[logs.length - 1] })));
+"""
+
+_ONE_TASK = "[{id:1, mode:'story', macro:'Main Farm', act4_macro:'Act4 Relic Run'}]"
+
+
+def test_export_bundles_the_act4_macro_too(tmp_path):
+    out = run_js(_TASK_EXPORT_WORLD % (_ONE_TASK, "['Main Farm', 'Act4 Relic Run']"), tmp_path)
+    assert out["bundled"] == ["Act4 Relic Run", "Main Farm"], (
+        "the Act 4 macro was left out of the package again")
+
+
+def test_export_stops_when_a_referenced_macro_no_longer_exists(tmp_path):
+    """load_template returns an empty object for a name with no file and the
+    failure was swallowed, so the export "succeeded" and only broke for
+    whoever imported it."""
+    out = run_js(_TASK_EXPORT_WORLD % (_ONE_TASK, "['Main Farm']"), tmp_path)
+    assert out["bundled"] is None, "a package missing one of its macros must not be written"
+    assert "Act4 Relic Run" in out["log"] and "Export stopped" in out["log"]
+
+
+_TASK_IMPORT_WORLD = """
+const logs = []; const saved = {}; let confirmAnswer = %s;
+global.addLog = m => logs.push(m);
+global.confirm = () => confirmAnswer;
+global.importCustomPaths = async () => 0;
+global.refreshTaskTemplates = async () => {};
+global.renderTaskList = () => {}; global.renderTaskBuilder = () => {};
+global.saveTaskQueue = () => {};
+global.defaultTask = () => ({ id: 0, mode: 'story', macro: '' });
+let nextId = 100;
+global.newTaskId = () => ++nextId;
+global.taskCards = [];
+global.enteringTaskIds = new Set();
+global.pywebview = { api: {
+  import_tasks_file: async () => ({ ok: true, data: { kind: 'anime-expeditions-tasks',
+    tasks: [{ id: 7, mode: 'story', macro: 'Boss Rush' }],
+    templates: { 'Boss Rush': { blocks: { prestart: [], battle: [] } } } } }),
+  list_templates: async () => %s,
+  save_template: async (n, b) => { saved[n] = b; },
+}};
+eval(extract('importTasks'));
+importTasks().then(() => console.log(JSON.stringify({
+  macrosSaved: Object.keys(saved), tasks: taskCards.length,
+  ids: taskCards.map(t => t.id), log: logs[logs.length - 1] })));
+"""
+
+
+def test_a_bundled_macro_that_clashes_with_yours_is_no_longer_skipped(tmp_path):
+    out = run_js(_TASK_IMPORT_WORLD % ("true", "['Boss Rush']"), tmp_path)
+    assert out["macrosSaved"] == ["Boss Rush"], (
+        "the sender's macro was dropped, so the imported task points at a different one")
+    assert out["tasks"] == 1
+
+
+def test_declining_the_clash_cancels_the_whole_task_import(tmp_path):
+    """Keeping the tasks while declining their macros is exactly the mismatch
+    the prompt exists to prevent -- the task would silently run YOUR macro of
+    that name instead of the one it was built with."""
+    out = run_js(_TASK_IMPORT_WORLD % ("false", "['Boss Rush']"), tmp_path)
+    assert out["macrosSaved"] == [], "declining still overwrote a macro"
+    assert out["tasks"] == 0, "tasks were imported without the macros they reference"
+    assert "cancelled" in out["log"]
+
+
+def test_imported_tasks_get_fresh_ids(tmp_path):
+    """Already true before this change -- pinned so it stays true."""
+    out = run_js(_TASK_IMPORT_WORLD % ("true", "[]"), tmp_path)
+    assert out["ids"] == [101], "an imported task kept its id from the file"
+
+
+_CLEAR_WORLD = """
+let confirms = 0;
+global.confirm = () => { confirms++; return %s; };
+global.renderTaskList = () => {}; global.renderTaskBuilder = () => {};
+global.saveTaskQueue = () => {};
+global.selectedTaskId = 1;
+global.taskCards = [{id:1},{id:2},{id:3}];
+eval(extract('clearTaskQueue'));
+clearTaskQueue();
+console.log(JSON.stringify({ remaining: taskCards.length, confirms }));
+"""
+
+
+def test_clear_all_asks_before_wiping_the_queue(tmp_path):
+    """Wired to a "Clear All" danger button with no undo."""
+    assert run_js(_CLEAR_WORLD % "false", tmp_path) == {"remaining": 3, "confirms": 1}
+    assert run_js(_CLEAR_WORLD % "true", tmp_path) == {"remaining": 0, "confirms": 1}
+
+
+# ---------------------------------------------------------------------------
+# importTemplates: a same-name macro was skipped in silence
+# ---------------------------------------------------------------------------
+# Export a macro, edit it, import it back: nothing happened. The loop did
+# `if (existing.includes(name) ...) continue`, so every macro you already had
+# was dropped, and the log still reported a successful import. Reproduced
+# against the shipped function before the fix:
+#
+#     saved_to_disk: ['New Macro']          <- the edited "Boss Rush" is gone
+#     logs: ['[Macro Manager] Imported 1 template(s).']
+#
+# Overwriting without asking is the opposite failure -- a shared pack
+# containing "Boss Rush" would take out the one you built -- so conflicts are
+# now confirmed once, and the log says what was replaced and what was kept.
+
+_MACRO_IMPORT_HARNESS = """
+const logs = [], saved = {};
+let confirmAnswer = %s, confirmsSeen = [], loadedIntoEditor = null;
+global.addLog = m => logs.push(m);
+global.confirm = m => { confirmsSeen.push(m); return confirmAnswer; };
+global.importCustomPaths = async () => 0;
+global.refreshTemplateList = async () => {};
+global.loadSelectedTemplate = async () => { loadedIntoEditor = selectValue; };
+global.creationEditorHasUnsavedChanges = () => %s;
+let selectValue = '';
+global.document = { getElementById: id => id === 'template-select'
+  ? { get value() { return selectValue; }, set value(v) { selectValue = v; } } : null };
+global.pywebview = { api: {
+  import_tasks_file: async () => ({ ok: true, data: { templates: %s } }),
+  list_templates: async () => %s,
+  save_template: async (n, b) => { saved[n] = b; },
+}};
+eval(extract('importTemplates'));
+importTemplates().then(() => console.log(JSON.stringify(
+  { saved: Object.keys(saved).sort(), savedBossRush: saved['Boss Rush'] || null,
+    logs, confirms: confirmsSeen.length, loadedIntoEditor })));
+"""
+
+_TWO = ("{'Boss Rush': {blocks: {start: ['EDITED v2']}}, "
+        "'New Macro': {blocks: {start: ['brand new']}}}")
+
+
+def test_reimporting_an_edited_macro_actually_overwrites_it(tmp_path):
+    out = run_js(_MACRO_IMPORT_HARNESS % ("true", "false", _TWO, "['Boss Rush']"), tmp_path)
+    assert out["saved"] == ["Boss Rush", "New Macro"], "the edited macro was dropped again"
+    assert out["savedBossRush"] == {"start": ["EDITED v2"]}, "the OLD version survived"
+    assert out["confirms"] == 1, "replacing what you already have must be confirmed"
+    assert "1 replaced" in out["logs"][-1]
+
+
+def test_declining_the_prompt_keeps_your_macro_and_still_imports_the_new_ones(tmp_path):
+    out = run_js(_MACRO_IMPORT_HARNESS % ("false", "false", _TWO, "['Boss Rush']"), tmp_path)
+    assert out["saved"] == ["New Macro"], "declining must not silently drop the new macros too"
+    assert out["savedBossRush"] is None, "declining still overwrote the user's macro"
+    assert "kept your existing 1" in out["logs"][-1]
+
+
+def test_no_prompt_when_nothing_collides(tmp_path):
+    out = run_js(_MACRO_IMPORT_HARNESS % ("false", "false", _TWO, "[]"), tmp_path)
+    assert out["saved"] == ["Boss Rush", "New Macro"]
+    assert out["confirms"] == 0, "a clean import must not ask anything"
+
+
+def test_the_first_imported_macro_opens_in_the_editor(tmp_path):
+    """The dropdown used to refresh but keep its empty selection, so a fully
+    successful import still looked like it had done nothing."""
+    out = run_js(_MACRO_IMPORT_HARNESS % ("true", "false", _TWO, "[]"), tmp_path)
+    assert out["loadedIntoEditor"] == "Boss Rush"
+
+
+def test_import_warns_before_replacing_unsaved_editor_work(tmp_path):
+    """Because the import now loads a macro into the editor, it destroys
+    whatever was in there -- so it has to ask first."""
+    out = run_js(_MACRO_IMPORT_HARNESS % ("false", "true", _TWO, "[]"), tmp_path)
+    assert out["saved"] == [], "declining the warning must not import anything"
+    assert "cancelled" in out["logs"][-1]
+
+
+def test_a_file_with_no_macros_reports_that_instead_of_importing_nothing(tmp_path):
+    out = run_js(_MACRO_IMPORT_HARNESS % ("true", "false", "{'Broken': {}}", "[]"), tmp_path)
+    assert out["saved"] == []
+    assert "no macros" in out["logs"][-1]
+
+
+# ---------------------------------------------------------------------------
+# The unsaved-changes check itself
+# ---------------------------------------------------------------------------
+
+_DIRTY_HARNESS = """
+global.PHASES = ['prestart', 'battle'];
+let nameValue = 'Boss Rush';
+global.document = { getElementById: () => ({ get value() { return nameValue; } }) };
+global.creationTeam = ''; global.creationEquipment = 'include';
+global.creationPhases = { prestart: [], battle: [] };
+eval(extract('currentCreationPayload'));
+eval(extract('currentCreationSnapshot'));
+eval(extract('markCreationEditorSaved'));
+eval(extract('creationEditorHasUnsavedChanges'));
+let creationSavedSnapshot = null;
+const before = creationEditorHasUnsavedChanges();
+markCreationEditorSaved();
+const afterSave = creationEditorHasUnsavedChanges();
+creationPhases.battle.push({ type: 'attack', params: {} });
+const afterEdit = creationEditorHasUnsavedChanges();
+creationPhases.battle.pop();
+const afterUndo = creationEditorHasUnsavedChanges();
+nameValue = 'Renamed';
+const afterRename = creationEditorHasUnsavedChanges();
+console.log(JSON.stringify({ before, afterSave, afterEdit, afterUndo, afterRename }));
+"""
+
+
+def test_unsaved_changes_tracking(tmp_path):
+    out = run_js(_DIRTY_HARNESS, tmp_path)
+    assert out["before"] is False, "no baseline yet -- must not warn on a fresh editor"
+    assert out["afterSave"] is False
+    assert out["afterEdit"] is True
+    assert out["afterUndo"] is False, "edit-then-undo must not leave a false warning"
+    assert out["afterRename"] is True, "renaming is an unsaved change too"

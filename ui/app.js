@@ -9,7 +9,68 @@
 // at the keydown so it never engages.
 window.addEventListener('keydown', (e) => {
   if (e.key === 'F11') e.preventDefault();
+  if (e.key === 'F1') {
+    e.preventDefault();
+    toggleFaqModal();
+  }
+  if (e.key === 'Escape') {
+    const faqModal = document.getElementById('faq-modal');
+    if (faqModal && faqModal.style.display !== 'none') {
+      closeFaqModal();
+    }
+  }
 });
+
+// ---------------------------------------------------------------------------
+// Help & FAQ Modal
+// ---------------------------------------------------------------------------
+function openFaqModal() {
+  const el = document.getElementById('faq-modal');
+  if (el) el.style.display = 'flex';
+}
+
+function closeFaqModal() {
+  const el = document.getElementById('faq-modal');
+  if (el) el.style.display = 'none';
+}
+
+function toggleFaqModal() {
+  const el = document.getElementById('faq-modal');
+  if (!el) return;
+  if (el.style.display === 'none' || !el.style.display) {
+    openFaqModal();
+  } else {
+    closeFaqModal();
+  }
+}
+
+function toggleFaqItem(btn) {
+  const item = btn.closest('.faq-item');
+  if (!item) return;
+  const isOpen = item.classList.contains('open');
+  document.querySelectorAll('.faq-item.open').forEach(el => {
+    if (el !== item) el.classList.remove('open');
+  });
+  if (isOpen) {
+    item.classList.remove('open');
+  } else {
+    item.classList.add('open');
+  }
+}
+
+function filterFaqItems() {
+  const query = (document.getElementById('faq-search-input')?.value || '').toLowerCase().trim();
+  const items = document.querySelectorAll('.faq-item');
+  items.forEach(item => {
+    const text = item.textContent.toLowerCase();
+    const keywords = (item.getAttribute('data-keywords') || '').toLowerCase();
+    if (!query || text.includes(query) || keywords.includes(query)) {
+      item.style.display = 'block';
+    } else {
+      item.style.display = 'none';
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // HTML Sanitization
@@ -1968,12 +2029,34 @@ async function importSettings() {
 // at nothing on someone else's machine). Import restores both, giving all
 // tasks fresh ids and never overwriting a template that already exists
 // locally under the same name.
+// Every macro a task can point at. act4_macro is Act 4's own Macro
+// Operation and was left out of the export entirely, so a shared queue
+// arrived referencing a macro the recipient did not have -- and the export
+// still reported success.
+function taskMacroNames(task) {
+  return [task.macro, task.act4_macro].filter(Boolean);
+}
+
 async function exportTasks() {
   if (taskCards.length === 0) { addLog('[Task] Nothing to export -- the queue is empty.'); return; }
+  let saved = [];
+  try { saved = await pywebview.api.list_templates(); } catch (e) {}
+  // Stop rather than ship a package that cannot work. load_template returns
+  // an empty object for a name with no file, and the failure used to be
+  // swallowed by `catch (e) {}`, so a task pointing at a renamed or deleted
+  // macro exported "successfully" and only broke for whoever imported it.
+  const missing = [...new Set(taskCards.flatMap(taskMacroNames))]
+    .filter(name => !saved.includes(name));
+  if (missing.length > 0) {
+    addLog(`[Task] Export stopped -- ${missing.length} macro(s) referenced by the queue `
+      + `no longer exist: ${missing.join(', ')}. Fix or remove those tasks first.`);
+    return;
+  }
   const templates = {};
   for (const t of taskCards) {
-    if (t.macro && !(t.macro in templates)) {
-      try { templates[t.macro] = await pywebview.api.load_template(t.macro); } catch (e) {}
+    for (const name of taskMacroNames(t)) {
+      if (name in templates) continue;
+      try { templates[name] = await pywebview.api.load_template(name); } catch (e) {}
     }
   }
   const paths = await exportCustomPaths(templates);
@@ -2003,11 +2086,27 @@ async function importTasks() {
     return;
   }
   if (!Array.isArray(data.tasks)) { addLog('[Task] Import failed: that file is not a task export.'); return; }
+  // A bundled macro whose name you already use was skipped in silence, so
+  // the imported task quietly pointed at YOUR macro of that name and ran
+  // something other than what the sender built. Ask, and treat Cancel as
+  // cancelling the whole import: keeping the tasks while declining their
+  // macros is exactly the mismatch this is here to prevent.
+  let existing = [];
+  try { existing = await pywebview.api.list_templates(); } catch (e) {}
+  const bundled = Object.entries(data.templates || {}).filter(([, t]) => t && t.blocks != null);
+  const clashes = bundled.filter(([name]) => existing.includes(name));
+  if (clashes.length > 0 && !confirm(
+      `${clashes.length} macro(s) in this file have the same name as yours:\n\n`
+      + clashes.map(([name]) => `    ${name}`).join('\n')
+      + '\n\nReplace yours with the imported versions?\n'
+      + 'Cancel stops the import, so the tasks cannot end up pointing at a different macro.')) {
+    addLog('[Task] Import cancelled -- your macros were left alone.');
+    return;
+  }
   const pathAdded = await importCustomPaths(data.paths);
   let tplAdded = 0;
   try {
-    const existing = await pywebview.api.list_templates();
-    for (const [name, t] of Object.entries(data.templates || {})) {
+    for (const [name, t] of bundled) {
       // `t.blocks` is an OBJECT ({team, equipment, prestart, battle}) for every
       // template saved since Pre Start/Battle phases existed -- Array.isArray
       // is only true for the oldest flat-list format, so this silently dropped
@@ -2015,7 +2114,6 @@ async function importTasks() {
       // queue does not arrive pointing at macros the recipient does not have,
       // and the whole point was being lost with no message. importTemplates
       // (same file) has always used the `!= null` form.
-      if (existing.includes(name) || !t || t.blocks == null) continue;
       try { await pywebview.api.save_template(name, t.blocks); tplAdded++; } catch (e) {}
     }
   } catch (e) {}
@@ -2193,6 +2291,10 @@ function removeTaskCard(id) {
 }
 
 function clearTaskQueue() {
+  // Wired to a "Clear All" danger button and there is no undo -- the whole
+  // queue went in one click, silently.
+  if (taskCards.length > 0 && !confirm(
+      `Remove all ${taskCards.length} task(s) from the queue? This can't be undone.`)) return;
   taskCards = [];
   selectedTaskId = null;
   renderTaskList();
@@ -2320,54 +2422,55 @@ function renderTaskBuilder() {
     return;
   }
   const d = TASK_DATA[t.mode];
-  const sel = (key, options, fmt) => `
-    <select class="task-select" onchange="setTaskProp('${t.id}', '${key}', this.value)">
+  const sel = (key, options, fmt, tooltip = '') => `
+    <select class="task-select" onchange="setTaskProp('${t.id}', '${key}', this.value)" ${tooltip ? `data-tooltip="${escapeHtml(tooltip)}"` : ''}>
       ${taskOpts(options, t[key], fmt)}
     </select>`;
-  const field = (label, control) => `<div class="task-field"><span>${label}</span>${control}</div>`;
+  const field = (label, control, tooltip = '') => `<div class="task-field" ${tooltip ? `data-tooltip="${escapeHtml(tooltip)}"` : ''}><span>${label}</span>${control}</div>`;
 
   const fields = [
-    field('Mode', sel('mode', Object.keys(TASK_DATA), k => TASK_DATA[k].label)),
+    field('Mode', sel('mode', Object.keys(TASK_DATA), k => TASK_DATA[k].label, 'Select game mode: Story, Raid, Expedition, or Event'), 'Choose game mode'),
     field('Repeat', `<div class="task-rep-group" style="width: 100%;">&times;<input type="number" min="1" value="${t.repeat}"
-      oninput="setTaskProp('${t.id}', 'repeat', Math.max(1, parseInt(this.value, 10) || 1))"></div>`),
+      oninput="setTaskProp('${t.id}', 'repeat', Math.max(1, parseInt(this.value, 10) || 1))"></div>`, 'Number of times to run this task'),
   ];
 
   if (t.mode === 'story' || t.mode === 'raid') {
-    fields.push(field('Map', sel('map', d.maps)));
-    fields.push(field('Stage', sel('stage', d.stages, s => /^\d+$/.test(s) ? 'Stage ' + s : s)));
+    fields.push(field('Map', sel('map', d.maps, null, 'Select map')));
+    const stageTooltip = t.mode === 'raid' ? 'Select Raid Act 1, Act 2, or Act 3' : 'Select Stage 1-5, Infinite, or Mastery';
+    fields.push(field('Stage', sel('stage', d.stages, s => /^\d+$/.test(s) ? 'Stage ' + s : s, stageTooltip), stageTooltip));
   } else if (t.mode === 'expedition') {
-    fields.push(field('Expedition', sel('map', d.maps)));
+    fields.push(field('Expedition', sel('map', d.maps, null, 'Select Expedition map')));
   } else if (t.mode === 'event') {
-    fields.push(field('Act', sel('stage', d.stages, s => 'Act ' + s)));
+    fields.push(field('Act', sel('stage', d.stages, s => 'Act ' + s, 'Select Event Act 1-4'), 'Select Event Act 1-4'));
   }
 
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
   if ((t.mode === 'story' && !specialStage) || t.mode === 'expedition') {
-    fields.push(field('Difficulty', sel('difficulty', d.difficulties)));
+    fields.push(field('Difficulty', sel('difficulty', d.difficulties, null, 'Select difficulty level')));
   } else if (d.fixedDifficulty || specialStage) {
-    fields.push(field('Difficulty', `<span class="task-chip" style="align-self: flex-start;">Hard &middot; locked</span>`));
+    fields.push(field('Difficulty', `<span class="task-chip" style="align-self: flex-start;">Hard &middot; locked</span>`, 'Difficulty locked to Hard for this mode'));
   }
 
   if (t.mode === 'expedition') {
     fields.push(field('Extract After', `<input type="number" class="block-input" min="0" value="${t.extract_after}"
-      oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`));
+      oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`, 'Number of extraction prompts to decline before extracting'));
   }
 
   const playSeg = `
-    <div class="seg-toggle">
+    <div class="seg-toggle" data-tooltip="Select Solo or Matchmaking / Party mode">
       <button type="button" class="seg-btn ${t.play_mode === 'solo' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'solo'); renderTaskBuilder()">Solo</button>
       <button type="button" class="seg-btn ${t.play_mode === 'matchmaking' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'matchmaking'); renderTaskBuilder()">Matchmaking</button>
     </div>`;
-  fields.push(field('Play Mode', playSeg));
+  fields.push(field('Play Mode', playSeg, 'Select Solo or Matchmaking / Party mode'));
 
   // Team Loadout rides with the chosen template (see the Macro Manager tab), so the
   // macro picker is the only loadout-related control left on a task.
   const macroSel = `
-    <select class="task-select" onchange="setTaskProp('${t.id}', 'macro', this.value)">
+    <select class="task-select" onchange="setTaskProp('${t.id}', 'macro', this.value)" data-tooltip="Select a pre-start placement macro template">
       <option value="">No Macro</option>
       ${taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === t.macro ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('')}
     </select>`;
-  fields.push(field('Macro Operation', macroSel));
+  fields.push(field('Macro Operation', macroSel, 'Select a pre-start placement macro template'));
 
   // Event farm tasks (Acts 1-3) can auto-divert to Villian Invasion Act 4
   // ("Crow - Dawn") when a Crow Relic drops. Not shown on an Act 4 task
@@ -3540,7 +3643,10 @@ function setRecentPlaceUnitMap(category, name) {
   } catch (e) {}
 }
 
+let puRequestId = 0;
+
 async function openPlaceUnitModal(blockId) {
+  const reqId = ++puRequestId;
   const loc = findBlockLocation(blockId);
   if (!loc) return;
   const b = creationPhases[loc.phase][loc.idx];
@@ -3559,6 +3665,7 @@ async function openPlaceUnitModal(blockId) {
   } catch (e) {
     puState.categories = [];
   }
+  if (reqId !== puRequestId) return;
   if (puState.categories.length === 0) {
     document.getElementById('pu-category-tabs').innerHTML = '';
     document.getElementById('pu-map-grid').innerHTML = '<div class="rh-empty">No maps found in Assets/map -- add category folders with map images, or use "Use Roblox Screen" instead.</div>';
@@ -3577,15 +3684,17 @@ async function openPlaceUnitModal(blockId) {
     } catch (e) {
       puState.maps = [];
     }
+    if (reqId !== puRequestId) return;
     if (puState.maps.includes(recent.name)) {
-      await selectPlaceUnitMap(recent.name);
+      await selectPlaceUnitMap(recent.name, reqId);
       return;
     }
   }
-  await selectPlaceUnitCategory(puState.categories[0]);
+  await selectPlaceUnitCategory(puState.categories[0], reqId);
 }
 
 function closePlaceUnitModal() {
+  ++puRequestId;
   document.getElementById('pu-modal').style.display = 'none';
   puState.blockId = null;
   puState.coordTarget = null;
@@ -3605,7 +3714,8 @@ function renderPlaceUnitCategoryTabs() {
     `).join('') + `</div>`;
 }
 
-async function selectPlaceUnitCategory(category) {
+async function selectPlaceUnitCategory(category, expectedReqId) {
+  const reqId = expectedReqId || ++puRequestId;
   puState.category = category;
   renderPlaceUnitCategoryTabs();
   document.getElementById('pu-canvas-wrap').style.display = 'none';
@@ -3615,12 +3725,14 @@ async function selectPlaceUnitCategory(category) {
   } catch (e) {
     puState.maps = [];
   }
-  renderPlaceUnitMapGrid();
+  if (reqId !== puRequestId) return;
+  renderPlaceUnitMapGrid(reqId);
 }
 
 // Built via DOM calls (not innerHTML + inline onclick) so map names with
 // apostrophes ("King's Tomb") don't need attribute-quote escaping.
-function renderPlaceUnitMapGrid() {
+function renderPlaceUnitMapGrid(expectedReqId) {
+  const reqId = expectedReqId || puRequestId;
   const el = document.getElementById('pu-map-grid');
   el.innerHTML = '';
   if (puState.maps.length === 0) {
@@ -3640,16 +3752,19 @@ function renderPlaceUnitMapGrid() {
     card.addEventListener('click', () => selectPlaceUnitMap(name));
     el.appendChild(card);
     pywebview.api.get_map_image(puState.category, name).then(result => {
+      if (reqId !== puRequestId) return;
       if (result && result.ok) img.src = result.data_uri;
     }).catch(() => {});
   }
 }
 
-async function selectPlaceUnitMap(name) {
+async function selectPlaceUnitMap(name, expectedReqId) {
+  const reqId = expectedReqId || ++puRequestId;
   try {
     const result = await pywebview.api.get_map_image(puState.category, name);
+    if (reqId !== puRequestId) return;
     if (!result.ok) { addLog(`[Macro Manager] Couldn't load map "${name}".`); return; }
-    loadPlaceUnitImage(result.data_uri);
+    loadPlaceUnitImage(result.data_uri, reqId);
     setRecentPlaceUnitMap(puState.category, name);
   } catch (e) {}
 }
@@ -3659,6 +3774,7 @@ async function selectPlaceUnitMap(name) {
 // settle and paint a real frame, capture, then come straight back. The modal
 // stays open the whole time (the game just paints over it for a moment).
 async function usePlaceUnitRobloxScreen() {
+  const reqId = ++puRequestId;
   // captureDanceActive: this hop NEEDS show_game() to fire even though our
   // modal is open (see isBlockingOverlayOpen) -- the game being visible is
   // what makes the screenshot possible at all. Returns whether a capture
@@ -3677,17 +3793,20 @@ async function usePlaceUnitRobloxScreen() {
   } finally {
     captureDanceActive = false;
   }
+  if (reqId !== puRequestId) return false;
   if (!result || !result.ok) {
     addLog(`[Macro Manager] Couldn't capture Roblox screen: ${(result && result.reason) || 'error'}`);
     return false;
   }
-  loadPlaceUnitImage(result.data_uri);
+  loadPlaceUnitImage(result.data_uri, reqId);
   return true;
 }
 
-function loadPlaceUnitImage(dataUri) {
+function loadPlaceUnitImage(dataUri, expectedReqId) {
+  const reqId = expectedReqId || puRequestId;
   const img = new Image();
   img.onload = () => {
+    if (reqId !== puRequestId) return;
     puState.image = img;
     puState.naturalW = img.naturalWidth;
     puState.naturalH = img.naturalHeight;
@@ -3701,6 +3820,7 @@ function loadPlaceUnitImage(dataUri) {
 }
 
 function backToPlaceUnitMapGrid() {
+  ++puRequestId;
   document.getElementById('pu-canvas-wrap').style.display = 'none';
   document.getElementById('pu-map-grid').style.display = '';
   puState.image = null;
@@ -4816,13 +4936,10 @@ function onBlockDrop(e, phase, targetId) {
   moveBlockToPhase(draggedId, phase, toIdx === -1 ? null : toIdx);
 }
 
-async function saveCurrentTemplate() {
-  const nameInput = document.getElementById('template-name');
-  const name = nameInput.value.trim();
-  if (!name) return;
-  // No more separate top-level "walk" config -- Walk Path is a real block
-  // now, so its mode/pathName save as part of the block itself, same as
-  // every other block's own fields.
+// No more separate top-level "walk" config -- Walk Path is a real block
+// now, so its mode/pathName save as part of the block itself, same as
+// every other block's own fields.
+function currentCreationPayload() {
   const payload = { team: creationTeam, equipment: creationEquipment };
   PHASES.forEach(phase => {
     payload[phase] = creationPhases[phase].map(b => ({
@@ -4831,9 +4948,39 @@ async function saveCurrentTemplate() {
       sprint: b.sprint, key: b.key,
     }));
   });
+  return payload;
+}
+
+// What the editor held the last time it was in sync with disk (saved, loaded
+// or reset). Compared against, rather than a dirty flag set from every input
+// handler, so edit-then-undo doesn't leave a false "unsaved" warning -- and
+// so nothing has to remember to set the flag when a new control is added.
+let creationSavedSnapshot = null;
+
+function currentCreationSnapshot() {
+  const name = document.getElementById('template-name')?.value.trim() || '';
+  return JSON.stringify({ name, blocks: currentCreationPayload() });
+}
+
+function markCreationEditorSaved() {
+  creationSavedSnapshot = currentCreationSnapshot();
+}
+
+// null until the editor has been in a known state once: with no baseline
+// there is nothing to compare against, and warning then would fire on a
+// fresh, empty editor.
+function creationEditorHasUnsavedChanges() {
+  return creationSavedSnapshot != null && currentCreationSnapshot() !== creationSavedSnapshot;
+}
+
+async function saveCurrentTemplate() {
+  const nameInput = document.getElementById('template-name');
+  const name = nameInput.value.trim();
+  if (!name) return;
   try {
-    const result = await pywebview.api.save_template(name, payload);
+    const result = await pywebview.api.save_template(name, currentCreationPayload());
     addLog(`Saved template "${result.name}".`);
+    markCreationEditorSaved();
     refreshTemplateList();
   } catch (e) {}
 }
@@ -4852,6 +4999,7 @@ function newTemplate() {
   creationFreshLoad = true;
   renderPhases();
   renderCreationLoadout();
+  markCreationEditorSaved();
 }
 
 async function deleteSelectedTemplate() {
@@ -4900,16 +5048,59 @@ async function importTemplates() {
   const data = result.data || {};
   const templates = data.templates && typeof data.templates === 'object' ? data.templates : null;
   if (!templates) { addLog('[Macro Manager] Import failed: that file is not a template export.'); return; }
-  const pathAdded = await importCustomPaths(data.paths);
+  const entries = Object.entries(templates).filter(([, t]) => t && t.blocks != null);
+  if (entries.length === 0) {
+    addLog('[Macro Manager] Import failed: that file contains no macros.');
+    return;
+  }
+  // The import loads a macro into the editor at the end, so anything
+  // unsaved there is about to be replaced. Ask first.
+  if (creationEditorHasUnsavedChanges() && !confirm(
+      'The Macro Manager editor has unsaved changes, and importing will replace them. Continue?')) {
+    addLog('[Macro Manager] Import cancelled -- your unsaved editor changes were kept.');
+    return;
+  }
   let existing = [];
   try { existing = await pywebview.api.list_templates(); } catch (e) {}
-  let added = 0;
-  for (const [name, t] of Object.entries(templates)) {
-    if (existing.includes(name) || !t || t.blocks == null) continue;
-    try { await pywebview.api.save_template(name, t.blocks); added++; } catch (e) {}
+  // A same-name macro used to be skipped in silence: re-importing your own
+  // edited export did nothing at all, and the log still said it imported
+  // fine. Overwriting without asking is the other way to lose work, though
+  // -- a shared pack that happens to contain "Boss Rush" would take out the
+  // one you built. So ask once, for all of them, and say which is which.
+  const conflicts = entries.filter(([name]) => existing.includes(name));
+  const replaceExisting = conflicts.length === 0 || confirm(
+    `${conflicts.length} of these already exist:\n\n`
+    + conflicts.map(([name]) => `    ${name}`).join('\n')
+    + '\n\nReplace them with the imported versions? '
+    + 'Choose Cancel to keep yours and import only the new ones.');
+  const pathAdded = await importCustomPaths(data.paths);
+  const imported = [];
+  let replaced = 0;
+  for (const [name, t] of entries) {
+    const isConflict = existing.includes(name);
+    if (isConflict && !replaceExisting) continue;
+    try {
+      await pywebview.api.save_template(name, t.blocks);
+      imported.push(name);
+      if (isConflict) replaced++;
+    } catch (e) {}
   }
   await refreshTemplateList();
-  addLog(`[Macro Manager] Imported ${added} template(s)${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
+  if (imported.length > 0) {
+    // Open the first one. The dropdown used to refresh but keep its empty
+    // selection, so even a fully successful import looked like nothing had
+    // happened.
+    const sel = document.getElementById('template-select');
+    if (sel) {
+      sel.value = imported[0];
+      await loadSelectedTemplate();
+    }
+  }
+  const kept = conflicts.length - replaced;
+  addLog(`[Macro Manager] Imported ${imported.length} macro(s)`
+    + `${replaced ? ` (${replaced} replaced)` : ''}`
+    + `${kept ? `; kept your existing ${kept}` : ''}`
+    + `${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
 }
 
 async function refreshTemplateList() {
@@ -4986,6 +5177,9 @@ async function loadSelectedTemplate() {
     creationFreshLoad = true;
     renderPhases();
     document.getElementById('template-name').value = data.name || name;
+    // Freshly in sync with disk -- this is the baseline the unsaved-changes
+    // check compares against.
+    markCreationEditorSaved();
   } catch (e) {}
 }
 

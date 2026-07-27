@@ -81,6 +81,18 @@ def list_templates() -> list:
     return sorted(set(names))
 
 
+def template_exists(name: str) -> bool:
+    """Whether a macro is actually saved under this display name.
+
+    list_templates() reports display names; _resolve maps one back to its
+    file. Export used to go straight to load_template, which returns an
+    empty dict for a name with no file -- so exporting something renamed or
+    deleted in another window produced a valid-looking file full of empty
+    macros, and the failure only showed up on import.
+    """
+    return os.path.isfile(_resolve(name))
+
+
 def save_template(name: str, blocks: list) -> str:
     name = (name or "").strip() or "template"
     os.makedirs(TEMPLATES_DIR, exist_ok=True)

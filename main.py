@@ -1271,6 +1271,8 @@ class Api:
 
     def export_template_code(self, names=None) -> dict:
         if isinstance(names, str) and names.strip():
+            if not tpl.template_exists(names):
+                return {"ok": False, "reason": f'Macro "{names}" is not saved -- save it before exporting.'}
             single_tpl = tpl.load_template(names)
             blocks = single_tpl.get("blocks", {})
             payload = {
@@ -1284,6 +1286,8 @@ class Api:
         elif isinstance(names, list) and len(names) > 0:
             if len(names) == 1:
                 t_name = names[0]
+                if not tpl.template_exists(t_name):
+                    return {"ok": False, "reason": f'Macro "{t_name}" is not saved -- save it before exporting.'}
                 single_tpl = tpl.load_template(t_name)
                 blocks = single_tpl.get("blocks", {})
                 payload = {
@@ -1297,6 +1301,8 @@ class Api:
             else:
                 templates = {}
                 for t_name in names:
+                    if not tpl.template_exists(t_name):
+                        return {"ok": False, "reason": f'Macro "{t_name}" is not saved -- save it before exporting.'}
                     loaded = tpl.load_template(t_name)
                     templates[t_name] = loaded.get("blocks", {})
                 payload = {
