@@ -1,4 +1,4 @@
-from core.webhook import validate, validate_webhook_url, send, send_file, send_rich
+from core.webhook import send, send_file, send_rich, validate, validate_webhook_url
 
 
 def test_validate_empty_url():

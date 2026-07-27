@@ -1,7 +1,8 @@
+import contextlib
 import logging
-from logging.handlers import RotatingFileHandler
 import os
 import time
+from logging.handlers import RotatingFileHandler
 
 from . import constants
 
@@ -59,8 +60,6 @@ class Logger:
     def close(self) -> None:
         """Closes the file handler and releases resources."""
         if self._handler is not None:
-            try:
+            with contextlib.suppress(OSError):
                 self._handler.close()
-            except OSError:
-                pass
             self._handler = None

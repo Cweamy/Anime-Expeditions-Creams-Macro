@@ -6,8 +6,9 @@ Tesseract has a real shot at it.
 """
 import re
 import subprocess
-import numpy as np
+
 import cv2
+import numpy as np
 
 # Winget/the UB-Mannheim installer both drop it here by default. A fresh
 # install isn't on PATH until the shell/session restarts, so check this

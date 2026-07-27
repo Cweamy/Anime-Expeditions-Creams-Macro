@@ -23,8 +23,8 @@ whichever came first.
 import re
 from collections import Counter
 
-from core.ocr import get_pytesseract, candidate_masks, ocr_mask
 from core import ocr_windows
+from core.ocr import candidate_masks, get_pytesseract, ocr_mask
 
 _WAVE_PATTERN = re.compile(r"^\d{1,4}\s?/\s?\d{1,4}$")
 _WHITELIST = "0123456789/"
@@ -73,9 +73,8 @@ def read_wave(region_bgr):
                 # about as often as '/'; normalize before matching.
                 text = re.sub(r"\s+", " ", text.replace("|", "/").replace("l", "/"))
                 nums = re.findall(r"\d+", text)
-                if _WAVE_PATTERN.match(text) or (len(nums) == 2 and "/" in text):
-                    if len(nums) == 2:
-                        votes[(int(nums[0]), int(nums[1]))] += 1
+                if (_WAVE_PATTERN.match(text) or (len(nums) == 2 and "/" in text)) and len(nums) == 2:
+                    votes[(int(nums[0]), int(nums[1]))] += 1
     if not votes:
         return None, None
     (current, maximum), _count = votes.most_common(1)[0]

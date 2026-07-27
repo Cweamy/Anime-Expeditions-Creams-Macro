@@ -1,5 +1,6 @@
-import os
+import contextlib
 import ctypes
+import os
 from ctypes import wintypes
 
 from . import config
@@ -61,9 +62,7 @@ def is_roblox_process_or_title(hwnd: int, title: str) -> bool:
     proc_name = get_process_name(hwnd)
     if proc_name in ROBLOX_PROCESS_NAMES or proc_name.startswith("roblox") or proc_name.startswith("bloxstrap"):
         return True
-    if not proc_name and (title_lower == "roblox" or title_lower.startswith("roblox")):
-        return True
-    return False
+    return bool(not proc_name and (title_lower == "roblox" or title_lower.startswith("roblox")))
 
 
 GWL_STYLE = -16
@@ -236,10 +235,8 @@ def set_dpi_aware() -> None:
             return
     except (OSError, AttributeError):
         pass
-    try:
+    with contextlib.suppress(OSError, AttributeError):
         user32.SetProcessDPIAware()
-    except (OSError, AttributeError):
-        pass
 
 
 def get_display_scale_percent() -> int:

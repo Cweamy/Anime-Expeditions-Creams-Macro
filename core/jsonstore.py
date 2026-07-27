@@ -17,6 +17,7 @@ the NEW complete file, never a half-written one.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -63,8 +64,6 @@ def write_json_atomic(path: str, data: Any) -> None:
         # BaseException, not Exception: a KeyboardInterrupt mid-write is one
         # of the very cases this exists to survive, and it must not leave the
         # scratch file lying next to the real one.
-        try:
+        with contextlib.suppress(OSError):
             os.remove(tmp)
-        except OSError:
-            pass
         raise

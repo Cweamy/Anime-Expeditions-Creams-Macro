@@ -1,5 +1,6 @@
 """Tests for core/runner_blocks.py (BlockOps mixin)."""
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from core.runner_blocks import BlockOps

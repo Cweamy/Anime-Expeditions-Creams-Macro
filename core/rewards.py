@@ -19,11 +19,12 @@ import difflib
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-import numpy as np
-import cv2
 
-from core.ocr import capture_region  # noqa: F401 -- re-exported for main.Api.read_rewards
+import cv2
+import numpy as np
+
 from core import constants
+from core.ocr import capture_region  # noqa: F401 -- re-exported for main.Api.read_rewards
 
 # Reference icon art scraped from the game's wiki (see tools/fetch_item_icons.py) --
 # transparent-background PNGs named after the item, one per known reward.

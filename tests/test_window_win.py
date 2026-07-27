@@ -1,4 +1,5 @@
 import ctypes
+
 import numpy as np
 import pytest
 
@@ -109,7 +110,7 @@ def test_is_roblox_process_or_title(monkeypatch):
 
 def test_base_window_manager_and_factory():
     """Verifies BaseWindowManager abstraction, WindowsWindowManager inheritance, and get_window_manager factory function."""
-    from core.window import BaseWindowManager, get_window_manager, WindowsWindowManager, WindowManager
+    from core.window import BaseWindowManager, WindowManager, WindowsWindowManager, get_window_manager
 
     wm = get_window_manager("Roblox")
     assert isinstance(wm, BaseWindowManager)

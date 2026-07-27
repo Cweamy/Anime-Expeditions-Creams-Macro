@@ -12,8 +12,8 @@ the calibrated box's edges land as long as the grid is roughly inside it.
 """
 import re
 
-import numpy as np
 import cv2
+import numpy as np
 
 from core.ocr import get_pytesseract, ocr_best
 

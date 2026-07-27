@@ -1,4 +1,5 @@
 import pytest
+
 from core import share
 
 
@@ -138,6 +139,7 @@ def test_all_real_templates_lossless_roundtrip(tmp_path, monkeypatch):
     """
     import json
     import os
+
     import main
     from core import templates as tpl
 
@@ -214,6 +216,7 @@ def test_decode_rejects_decompression_bomb():
     checked on both the v2 (dict) and legacy v1 containers."""
     import base64
     import zlib
+
     from core import share
 
     payload = b"A" * (share.MAX_DECOMPRESSED_SIZE + 1024)
@@ -235,6 +238,7 @@ def test_legacy_v1_code_still_decodes():
     import base64
     import json
     import zlib
+
     from core import share
 
     payload = {"kind": "anime-expeditions-template", "name": "Old Code", "blocks": [{"type": "walk_path"}]}
@@ -252,6 +256,7 @@ def test_v2_is_shorter_than_v1_for_a_single_template():
     import base64
     import json
     import zlib
+
     from core import share
 
     payload = {

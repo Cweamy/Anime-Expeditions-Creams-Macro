@@ -4,6 +4,7 @@ Provides thread-local reuse of mss.MSS objects to eliminate GDI handle thrashing
 during continuous polling while ensuring explicit resource cleanup via close()
 when worker threads finish or when the application shuts down.
 """
+import contextlib
 import threading
 
 _mss_lock = threading.Lock()
@@ -40,10 +41,8 @@ def close_mss():
         _thread_local.sct = None
         with _mss_lock:
             _active_instances.discard(sct)
-        try:
+        with contextlib.suppress(Exception):
             sct.close()
-        except Exception:
-            pass
 
 
 def close_all_mss():
@@ -53,7 +52,5 @@ def close_all_mss():
         _active_instances.clear()
     _thread_local.sct = None
     for sct in instances:
-        try:
+        with contextlib.suppress(Exception):
             sct.close()
-        except Exception:
-            pass

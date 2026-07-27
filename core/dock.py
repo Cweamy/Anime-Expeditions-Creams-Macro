@@ -2,9 +2,8 @@ import sys
 import threading
 import time
 
-from . import window as wm
 from . import config
-
+from . import window as wm
 
 if sys.platform == "darwin":
 

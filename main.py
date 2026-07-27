@@ -3,31 +3,27 @@ Cream's Macro | Anime Expeditions
 Run:  python main.py            (launches the docked macro UI)
       python main.py --test     (CLI diagnostics for mouse/keyboard/window)
 """
-import os
-import re
-import sys
-import time
+import contextlib
 import json
+import os
 import queue
+import re
 import subprocess
+import sys
 import threading
+import time
 from datetime import date
 
-from core import window as wm
-from core import config
-from core import constants
-from core import keys
+from core import config, constants, keys, share, updater, webhook
 from core import settings as cfg
 from core import templates as tpl
-from core import share
-from core import webhook
-from core.window import WindowManager
+from core import window as wm
 from core.dock import GameDocker
-from core.mouse import Mouse
 from core.keyboard import Keyboard
 from core.logger import Logger
+from core.mouse import Mouse
 from core.runner import MacroRunner
-from core import updater
+from core.window import WindowManager
 
 # Imported at module scope (not inside the darwin branches that use it) so the
 # macOS-only geometry helpers below can be plain module functions. window_mac
@@ -1187,6 +1183,7 @@ class Api:
     def export_tasks_file(self, payload: dict, filename_prefix: str = "tasks") -> dict:
         import json
         import time as _time
+
         import webview
         if not self._window:
             return {"ok": False, "reason": "no_window"}
@@ -1213,6 +1210,7 @@ class Api:
 
     def import_tasks_file(self) -> dict:
         import json
+
         import webview
         if not self._window:
             return {"ok": False, "reason": "no_window"}
@@ -1383,10 +1381,8 @@ class Api:
         evaluate_js round-trip instead of one per line."""
         while not self.stopping.is_set():
             time.sleep(0.1)
-            try:
+            with contextlib.suppress(Exception):
                 self._flush_log_queue()
-            except Exception:
-                pass
 
     def _flush_log_queue(self) -> None:
         with self._log_flush_lock:
@@ -1411,10 +1407,8 @@ class Api:
             js = (f"if (window.appendLogBatch) {{ window.appendLogBatch({payload}); }} "
                   f"else if (window.addLog) {{ {payload}.forEach(function(l){{ window.addLog(l); }}); }}")
             for win in wins:
-                try:
+                with contextlib.suppress(Exception):
                     win.evaluate_js(js)
-                except Exception:
-                    pass
 
     def clear_logs(self) -> None:
         # Drops the replay buffer too, so a log window popped out *after* this
@@ -1431,10 +1425,8 @@ class Api:
         for win in (self._window, self._log_window):
             if not win:
                 continue
-            try:
+            with contextlib.suppress(Exception):
                 win.evaluate_js("window.clearLogs && window.clearLogs()")
-            except Exception:
-                pass
 
     def pop_out_logs(self) -> dict:
         import webview  # imported lazily so --test works without pywebview installed
@@ -1459,12 +1451,10 @@ class Api:
             if not self._log_history:
                 return
             payload = json.dumps(self._log_history)
-            try:
+            with contextlib.suppress(Exception):
                 win.evaluate_js(
                     f"if (window.appendLogBatch) {{ window.appendLogBatch({payload}); }} "
                     f"else if (window.addLog) {{ {payload}.forEach(function(l){{ window.addLog(l); }}); }}")
-            except Exception:
-                pass
 
         def _on_closed():
             self._log_window = None
@@ -1480,7 +1470,9 @@ class Api:
         the raw crop as a data URI, so the monitor can show the actual
         pixels even when OCR misreads a busy background."""
         import base64
-        from core import vision, wave as wave_module
+
+        from core import vision
+        from core import wave as wave_module
         from core.runner_constants import WAVE_REGION
         hwnd = self.game_hwnd
         if not hwnd or not wm.is_window(hwnd):
@@ -1528,10 +1520,8 @@ class Api:
     def push_ui(self, js_call: str) -> None:
         if not self._window:
             return
-        try:
+        with contextlib.suppress(Exception):
             self._window.evaluate_js(f"window.{js_call} && window.{js_call}()")
-        except Exception:
-            pass
 
     def minimize_window(self):
         if self._window:
@@ -2002,6 +1992,7 @@ class Api:
         # be confusable with -- or collide with -- one of those.
         import cv2
         import numpy as np
+
         from core import vision
 
         root = self._image_manager_root(category)
@@ -2094,7 +2085,7 @@ class Api:
         # since the winget download/install can take a while; the button's
         # own JS polls for completion the same way Camera Setup's does.
         def run():
-            from core import tesseract_installer, ocr
+            from core import ocr, tesseract_installer
             ok = tesseract_installer.install_tesseract(log=self.push_log)
             if ok:
                 ocr.reset_tesseract_cache()
@@ -2386,8 +2377,9 @@ class Api:
         "it's broken" reports can arrive as one file instead of a
         photo-of-a-screen and twenty questions."""
         import json
-        import zipfile as zf_mod
         import platform
+        import zipfile as zf_mod
+
         import webview
         if not self._window:
             return {"ok": False, "reason": "no_window"}
@@ -2861,8 +2853,8 @@ class Api:
 
 
 def _launch_ui():
-    import webview  # imported lazily so --test works without pywebview/keyboard installed
     import keyboard
+    import webview  # imported lazily so --test works without pywebview/keyboard installed
 
     # pywebview's frameless drag region defaults to starting a window-drag on
     # ANY mousedown inside .pywebview-drag-region, including on buttons/icons
@@ -3285,10 +3277,8 @@ def _launch_ui():
             key = hotkeys.get(action) or HOTKEY_DEFAULTS.get(action, "")
             if not key:
                 continue
-            try:
+            with contextlib.suppress(ValueError, ImportError, OSError):
                 keyboard.add_hotkey(key, fn, suppress=False)
-            except (ValueError, ImportError, OSError):
-                pass
 
     def on_shown():
         threading.Thread(target=_dock_watchdog, daemon=True).start()
@@ -3327,10 +3317,8 @@ def _launch_ui():
     # webview.start() returns once the window is gone -- detach here too, in
     # case the window died without firing our handlers.
     _on_app_exit()
-    try:
+    with contextlib.suppress(OSError):
         keyboard.unhook_all()
-    except OSError:
-        pass  # macOS without hook permissions -- nothing was ever hooked
 
 
 def test_mouse():

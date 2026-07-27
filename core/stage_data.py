@@ -117,7 +117,7 @@ def expected_item_names(map_name: str, stage: str, difficulty: str = "Normal") -
         return []
     rewards = stage_info.get("Rewards", {})
     base = rewards.get("Normal") or rewards.get("Wave") or {}
-    names = [name for name in base.keys() if name != "Every"]
+    names = [name for name in base if name != "Every"]
     for item in rewards.get("Items", []):
         if item.get("Item"):
             names.append(item["Item"])

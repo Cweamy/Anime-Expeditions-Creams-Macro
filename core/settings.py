@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import threading
@@ -36,10 +37,8 @@ def _save_unlocked(data: dict) -> None:
             os.fsync(f.fileno())
         os.replace(tmp, SETTINGS_FILE)
     except OSError:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(tmp)
-        except OSError:
-            pass
 
 
 def load() -> dict:

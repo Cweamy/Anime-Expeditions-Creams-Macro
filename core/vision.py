@@ -25,8 +25,7 @@ from collections import OrderedDict
 import cv2
 import numpy as np
 
-from . import config
-from . import constants
+from . import config, constants
 from . import window as wm
 
 # ---------------------------------------------------------------------------

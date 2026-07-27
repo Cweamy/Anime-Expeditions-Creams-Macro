@@ -31,14 +31,23 @@ with a [window_mac] prefix.
 """
 
 import Quartz
-from AppKit import NSRunningApplication, NSApplicationActivateIgnoringOtherApps
+from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication
+
 try:
     # AX* symbols live in the ApplicationServices/HIServices bindings.
     from ApplicationServices import (
-        AXIsProcessTrusted, AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
-        AXUIElementSetAttributeValue, AXUIElementPerformAction, AXValueCreate,
-        kAXWindowsAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXRaiseAction,
-        kAXValueCGPointType, kAXValueCGSizeType,
+        AXIsProcessTrusted,
+        AXUIElementCopyAttributeValue,
+        AXUIElementCreateApplication,
+        AXUIElementPerformAction,
+        AXUIElementSetAttributeValue,
+        AXValueCreate,
+        kAXPositionAttribute,
+        kAXRaiseAction,
+        kAXSizeAttribute,
+        kAXValueCGPointType,
+        kAXValueCGSizeType,
+        kAXWindowsAttribute,
     )
     _HAVE_AX = True
 except Exception:  # pragma: no cover -- older pyobjc layouts; AX features degrade to no-ops

@@ -9,10 +9,10 @@ Methods here run with MacroRunner's full self: shared state and helpers
 import math
 import threading
 import time
+from contextlib import suppress
 
-from . import keys
+from . import keys, vision
 from . import paths as walk_paths
-from . import vision
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- the shared constants namespace
 
@@ -360,8 +360,8 @@ class BlockOps:
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         try:
-            from core.ocr import capture_region
             from core import wave as wave_module
+            from core.ocr import capture_region
             image = capture_region(left + WAVE_REGION[0], top + WAVE_REGION[1], WAVE_REGION[2], WAVE_REGION[3])
             current, maximum = wave_module.read_wave(image)
         except Exception as exc:
@@ -628,6 +628,7 @@ class BlockOps:
         offset of whichever valid pixel is CLOSEST to the center, or None
         if nothing valid was found anywhere in the box."""
         import numpy as np
+
         from core.ocr import capture_region
         half = PLACE_SEARCH_BOX_SIZE // 2
         patch = capture_region(left + orig_x - half, top + orig_y - half,
@@ -1031,10 +1032,8 @@ class BlockOps:
             key_name = parts[1]
             hold_seconds = self._CUSTOM_KEY_DEFAULT_HOLD_MS / 1000.0
             if len(parts) >= 3 and parts[2].endswith("ms"):
-                try:
-                    hold_seconds = int(parts[2][:-2]) / 1000.0
-                except ValueError:
-                    pass  # keep the default rather than fail the whole spec over a bad number
+                with suppress(ValueError):
+                    hold_seconds = int(parts[2][:-2]) / 1000.0  # keep default if bad number
         else:
             key_name = parts[0]
 

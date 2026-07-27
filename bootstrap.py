@@ -20,11 +20,13 @@ merge_assets_update applies for in-app updates.
 
     py -3.12 bootstrap.py
 """
-import os
-import sys
+import contextlib
 import ctypes
+import os
 import subprocess
+import sys
 import zipfile
+
 import requests
 
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -44,10 +46,8 @@ MB_ERROR = 0x10
 
 
 def _msg(text: str, icon: int = MB_OK):
-    try:
+    with contextlib.suppress(Exception):
         ctypes.windll.user32.MessageBoxW(0, text, "Cream's Macro", icon)
-    except Exception:
-        pass
 
 
 def _latest_tag() -> str | None:
@@ -114,10 +114,8 @@ def _download_and_extract(url: str) -> bool:
     except Exception:
         return False
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(LOCAL_ZIP)
-        except OSError:
-            pass
 
 
 def _local_version() -> str:

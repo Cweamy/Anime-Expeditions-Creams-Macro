@@ -13,20 +13,20 @@ Rewards"/"Read Game Stats" buttons). Equipment include/exclude, and the
 rest of the Battle-phase block types (Walk/Wait/Setting), plug in once those
 exist.
 """
+import contextlib
 import os
 import threading
 import time
 from datetime import datetime, timezone
 
-from . import camera
-from . import keys
-from . import stage_select
-from . import vision
+from . import camera, keys, stage_select, vision
 from . import window as wm
-from .runner_constants import *  # noqa: F401,F403 -- see runner_constants' docstring
 from .runner_blocks import BlockOps
 from .runner_challenge import ChallengeOps
+from .runner_constants import *  # noqa: F401,F403 -- see runner_constants' docstring
 from .runner_expedition import ExpeditionOps
+
+
 class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
@@ -1312,10 +1312,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             # A temp file per match -- deleted once it's been sent (or the
             # send was skipped), whatever the outcome, so they don't pile up.
             if result_screenshot:
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(result_screenshot)
-                except OSError:
-                    pass
 
     def _capture_result_screenshot(self, hwnd) -> str:
         """Full-window screenshot of the Victory/Defeat screen, saved to a
@@ -1330,10 +1328,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             os.close(fd)
             saved = vision.save_window_screenshot(hwnd, path)
             if not saved:
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(path)
-                except OSError:
-                    pass
                 return None
             return saved
         except Exception as exc:
@@ -1464,6 +1460,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         files = []
         try:
             import cv2
+
             from . import status_card
             card = status_card.render_status_card_bgr(
                 is_win=is_win, action="Match Finished", last_run_duration=duration,
@@ -1556,9 +1553,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # it's actually positioned relative to Setting/Place Unit blocks
         # instead of always jumping the whole list.
         self._run_prestart_blocks(hwnd, stop_event, task, first_repeat, default_walk_paths)
-        if self._checkpoint(stop_event):
-            return False
-        return True
+        return not self._checkpoint(stop_event)
 
     def _apply_team_loadout(self, hwnd, stop_event: threading.Event, task: dict) -> bool:
         """Presses H to open the team-select panel, waits for it to
@@ -2892,13 +2887,12 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                     return False
                 if match is not None or stop_event.is_set():
                     break
-                if attempt < PLAY_CLICK_RETRY_ATTEMPTS:
+                if attempt < PLAY_CLICK_RETRY_ATTEMPTS and not self._click_play(hwnd, stop_event):
                     # Still on the lobby -- the earlier Play click plausibly
                     # never actually registered (see PLAY_CLICK_RETRY_ATTEMPTS'
                     # comment). Re-clicking is retriable in a way waiting
                     # even longer for a click that already failed isn't.
-                    if not self._click_play(hwnd, stop_event):
-                        return False
+                    return False
             if match is None:
                 if not stop_event.is_set():
                     self._log(f'[Macro] "nav_back" not found within {STORY_SCREEN_TIMEOUT:.0f}s x '

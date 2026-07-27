@@ -20,9 +20,9 @@ Requires:
 
 Output: dist/Cream's Macro - Anime Expeditions.exe
 """
+import os
 import subprocess
 import sys
-import os
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # No apostrophe -- PyInstaller writes --name straight into an

@@ -7,18 +7,18 @@ The implementation loaded depends on the operating system:
 """
 import abc
 import sys
-from typing import Optional, Tuple, Any
+from typing import Any, Optional
 
 
 class BaseWindowManager(abc.ABC):
     """Abstract base class for platform-specific window managers."""
 
-    def __init__(self, title_substring: Optional[str] = None):
+    def __init__(self, title_substring: str | None = None):
         self.title_substring = title_substring
         self.hwnd = None
 
     @abc.abstractmethod
-    def find_window(self) -> Optional[Any]:
+    def find_window(self) -> Any | None:
         """Locate the target window and return its handle."""
         pass
 
@@ -28,7 +28,7 @@ class BaseWindowManager(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_rect(self) -> Tuple[int, int, int, int]:
+    def get_rect(self) -> tuple[int, int, int, int]:
         """Return the window rect as (left, top, right, bottom)."""
         pass
 
@@ -38,7 +38,7 @@ class BaseWindowManager(abc.ABC):
         pass
 
 
-def get_window_manager(title_substring: Optional[str] = None) -> BaseWindowManager:
+def get_window_manager(title_substring: str | None = None) -> BaseWindowManager:
     """Factory function returning the platform-specific WindowManager instance."""
     kwargs = {} if title_substring is None else {"title_substring": title_substring}
     if sys.platform == "darwin":

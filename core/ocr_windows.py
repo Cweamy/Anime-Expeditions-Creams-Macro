@@ -35,8 +35,8 @@ def is_available() -> bool:
         return _engine is not None
     _checked = True
     try:
-        from winsdk.windows.media.ocr import OcrEngine
         from winsdk.windows.globalization import Language
+        from winsdk.windows.media.ocr import OcrEngine
         _engine = (OcrEngine.try_create_from_language(Language("en-US"))
                    or OcrEngine.try_create_from_user_profile_languages())
     except Exception:
@@ -52,7 +52,7 @@ def ocr_image(img) -> str:
     if not is_available():
         return ""
     try:
-        from winsdk.windows.graphics.imaging import SoftwareBitmap, BitmapPixelFormat, BitmapAlphaMode
+        from winsdk.windows.graphics.imaging import BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap
         from winsdk.windows.security.cryptography import CryptographicBuffer
 
         bgr = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)

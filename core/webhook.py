@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import time
@@ -122,10 +123,8 @@ def send(url: str, embed: dict, content: str = "", silent: bool = False) -> dict
                 time.sleep(_retry_after(exc))
                 continue  # Discord asked us to slow down -- wait and resend
             body = ""
-            try:
+            with contextlib.suppress(Exception):
                 body = exc.read().decode("utf-8", errors="replace")[:200]
-            except Exception:
-                pass
             return {"ok": False, "reason": f"HTTP {exc.code}: {body}" if body else f"HTTP {exc.code}"}
         except (urllib.error.URLError, OSError) as exc:
             return {"ok": False, "reason": str(exc)}

@@ -12,9 +12,9 @@ Requires:
 
 Output: dist/Cream's Macro - Anime Expeditions Bootstrapper.exe
 """
+import os
 import subprocess
 import sys
-import os
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 EXE_NAME = "Creams Macro - Anime Expeditions Bootstrapper"  # see build_pyinstaller.py's EXE_NAME comment

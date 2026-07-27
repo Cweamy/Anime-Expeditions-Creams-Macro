@@ -28,6 +28,7 @@ this file existing at all is a direct consequence of that: every core/*.py
 module used to compute os.path.dirname(os.path.dirname(os.path.abspath(
 __file__))) itself, which is correct un-frozen but wrong once bundled.
 """
+import contextlib
 import os
 import sys
 
@@ -61,10 +62,8 @@ if IS_FROZEN and sys.platform == "darwin":
         os.path.expanduser("~/Library/Application Support"),
         "Creams Macro - Anime Expeditions",
     )
-    try:
+    with contextlib.suppress(OSError):
         os.makedirs(APP_DIR, exist_ok=True)
-    except OSError:
-        pass
 
 UI_DIR = os.path.join(BUNDLE_DIR, "ui")
 
