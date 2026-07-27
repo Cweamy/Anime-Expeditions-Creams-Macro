@@ -3537,7 +3537,10 @@ function setRecentPlaceUnitMap(category, name) {
   } catch (e) {}
 }
 
+let puRequestId = 0;
+
 async function openPlaceUnitModal(blockId) {
+  const reqId = ++puRequestId;
   const loc = findBlockLocation(blockId);
   if (!loc) return;
   const b = creationPhases[loc.phase][loc.idx];
@@ -3556,6 +3559,7 @@ async function openPlaceUnitModal(blockId) {
   } catch (e) {
     puState.categories = [];
   }
+  if (reqId !== puRequestId) return;
   if (puState.categories.length === 0) {
     document.getElementById('pu-category-tabs').innerHTML = '';
     document.getElementById('pu-map-grid').innerHTML = '<div class="rh-empty">No maps found in Assets/map -- add category folders with map images, or use "Use Roblox Screen" instead.</div>';
@@ -3574,15 +3578,17 @@ async function openPlaceUnitModal(blockId) {
     } catch (e) {
       puState.maps = [];
     }
+    if (reqId !== puRequestId) return;
     if (puState.maps.includes(recent.name)) {
-      await selectPlaceUnitMap(recent.name);
+      await selectPlaceUnitMap(recent.name, reqId);
       return;
     }
   }
-  await selectPlaceUnitCategory(puState.categories[0]);
+  await selectPlaceUnitCategory(puState.categories[0], reqId);
 }
 
 function closePlaceUnitModal() {
+  ++puRequestId;
   document.getElementById('pu-modal').style.display = 'none';
   puState.blockId = null;
   puState.coordTarget = null;
@@ -3602,7 +3608,8 @@ function renderPlaceUnitCategoryTabs() {
     `).join('') + `</div>`;
 }
 
-async function selectPlaceUnitCategory(category) {
+async function selectPlaceUnitCategory(category, expectedReqId) {
+  const reqId = expectedReqId || ++puRequestId;
   puState.category = category;
   renderPlaceUnitCategoryTabs();
   document.getElementById('pu-canvas-wrap').style.display = 'none';
@@ -3612,12 +3619,14 @@ async function selectPlaceUnitCategory(category) {
   } catch (e) {
     puState.maps = [];
   }
-  renderPlaceUnitMapGrid();
+  if (reqId !== puRequestId) return;
+  renderPlaceUnitMapGrid(reqId);
 }
 
 // Built via DOM calls (not innerHTML + inline onclick) so map names with
 // apostrophes ("King's Tomb") don't need attribute-quote escaping.
-function renderPlaceUnitMapGrid() {
+function renderPlaceUnitMapGrid(expectedReqId) {
+  const reqId = expectedReqId || puRequestId;
   const el = document.getElementById('pu-map-grid');
   el.innerHTML = '';
   if (puState.maps.length === 0) {
@@ -3637,16 +3646,19 @@ function renderPlaceUnitMapGrid() {
     card.addEventListener('click', () => selectPlaceUnitMap(name));
     el.appendChild(card);
     pywebview.api.get_map_image(puState.category, name).then(result => {
+      if (reqId !== puRequestId) return;
       if (result && result.ok) img.src = result.data_uri;
     }).catch(() => {});
   }
 }
 
-async function selectPlaceUnitMap(name) {
+async function selectPlaceUnitMap(name, expectedReqId) {
+  const reqId = expectedReqId || ++puRequestId;
   try {
     const result = await pywebview.api.get_map_image(puState.category, name);
+    if (reqId !== puRequestId) return;
     if (!result.ok) { addLog(`[Macro Manager] Couldn't load map "${name}".`); return; }
-    loadPlaceUnitImage(result.data_uri);
+    loadPlaceUnitImage(result.data_uri, reqId);
     setRecentPlaceUnitMap(puState.category, name);
   } catch (e) {}
 }
@@ -3656,6 +3668,7 @@ async function selectPlaceUnitMap(name) {
 // settle and paint a real frame, capture, then come straight back. The modal
 // stays open the whole time (the game just paints over it for a moment).
 async function usePlaceUnitRobloxScreen() {
+  const reqId = ++puRequestId;
   // captureDanceActive: this hop NEEDS show_game() to fire even though our
   // modal is open (see isBlockingOverlayOpen) -- the game being visible is
   // what makes the screenshot possible at all. Returns whether a capture
@@ -3674,17 +3687,20 @@ async function usePlaceUnitRobloxScreen() {
   } finally {
     captureDanceActive = false;
   }
+  if (reqId !== puRequestId) return false;
   if (!result || !result.ok) {
     addLog(`[Macro Manager] Couldn't capture Roblox screen: ${(result && result.reason) || 'error'}`);
     return false;
   }
-  loadPlaceUnitImage(result.data_uri);
+  loadPlaceUnitImage(result.data_uri, reqId);
   return true;
 }
 
-function loadPlaceUnitImage(dataUri) {
+function loadPlaceUnitImage(dataUri, expectedReqId) {
+  const reqId = expectedReqId || puRequestId;
   const img = new Image();
   img.onload = () => {
+    if (reqId !== puRequestId) return;
     puState.image = img;
     puState.naturalW = img.naturalWidth;
     puState.naturalH = img.naturalHeight;
@@ -3698,6 +3714,7 @@ function loadPlaceUnitImage(dataUri) {
 }
 
 function backToPlaceUnitMapGrid() {
+  ++puRequestId;
   document.getElementById('pu-canvas-wrap').style.display = 'none';
   document.getElementById('pu-map-grid').style.display = '';
   puState.image = null;
