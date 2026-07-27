@@ -2475,6 +2475,16 @@ class Api:
                     self.push_log(f"[Debug] Finished test-walking path \"{name}\".")
             except Exception as exc:
                 self.push_log(f"[Debug] Path test failed: {exc}")
+            finally:
+                # The UI swapped Run for Stop when this started, and only
+                # stop_test_path() ever swapped it back -- so a replay that
+                # ended on its own left a Stop button offering to stop a walk
+                # that had already finished, for the rest of the session.
+                # A log line is not enough; the button state needs telling.
+                # finally: so a crash restores it too. Same push_ui signal the
+                # Tesseract install already uses for its own unknown-duration
+                # button (see tesseractInstallDone in ui/app.js).
+                self.push_ui("testPathFinished")
 
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True}
