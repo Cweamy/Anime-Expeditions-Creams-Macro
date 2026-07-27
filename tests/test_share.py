@@ -135,11 +135,17 @@ def test_all_real_templates_lossless_roundtrip(tmp_path, monkeypatch):
     import main
     from core import templates as tpl
 
-    # 1. Collect all real original template files
+    # 1. Collect template files if TEMPLATES_DIR exists, otherwise create mock templates in isolated dir
     orig_dir = tpl.TEMPLATES_DIR
-    orig_files = [f for f in os.listdir(orig_dir) if f.endswith(".json")]
-    assert len(orig_files) > 0, "Real Templates directory should contain templates"
+    if not os.path.exists(orig_dir) or not [f for f in os.listdir(orig_dir) if f.endswith(".json")]:
+        source_dir = str(tmp_path / "source_templates")
+        os.makedirs(source_dir, exist_ok=True)
+        monkeypatch.setattr(tpl, "TEMPLATES_DIR", source_dir)
+        tpl.save_template("CI Template 1", {"team": "Alpha", "prestart": [{"type": "walk"}], "battle": [{"type": "upgrade"}]})
+        tpl.save_template("CI Template 2", {"team": "Beta", "prestart": [{"type": "place"}], "battle": []})
+        orig_dir = source_dir
 
+    orig_files = [f for f in os.listdir(orig_dir) if f.endswith(".json")]
     orig_data = {}
     for fname in orig_files:
         with open(os.path.join(orig_dir, fname), "r", encoding="utf-8") as f:
@@ -152,18 +158,19 @@ def test_all_real_templates_lossless_roundtrip(tmp_path, monkeypatch):
     assert exp_res["count"] == len(orig_files)
     code = exp_res["code"]
 
-    # 3. Switch TEMPLATES_DIR to isolated tmp_path
-    monkeypatch.setattr(tpl, "TEMPLATES_DIR", str(tmp_path))
+    # 3. Switch TEMPLATES_DIR to isolated target_dir
+    target_dir = str(tmp_path / "target_templates")
+    monkeypatch.setattr(tpl, "TEMPLATES_DIR", target_dir)
     api_tmp = main.Api()
 
-    # 4. Import full pack into clean tmp_path
+    # 4. Import full pack into clean target_dir
     imp_res = api_tmp.import_template_code(code)
     assert imp_res["ok"] is True
     assert imp_res["count"] == len(orig_files)
 
-    # 5. Verify byte-for-byte / data equivalence for every template
+    # 5. Verify data equivalence for every template
     for fname, expected_json in orig_data.items():
-        imported_path = os.path.join(str(tmp_path), fname)
+        imported_path = os.path.join(target_dir, fname)
         assert os.path.exists(imported_path), f"Imported file {fname} should exist"
         with open(imported_path, "r", encoding="utf-8") as f:
             imported_json = json.load(f)
