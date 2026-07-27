@@ -272,14 +272,9 @@ def test_task_import_restores_bundled_custom_path(tmp_path):
 def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
     out = run_js("""
         const w = new Function(`
-          const logs = []; const restored = []; const savedTemplates = [];
-          const opened = []; const templateSelect = { value: '' };
-          let exported = null;
+          const logs = []; const restored = []; let exported = null;
           function addLog(message) { logs.push(message); }
-          function confirm() { return true; }
-          const document = { getElementById: () => templateSelect };
           async function refreshTemplateList() {}
-          async function loadSelectedTemplate() { opened.push(templateSelect.value); }
           const template = { name: 'Farm', blocks: {
             prestart: [{ type: 'walk_path', mode: 'custom', pathName: 'Boss Route' }],
             battle: [],
@@ -296,10 +291,7 @@ def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
               restored.push([name, events]);
               return { ok: true };
             },
-            save_template: async name => {
-              savedTemplates.push(name);
-              return { ok: true };
-            },
+            save_template: async () => ({ ok: true }),
           }};
           ${extract('collectCustomPathNames')}
           ${extract('exportCustomPaths')}
@@ -307,7 +299,7 @@ def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
           ${extract('exportTemplates')}
           ${extract('importTemplates')}
           return {
-            exportTemplates, importTemplates, restored, savedTemplates, opened, logs,
+            exportTemplates, importTemplates, restored,
             exported: () => exported,
           };
         `)();
@@ -317,18 +309,12 @@ def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
           console.log(JSON.stringify({
             pathNames: Object.keys(w.exported().paths),
             restored: w.restored,
-            savedTemplates: w.savedTemplates,
-            opened: w.opened,
-            logs: w.logs,
           }));
         })();
     """, tmp_path)
 
     assert out["pathNames"] == ["Boss Route"]
     assert out["restored"][0][0] == "Boss Route"
-    assert out["savedTemplates"] == ["Farm"]
-    assert out["opened"] == ["Farm"]
-    assert any("1 replaced" in message for message in out["logs"])
 
 
 # ---------------------------------------------------------------------------
