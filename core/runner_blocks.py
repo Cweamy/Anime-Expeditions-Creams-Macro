@@ -311,15 +311,20 @@ class BlockOps:
                 return
             time.sleep(min(0.1, deadline - time.time()))
 
-    def _run_walk_block_tick(self, stop_event: threading.Event, block: dict, block_num: int) -> None:
+    def _run_walk_block_tick(self, stop_event: threading.Event, block: dict, block_num: int,
+                              phase_label: str = "Battle") -> None:
         """One-shot: replays a recorded walk path -- the same core.paths
         record/load/replay system the pinned Pre Start Walk Path row
         already uses (see _run_prestart), just picked by name here instead
         of by map. Picks up wherever the player currently is; no position
         tracking needed, same as every other Battle block that just fires
-        an action rather than needing to know where a unit was placed."""
+        an action rather than needing to know where a unit was placed.
+
+        Runs in either phase (phase_label): Pre Start allows several of these
+        so a routine can walk between multiple starter-placement spots before
+        the match begins, not just the single pinned Walk Path."""
         path_name = block.get("params", {}).get("path") or ""
-        label = f'Battle block #{block_num} (Walk)'
+        label = f'{phase_label} block #{block_num} (Walk)'
         if not path_name:
             self._log(f'{label}: no path selected -- skipping.')
             return
@@ -550,6 +555,8 @@ class BlockOps:
                     self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, i)
                 elif btype == "walk_path":
                     self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {}, block, first_repeat)
+                elif btype == "walk":
+                    self._run_walk_block_tick(stop_event, block, i, phase_label="Pre Start")
                 elif btype == "click":
                     self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
                 elif btype == "wait_ms":

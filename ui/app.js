@@ -2612,8 +2612,11 @@ const PHASE_ALLOWED = {
   // walk_path is deliberately in NEITHER palette: it's the one unique
   // pinned block -- every routine always has exactly one in Pre Start
   // (synthesized on new/load, never removable), so offering it as an
-  // addable block would only create duplicates.
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'click', 'wait_ms', 'send_key'],
+  // addable block would only create duplicates. 'walk' (replay a recorded
+  // path) is a normal addable block, allowed in BOTH phases -- you can drop
+  // several into Pre Start to walk between multiple starter-placement spots
+  // before the match begins.
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'walk', 'click', 'wait_ms', 'send_key'],
   battle: Object.keys(BLOCK_TYPES).filter(t => t !== 'walk_path'),
 };
 
@@ -2660,7 +2663,7 @@ function addBlock(type, phase, atIndex) {
   const def = BLOCK_TYPES[type];
   if (!def) return;
   if (!PHASE_ALLOWED[phase].includes(type)) {
-    addLog(`[Macro Manager] Only Place Unit, Setting, Auto Upgrade Unit, Walk Path, and Click blocks can go in Pre Start -- "${def.label}" belongs in Battle.`);
+    addLog(`[Macro Manager] "${def.label}" can't go in Pre Start -- it belongs in Battle.`);
     return;
   }
   const params = {};
