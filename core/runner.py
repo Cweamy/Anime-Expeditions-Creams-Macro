@@ -1411,6 +1411,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         session_rate = f"{round(sw / (sw + sl) * 100)}%" if (sw + sl) else "-"
         all_time_rate = f"{round(aw / (aw + al) * 100)}%" if (aw + al) else "-"
         tuc = snap.get("time_until_challenge", "-")
+        runs_per_hour = snap.get("runs_per_hour", "-")
 
         # Inline, tree-style fields (bold labels, code values) side by side --
         # Match / Session / All Time. The visual win/loss tiles + activity
@@ -1424,6 +1425,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 ("Elapsed", session_time),
                 ("Record", f"{sw}W · {sl}L"),
                 ("Rate", session_rate),
+                ("Runs/h", runs_per_hour),
                 ("Challenge", tuc),
             ]), "inline": True},
             {"name": "\U0001F3C6 All Time", "value": self._tree_rows([
@@ -1469,7 +1471,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 is_win=is_win, action="Match Finished", last_run_duration=duration,
                 last_run_win=is_win, time_until_challenge=tuc,
                 session_wins=sw, session_losses=sl, all_time_wins=aw, all_time_losses=al,
-                results=snap.get("results"))
+                runs_per_hour=runs_per_hour, results=snap.get("results"))
             if card is not None:
                 ok, buf = cv2.imencode(".png", card)
                 if ok:
