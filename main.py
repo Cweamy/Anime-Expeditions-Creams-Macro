@@ -958,6 +958,103 @@ class Api:
         cfg.update({"tasks": tasks})
         return {"ok": True}
 
+    # ------------------------------------------------------------------
+    # Task Queue presets (Task screen > Preset bar) -- save the current
+    # queue under a name and switch back to it later from a dropdown.
+    #
+    # Distinct from Export/Import above, which goes through a native file
+    # dialog because it exists to move a queue BETWEEN installs. These stay
+    # on this machine, so picking one is two clicks instead of navigating a
+    # file picker. See core/task_presets.py.
+    # ------------------------------------------------------------------
+
+    def list_task_presets(self) -> list:
+        from core import task_presets
+        try:
+            return task_presets.list_presets()
+        except OSError:
+            return []
+
+    def save_task_preset(self, name: str, tasks: list) -> dict:
+        from core import task_presets
+        name = (name or "").strip()
+        if not name:
+            return {"ok": False, "reason": "no_name"}
+        try:
+            saved = task_presets.save_preset(name, tasks or [])
+        except OSError as exc:
+            self.push_log(f"[Task] Couldn't save preset: {exc}")
+            return {"ok": False, "reason": str(exc)}
+        self.push_log(f'[Task] Saved preset "{saved}" ({len(tasks or [])} task(s)).')
+        return {"ok": True, "name": saved, "count": len(tasks or [])}
+
+    def load_task_preset(self, name: str) -> dict:
+        """The preset's tasks, plus the names of any Macro Operations those
+        tasks reference that no longer exist. A preset saved months ago can
+        easily point at a template since renamed or deleted -- the queue
+        still loads, but the caller warns instead of leaving the user with
+        tasks that silently have no macro attached."""
+        from core import task_presets
+        from core import templates as tpl
+        data = task_presets.load_preset(name)
+        tasks = data.get("tasks") or []
+        try:
+            have = set(tpl.list_templates())
+        except OSError:
+            have = set()
+        missing = sorted({t.get("macro") for t in tasks
+                          if isinstance(t, dict) and t.get("macro") and t.get("macro") not in have})
+        label = data.get("name") or name
+        # Three different empty-queue outcomes, each worth saying differently:
+        # the file won't parse, there's no such preset, or it genuinely holds
+        # no tasks. Reporting all three as "Loaded (0 task(s))" is how a
+        # broken file on disk goes unnoticed.
+        if tasks:
+            self.push_log(f'[Task] Loaded preset "{label}" ({len(tasks)} task(s)).')
+        elif data.get("error"):
+            self.push_log(f'[Task] Preset "{label}" is on disk but couldn\'t be read '
+                          f'({data["error"]}) -- open the folder and check the file.')
+        elif not data.get("found"):
+            self.push_log(f'[Task] No saved preset named "{label}" -- nothing loaded.')
+        else:
+            self.push_log(f'[Task] Preset "{label}" has no tasks saved in it.')
+        return {"ok": True, "name": label, "tasks": tasks, "missing_macros": missing,
+                "found": bool(data.get("found")), "error": data.get("error") or ""}
+
+    def open_task_presets_folder(self) -> dict:
+        """Task screen > Preset > "Folder". Presets are plain .json files, so
+        renaming/deleting/backing one up (or dropping one in from another
+        machine) is just file management -- this saves hunting for the
+        folder, which on macOS lives under ~/Library/Application Support and
+        is hidden in Finder by default."""
+        from core import task_presets
+        try:
+            os.makedirs(task_presets.PRESETS_DIR, exist_ok=True)
+            self._open_in_file_manager(task_presets.PRESETS_DIR)
+        except OSError as exc:
+            self.push_log(f"[Task] Couldn't open the presets folder: {exc}")
+            return {"ok": False, "reason": str(exc)}
+        return {"ok": True}
+
+    @staticmethod
+    def _open_in_file_manager(path: str) -> None:
+        """Reveal a folder in the OS file manager. os.startfile is
+        Windows-only (AttributeError elsewhere), so mac gets `open` and
+        Linux `xdg-open` -- same three-way split open_assets_folder uses."""
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        elif os.name == "nt":
+            os.startfile(path)
+        else:
+            subprocess.Popen(["xdg-open", path])
+
+    def delete_task_preset(self, name: str) -> dict:
+        from core import task_presets
+        ok = task_presets.delete_preset(name)
+        if ok:
+            self.push_log(f'[Task] Deleted preset "{name}".')
+        return {"ok": ok}
+
     def start_path_recording(self) -> dict:
         # Macro Manager > Custom Path > "Record": begins polling the player's own
         # WASD state (see core.paths) -- the player then walks the route
@@ -1604,16 +1701,11 @@ class Api:
         try:
             for sub in ("ui", "maps"):
                 os.makedirs(os.path.join(constants.ASSETS_OVERRIDE_DIR, sub), exist_ok=True)
-            # os.startfile is Windows-only (AttributeError elsewhere) -- mac
-            # needs `open`, and on mac the folder lives under ~/Library/
-            # Application Support (see core.constants), which Finder hides by
-            # default, so opening it directly is the only way a user reaches it.
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", constants.ASSETS_OVERRIDE_DIR])
-            elif os.name == "nt":
-                os.startfile(constants.ASSETS_OVERRIDE_DIR)
-            else:
-                subprocess.Popen(["xdg-open", constants.ASSETS_OVERRIDE_DIR])
+            # Platform split lives in _open_in_file_manager -- mac needs
+            # `open` (os.startfile is Windows-only), and there the folder is
+            # under ~/Library/Application Support, which Finder hides by
+            # default, so opening it directly is the only way a user gets to it.
+            self._open_in_file_manager(constants.ASSETS_OVERRIDE_DIR)
         except OSError as exc:
             self.push_log(f"[Settings] Couldn't open the Assets folder: {exc}")
             return {"ok": False, "reason": str(exc)}

@@ -442,6 +442,33 @@
           <button class="task-toolbar-btn danger" onclick="clearTaskQueue()">Clear All</button>
         </div>
 
+        <!-- Saved queues. Export/Import above writes a file through a native
+             dialog (for sharing a queue with someone else); this is the
+             on-this-machine version -- name the queue you're running now,
+             pick it back off the dropdown later. See core/task_presets.py. -->
+        <div class="flex items-center gap-2 px-3 py-2 flex-shrink-0" style="border-bottom: 1px solid var(--border);">
+          <span class="text-[10px] font-semibold flex-shrink-0" style="color: var(--text-muted);">PRESET</span>
+          <select id="task-preset-select" class="task-select" style="flex: 1; min-width: 0;"
+                  onchange="onTaskPresetPicked()" title="Saved task queues on this machine">
+            <option value="">No saved presets</option>
+          </select>
+          <button class="task-toolbar-btn" onclick="loadTaskPreset()"
+                  title="Replace the queue above with the selected preset">Load</button>
+          <!-- A DOM input, not window.prompt() -- prompt() is blocked in
+               WebView2, and this matches how the Macro Manager takes a
+               template name (#template-name). -->
+          <input id="task-preset-name" class="task-select" style="width: 150px;"
+                 placeholder="Preset name" onkeydown="if (event.key === 'Enter') saveTaskPreset()">
+          <button class="task-toolbar-btn add" onclick="saveTaskPreset()"
+                  title="Save the current queue under the name on the left">Save</button>
+          <button class="task-toolbar-btn danger" onclick="deleteTaskPreset()"
+                  title="Delete the selected preset">Delete</button>
+          <!-- Presets are plain .json files, so renaming/backing up/copying one
+               in from another machine is just file management. -->
+          <button class="task-toolbar-btn" onclick="openTaskPresetsFolder()"
+                  title="Open the folder these presets are saved in">Folder</button>
+        </div>
+
         <div id="task-list" class="flex-1 overflow-y-auto p-2" style="min-height: 0;">
           <div class="rh-empty">No tasks yet -- click "+ Add Task" to queue one.</div>
         </div>
