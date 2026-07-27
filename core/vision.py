@@ -899,6 +899,59 @@ def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float 
     return None
 
 
+# The upgrade button's two states are the same glyph in two colours: green
+# when you can afford it, dim when you cannot. Greyscale template matching
+# cannot see that difference well -- measured on a real docked 1152x756
+# frame, "upgradeable" hits 0.996 but "not_upgradeable" only reaches 0.839
+# against the 0.90 threshold, so a dim button matched NEITHER template and
+# the Upgrade block reported 'neither "upgradeable" nor "not_upgradeable"'.
+# That is most of a run, since most of a run is spent unable to afford it.
+#
+# Blur was the obvious fix and is wrong: at a 5px kernel "upgradeable"
+# starts matching the dim frame too (0.916), so the two states match each
+# other's screens.
+#
+# Measured at the button on real frames of both states:
+#     dim   / not upgradeable   0.0%  green-dominant pixels
+#     green / upgradeable      18.7%
+# An absolute separation, so the colour decides the state. The templates are
+# still what LOCATES the button -- both clear 0.75 comfortably -- which
+# keeps this free of any hardcoded, screenshot-derived coordinates.
+UPGRADE_LOCATE_THRESHOLD = 0.75
+UPGRADE_GREEN_MIN_FRACTION = 0.06  # a third of the way between 0.0% and 18.7%
+
+
+def upgrade_button_green_fraction(hwnd: int, match: dict) -> float:
+    """Fraction of pixels at `match` that are dominantly green and saturated."""
+    import numpy as np
+    bgr = capture_game_bgr(hwnd, (match["x"], match["y"], match["w"], match["h"]))
+    if bgr is None or bgr.size == 0:
+        return 0.0
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    b, g, r = (bgr[:, :, i].astype(int) for i in range(3))
+    greenness = g - np.maximum(b, r)
+    return float(((greenness > 25) & (hsv[:, :, 1] > 90)).mean())
+
+
+def find_upgrade_state(hwnd: int):
+    """(state, match) for the unit info panel's upgrade button, where state is
+    "upgradeable", "not_upgradeable", or None when the button isn't on screen.
+
+    Locates by template at a relaxed threshold, then decides which state it
+    is by colour -- see UPGRADE_LOCATE_THRESHOLD above for why.
+    """
+    try:
+        match, _name = find_image_any(hwnd, ("upgradeable", "not_upgradeable"),
+                                       threshold=UPGRADE_LOCATE_THRESHOLD)
+    except TemplateNotFound:
+        return None, None
+    if match is None:
+        return None, None
+    green = upgrade_button_green_fraction(hwnd, match)
+    match["green_fraction"] = green
+    return ("upgradeable" if green >= UPGRADE_GREEN_MIN_FRACTION else "not_upgradeable"), match
+
+
 def find_image_any(hwnd: int, names: tuple, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
                     template_dir: str = UI_ASSETS_DIR):
     """find_image, but over several DIFFERENTLY-NAMED templates in one call

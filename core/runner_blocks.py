@@ -242,11 +242,22 @@ class BlockOps:
         # Polling for EITHER one to show up (whichever the panel actually
         # ends up in) is the real "wait until it's loaded" this needs,
         # not just a longer fixed sleep.
-        try:
-            upgrade_match, found_name = vision.wait_for_image_any(
-                hwnd, ("upgradeable", "not_upgradeable"), timeout=UPGRADE_PANEL_LOAD_TIMEOUT, stop_event=stop_event)
-        except vision.TemplateNotFound:
-            upgrade_match, found_name = None, None
+        # The two states are the same glyph in two colours, and greyscale
+        # matching cannot tell them apart reliably -- a dim (unaffordable)
+        # button reached only 0.839 against the 0.90 threshold on a real
+        # frame, so it matched NEITHER template and fell through to the
+        # "neither" branch below for most of a run. find_upgrade_state
+        # locates by template at a relaxed threshold and decides the state
+        # by colour; see core.vision for the measurements.
+        deadline = time.time() + UPGRADE_PANEL_LOAD_TIMEOUT
+        found_name, upgrade_match = None, None
+        while True:
+            found_name, upgrade_match = vision.find_upgrade_state(hwnd)
+            if found_name is not None or time.time() >= deadline:
+                break
+            if self._checkpoint(stop_event):
+                return True
+            time.sleep(0.15)
         if found_name == "not_upgradeable":
             not_upgrade_match, upgrade_match = upgrade_match, None
         else:
@@ -269,7 +280,8 @@ class BlockOps:
             return state["remaining"] <= 0
 
         if not_upgrade_match is not None:
-            self._log(f'{label}: not upgradeable yet (score {not_upgrade_match["score"]:.2f}) -- '
+            self._log(f'{label}: not upgradeable yet (score {not_upgrade_match["score"]:.2f}, '
+                       f'green {not_upgrade_match.get("green_fraction", 0) * 100:.0f}%) -- '
                        f'waiting {UPGRADE_RETRY_WAIT:.0f}s and retrying.')
         else:
             self._log(f'{label}: neither "upgradeable" nor "not_upgradeable" found on the info panel '
