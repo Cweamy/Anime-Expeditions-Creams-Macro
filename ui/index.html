@@ -931,10 +931,27 @@
             <span class="rp-head-rule"></span>
           </header>
 
+          <!-- The permanent home for the four in-game settings. The welcome
+               modal shows them once and is dismissable on purpose (nothing
+               should trap someone on first launch), so anyone who clicked
+               past it needs somewhere to find them again -- and this sits
+               directly above Health Check and Export Failure Report, which
+               is exactly where someone goes when it "doesn't work".
+               Health Check cannot see inside Roblox, so these can never
+               become part of it. Kept word-for-word in step with the modal;
+               tests/test_ui_js.py fails if the two drift apart. -->
+          <div class="setting-row" style="padding: 14px; flex-wrap: wrap;">
+            <div style="flex-basis: 100%;">
+              <div class="setting-label">Roblox settings the macro needs</div>
+              <div class="setting-desc">Set inside Roblox, not here -- nothing in this app can read or change them, so Health Check can't check them either. Wrong values here cause most "it walks to the wrong spot" and "it won't place" reports.</div>
+              <div id="debug-ingame" style="margin-top: 10px;"></div>
+            </div>
+          </div>
+
           <div class="setting-row" style="padding: 14px; flex-wrap: wrap;">
             <div>
               <div class="setting-label">Health Check</div>
-              <div class="setting-desc">Verifies capture, input, permissions, display scale, reference images and OCR in one pass.</div>
+              <div class="setting-desc">Verifies capture, input, permissions, display scale, reference images and OCR in one pass. It cannot see inside Roblox -- the four settings above are still on you.</div>
             </div>
             <button id="btn-health-check" onclick="runHealthCheck(this)" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--teal); border-color: var(--border);">Run</button>
             <!-- Filled by runHealthCheck -- the verdict alone ("Issues
@@ -1601,24 +1618,55 @@
        otherwise get learned one broken run at a time. Rows are tagged
        data-plat so each OS only sees its own items. -->
   <div id="onboarding-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-panel" style="width: 560px; max-width: 94vw;">
+    <!-- Wider than the other modals on purpose: this one carries two full
+         checklists, and at 560px every reason wrapped to three lines while
+         two thirds of the window sat empty. -->
+    <div class="modal-panel onb-panel" style="width: min(1040px, 94vw);">
       <div class="modal-head">
         <span class="modal-title">Welcome to Cream's Macro</span>
       </div>
       <div class="modal-body">
-        <p class="text-xs" style="color: var(--text-dim); margin-bottom: 12px;">
-          A one-time checklist -- these are the things that cause almost every "it doesn't work":
+        <p class="onb-intro">
+          A one-time checklist -- these are the things that cause almost every "it doesn't work".
+          You can close this at any time; the same list lives in <b>Settings &gt; Debug</b>.
         </p>
-        <ul class="text-xs" style="color: var(--text-dim); line-height: 1.9; margin: 0 0 14px 18px; list-style: disc;">
-          <li data-plat="win">Windows <b>display scale must be 100%</b> (Settings &gt; Display) -- other scales shift every click.</li>
-          <li data-plat="win">Don't run Roblox <b>as Administrator</b> unless this macro is too -- Windows silently drops clicks upward.</li>
-          <li data-plat="mac">Grant <b>Accessibility, Input Monitoring and Screen Recording</b> (System Settings &gt; Privacy &amp; Security), then restart the app -- without them clicks do nothing and captures are black.</li>
-          <li data-plat="mac">Side-by-side needs ~1564 logical points of width -- pick a "More Space" scaled resolution on small MacBooks.</li>
-          <li>Keep the <b>Assets folder next to the app</b> -- it holds every reference image the macro searches for.</li>
-          <li><b>Tesseract OCR</b> is optional (stats/reward reading only) -- install later from Settings &gt; General if you want those.</li>
-          <li>If something breaks: Settings &gt; Debug &gt; <b>Export Failure Report</b> makes a single zip to share.</li>
-        </ul>
-        <div class="flex items-center gap-2" style="justify-content: flex-end;">
+
+        <!-- ============ In-game Roblox settings ============
+             Split out from the list below on purpose. Everything below is
+             about the computer and is verifiable by Health Check; these
+             four are inside Roblox, only the player can set them, and
+             nothing in the app can see or check them. They were missing
+             from this modal entirely, which is why "it walks to the wrong
+             spot / won't place" kept arriving as a macro bug.
+
+             Each carries its own reason -- a checklist people understand is
+             one they follow. The sprint line especially: the shipped walk
+             paths in Paths/defaults are bare key timings with no sprint
+             flag (see core/paths.py replay_events, which only holds Shift
+             when a block explicitly asks), so they were recorded at sprint
+             speed and only reach their spot at sprint speed. -->
+        <!-- ============ In-game Roblox settings ============
+             Rendered by app.js renderIngameChecklist from INGAME_REQUIREMENTS,
+             not written out here, because the identical list also appears in
+             Settings > Debug. Two hand-maintained copies drift; one source
+             cannot.
+
+             Split out from the machine-side list below on purpose: these four
+             live inside Roblox, only the player can set them, and nothing in
+             the app can read or verify them -- Health Check cannot see into
+             the game. They were missing from this modal entirely, which is
+             why "it walks to the wrong spot / won't place" kept arriving as a
+             macro bug. -->
+        <div class="onb-grid">
+          <div id="onboarding-ingame"></div>
+
+        <!-- Rendered by app.js renderMachineChecklist. Not tick-your-own-box
+             like the Roblox list above: Health Check actually verifies most
+             of these, and a box someone ticks for "display scale is 100%"
+             while it is really 175% is worse than no box at all. -->
+          <div id="onboarding-machine"></div>
+        </div>
+        <div class="flex items-center gap-2 onb-actions" style="justify-content: flex-end;">
           <button type="button" class="rec-stop-btn" onclick="runHealthCheck(this)" title="Verifies capture, input, permissions and images right now -- results go to the Process Log">Run Health Check</button>
           <button type="button" class="pu-set-btn" onclick="closeOnboarding()">Get Started</button>
         </div>
@@ -1631,7 +1679,7 @@
        showSubscribePrompt) -- the creator asking users to subscribe, with a
        clear opt-out so it's never shown again either way. -->
   <div id="subscribe-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-panel" style="width: 440px; max-width: 92vw;">
+    <div class="modal-panel" style="width: min(680px, 92vw);">
       <div class="modal-head">
         <span class="modal-title">Enjoying the macro?</span>
       </div>

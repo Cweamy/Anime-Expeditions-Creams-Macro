@@ -157,6 +157,9 @@ function showDocked() {
   if (isBlockingOverlayOpen()) {
     try { window.pywebview && pywebview.api.hide_game(); } catch (e) {}
   }
+  // Last: the window is now at its docked size, so a queued welcome opens
+  // into something readable. showOnboarding hides the game itself.
+  runPendingFirstRun();
 }
 
 // Set by the two capture dances (usePlaceUnitRobloxScreen /
@@ -341,6 +344,23 @@ async function applyUpdate() {
 
 let skipped = false;
 
+// One-time dialogs (welcome, subscribe) wait for the window to reach its
+// real size before opening. That happens when Roblox docks, or when the
+// user skips waiting for it -- either way the layout is up and the window
+// is no longer the small corner box the waiting screen uses.
+//
+// If neither ever happens the dialog simply doesn't open this session and
+// is still queued next launch, which is the right outcome: a welcome nobody
+// can read is worse than one shown a run later.
+let pendingFirstRun = null;
+
+function runPendingFirstRun() {
+  const what = pendingFirstRun;
+  pendingFirstRun = null;
+  if (what === 'onboarding') showOnboarding();
+  else if (what === 'subscribe') showSubscribePrompt();
+}
+
 function showWaiting() {
   if (skipped) return;  // user chose to use the panel before Roblox docks, don't yank it away
   document.getElementById('main-layout').style.display = 'none';
@@ -354,6 +374,7 @@ function skipWaiting() {
   document.getElementById('waiting-screen').style.display = 'none';
   document.getElementById('main-layout').style.display = 'flex';
   document.getElementById('titlebar').style.display = 'flex';
+  runPendingFirstRun();
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,8 +1055,16 @@ async function loadSettingsUI() {
     // Onboarding first (once), then the subscribe prompt (once) -- if both
     // are pending on a fresh install, the subscribe prompt waits until
     // onboarding is dismissed rather than stacking on top of it.
-    if (!s.onboarding_done) showOnboarding();
-    else if (!s.subscribe_prompted) showSubscribePrompt();
+    ingameConfirmed = (s.ingame_confirmed && typeof s.ingame_confirmed === 'object')
+      ? s.ingame_confirmed : {};
+    renderAllIngameChecklists();
+    renderMachineChecklist('onboarding-machine');
+    // Queued, not shown. Before Roblox docks the window is still its small
+    // waiting-screen size in a corner of the display, and a first-run
+    // dialog opening into that is a tiny unreadable box -- which is exactly
+    // what it did. See runPendingFirstRun.
+    if (!s.onboarding_done) pendingFirstRun = 'onboarding';
+    else if (!s.subscribe_prompted) pendingFirstRun = 'subscribe';
     if (!s.theme_base && !s.theme_accent && s.theme && s.theme !== 'default') {
       // First load since the base/accent split -- migrate the old value
       // once, then persist the split so this branch never runs again.
@@ -1463,7 +1492,147 @@ async function runCameraSetup2(btn) {
 // filtered to the current platform. "Get Started" persists the flag so it
 // never shows again; the Health Check button inside it reuses the normal
 // Settings > Debug handler.
+// ============ In-game Roblox settings ============
+// The only requirements nothing here can verify: they live inside Roblox,
+// and Health Check cannot see into the game. Rendered into BOTH the
+// first-run welcome and Settings > Debug from this one array -- two
+// hand-maintained copies of the same list drift apart, one source cannot.
+//
+// `why` is not decoration. A checklist people understand is one they
+// follow, and the sprint line is the load-bearing example: the built-in
+// walk paths in Paths/defaults are bare key timings with no sprint flag
+// (core/paths.py replay_events only holds Shift when a block asks), so they
+// were recorded at sprint speed and only reach their spot at sprint speed.
+const INGAME_REQUIREMENTS = [
+  { key: 'ui_scale', name: 'UI Scale', value: '1',
+    why: 'Every reference image was captured at 1. At any other scale the macro is hunting for buttons that are the wrong size.' },
+  { key: 'auto_sprint', name: 'Auto Sprint', value: 'On',
+    why: 'The built-in walk paths are timed for sprint speed. With this off your character stops short, and units place in the wrong spot or not at all.' },
+  { key: 'match_rewards', name: 'Show Match and Rewards', value: 'Off',
+    why: 'It covers the part of the screen the macro reads after a match.' },
+  { key: 'auto_vote', name: 'Auto Vote Start', value: 'Off',
+    why: 'The macro votes at the right moment itself. Left on, rounds start before Pre Start has run.' },
+];
+
+// Ticked boxes persist (settings.ingame_confirmed), so Settings > Debug
+// shows what you already confirmed and a restart or an update does not wipe
+// it -- settings.json is excluded from both update paths.
+let ingameConfirmed = {};
+
+function renderIngameChecklist(containerId) {
+  const host = document.getElementById(containerId);
+  if (!host) return;
+  const done = INGAME_REQUIREMENTS.filter(r => ingameConfirmed[r.key]).length;
+  host.innerHTML =
+    `<div class="onb-ingame">
+       <div class="onb-ingame-head">
+         <span>Set these in Roblox <span class="onb-ingame-sub">only you can &mdash; the macro can't see into the game</span></span>
+         <span class="onb-ingame-count ${done === INGAME_REQUIREMENTS.length ? 'all' : ''}">${done}/${INGAME_REQUIREMENTS.length}</span>
+       </div>
+       <ul class="onb-ingame-list">` +
+    INGAME_REQUIREMENTS.map(r => `
+         <li class="${ingameConfirmed[r.key] ? 'checked' : ''}">
+           <label>
+             <input type="checkbox" ${ingameConfirmed[r.key] ? 'checked' : ''}
+                    onchange="toggleIngameCheck('${r.key}')">
+             <span class="onb-ingame-box" aria-hidden="true"></span>
+             <span class="onb-ingame-text">
+               <span class="onb-ingame-name">${escapeHtml(r.name)}<b>${escapeHtml(r.value)}</b></span>
+               <span class="onb-ingame-why">${escapeHtml(r.why)}</span>
+             </span>
+           </label>
+         </li>`).join('') +
+    `</ul>
+     </div>`;
+}
+
+function renderAllIngameChecklists() {
+  renderIngameChecklist('onboarding-ingame');
+  renderIngameChecklist('debug-ingame');
+}
+
+// Ticking is for the reader's benefit, never a gate -- Get Started stays
+// enabled the whole time. Both copies re-render so the count agrees
+// wherever it is on screen.
+async function toggleIngameCheck(key) {
+  ingameConfirmed = { ...ingameConfirmed, [key]: !ingameConfirmed[key] };
+  renderAllIngameChecklists();
+  try { await pywebview.api.set_setting('ingame_confirmed', ingameConfirmed); } catch (e) {}
+}
+
+// ============ On this computer ============
+// Deliberately NOT tick-your-own-box like the Roblox list above. Health
+// Check already verifies most of these (main.Api.run_health_check), and a
+// checkbox someone ticks for "display scale is 100%" while it is actually
+// 175% is worse than no checkbox at all -- that exact setting is the single
+// most common cause of clicks landing slightly wrong.
+//
+// `check` is the run_health_check name this row reflects; rows without one
+// are things nothing can measure and stay informational. `plat` mirrors the
+// old data-plat attributes so each OS only sees its own.
+const MACHINE_REQUIREMENTS = [
+  { plat: 'win', check: 'Display scale', name: 'Windows display scale at 100%',
+    why: 'Settings > Display. Any other scale shifts every click.' },
+  { plat: 'win', check: 'Elevation matches Roblox', name: 'Same elevation as Roblox',
+    why: "Don't run one as Administrator without the other -- Windows silently drops clicks upward." },
+  { plat: 'mac', check: 'Simulated input moves the cursor', name: 'Accessibility and Input Monitoring granted',
+    why: 'System Settings > Privacy & Security, then restart the app. Without them clicks do nothing.' },
+  { plat: 'mac', check: 'Screen capture returns pixels', name: 'Screen Recording granted',
+    why: 'Without it every capture comes back black.' },
+  { plat: 'mac', check: null, name: 'Room for side-by-side',
+    why: 'Needs ~1564 logical points of width -- pick a "More Space" scaled resolution on small MacBooks.' },
+  { plat: null, check: 'Critical reference images present', name: 'Assets folder next to the app',
+    why: 'It holds every reference image the macro searches for.' },
+  { plat: null, check: 'Text reading (OCR)', name: 'Text reading (optional)',
+    why: 'Only used for stats and reward reading. Install Tesseract later from Settings > General if you want those.' },
+];
+
+// Last run_health_check result, so the rows can show a real verdict instead
+// of a box someone ticked. Null until Health Check has actually run.
+let lastHealthChecks = null;
+
+function machineCheckState(row) {
+  if (!row.check || !lastHealthChecks) return null;
+  const hit = lastHealthChecks.find(c => c.name === row.check);
+  return hit ? { ok: hit.ok, detail: hit.detail || '' } : null;
+}
+
+function renderMachineChecklist(containerId) {
+  const host = document.getElementById(containerId);
+  if (!host) return;
+  const rows = MACHINE_REQUIREMENTS.filter(r => !r.plat || (r.plat === 'mac') === IS_MAC);
+  const rated = rows.map(r => machineCheckState(r)).filter(Boolean);
+  const passed = rated.filter(s => s.ok).length;
+  const badge = lastHealthChecks
+    ? `<span class="onb-ingame-count ${passed === rated.length ? 'all' : 'bad'}">${passed}/${rated.length}</span>`
+    : `<span class="onb-ingame-count">not checked</span>`;
+  host.innerHTML =
+    `<div class="onb-ingame onb-machine">
+       <div class="onb-ingame-head">
+         <span>On this computer <span class="onb-ingame-sub">Health Check verifies these for you</span></span>
+         ${badge}
+       </div>
+       <ul class="onb-ingame-list">` +
+    rows.map(r => {
+      const st = machineCheckState(r);
+      const cls = st ? (st.ok ? 'pass' : 'fail') : (r.check ? 'unknown' : 'info');
+      const detail = st && st.detail ? ` <span class="onb-machine-detail">&mdash; ${escapeHtml(st.detail)}</span>` : '';
+      return `
+         <li class="${cls}">
+           <span class="onb-machine-mark" aria-hidden="true"></span>
+           <span class="onb-ingame-text">
+             <span class="onb-ingame-name">${escapeHtml(r.name)}</span>
+             <span class="onb-ingame-why">${escapeHtml(r.why)}${detail}</span>
+           </span>
+         </li>`;
+    }).join('') +
+    `</ul>
+     </div>`;
+}
+
 function showOnboarding() {
+  renderIngameChecklist('onboarding-ingame');
+  renderMachineChecklist('onboarding-machine');
   document.querySelectorAll('#onboarding-modal [data-plat]').forEach(el => {
     const plat = el.getAttribute('data-plat');
     if ((plat === 'mac') !== IS_MAC) el.style.display = 'none';
@@ -1532,6 +1701,8 @@ async function runHealthCheck(btn) {
       }).join('');
       out.style.display = '';
     }
+    lastHealthChecks = result.checks || [];
+    renderMachineChecklist('onboarding-machine');
   } catch (e) {
     btn.textContent = 'Failed';
     if (out) { out.textContent = `Health check crashed: ${e}`; out.style.display = ''; }

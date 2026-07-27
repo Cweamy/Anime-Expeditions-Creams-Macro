@@ -637,3 +637,230 @@ def test_unsaved_changes_tracking(tmp_path):
     assert out["afterEdit"] is True
     assert out["afterUndo"] is False, "edit-then-undo must not leave a false warning"
     assert out["afterRename"] is True, "renaming is an unsaved change too"
+
+# ---------------------------------------------------------------------------
+# The in-game Roblox checklist
+# ---------------------------------------------------------------------------
+# These four are the only requirements nothing here can verify -- they live
+# inside Roblox and Health Check cannot see into the game -- and the welcome
+# modal never mentioned them at all, which is why "it walks to the wrong
+# spot" and "it won't place" kept arriving as macro bugs.
+#
+# The same list appears in the welcome AND in Settings > Debug, because the
+# welcome is dismissable and shows only once. Both are rendered from one
+# array by the function under test here, so the two cannot drift.
+
+INDEX_HTML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui", "index.html")
+
+_CHECKLIST = """
+const saved = [];
+let html = {};
+global.escapeHtml = s => String(s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+global.document = { getElementById: id => (html[id] = html[id] || { innerHTML: '' }) };
+global.pywebview = { api: { set_setting: async (k, v) => saved.push([k, v]) } };
+%s
+eval(extract('renderIngameChecklist'));
+eval(extract('renderAllIngameChecklists'));
+eval(extract('toggleIngameCheck'));
+let ingameConfirmed = %s;
+"""
+
+
+def _js(body, pre="", confirmed="{}"):
+    src = open(os.path.join(os.path.dirname(INDEX_HTML), "app.js"), encoding="utf-8").read()
+    arr = src[src.index("const INGAME_REQUIREMENTS = ["):]
+    arr = arr[:arr.index("\n];") + 3]
+    return (_CHECKLIST % (arr, confirmed)) + pre + body
+
+
+def test_all_four_settings_render_with_a_reason(tmp_path):
+    out = run_js(_js("""
+      renderIngameChecklist('onboarding-ingame');
+      console.log(JSON.stringify({ html: html['onboarding-ingame'].innerHTML }));
+    """), tmp_path)
+    body = out["html"]
+    for name, value, reason in [("UI Scale", "1", "captured at 1"),
+                                ("Auto Sprint", "On", "sprint speed"),
+                                ("Show Match and Rewards", "Off", "covers"),
+                                ("Auto Vote Start", "Off", "votes")]:
+        assert name in body, f"{name} missing"
+        assert f"<b>{value}</b>" in body, f"{name} does not state its required value"
+        assert reason in body, f"{name} states no reason -- a checklist people don't understand is one they skip"
+
+
+def test_the_welcome_and_settings_copies_are_identical(tmp_path):
+    """One array, two containers -- so they cannot drift apart."""
+    out = run_js(_js("""
+      renderAllIngameChecklists();
+      console.log(JSON.stringify({ a: html['onboarding-ingame'].innerHTML,
+                                   b: html['debug-ingame'].innerHTML }));
+    """), tmp_path)
+    assert out["a"] == out["b"] and len(out["a"]) > 0
+
+
+def test_ticking_persists_and_updates_both_copies(tmp_path):
+    """Ticks are saved to settings, which is excluded from both update
+    paths -- verified separately with a real exe update, where the whole
+    settings file came back byte-identical."""
+    out = run_js(_js("""
+      renderAllIngameChecklists();
+      toggleIngameCheck('auto_sprint').then(() => console.log(JSON.stringify({
+        saved, checkedInWelcome: (html['onboarding-ingame'].innerHTML.match(/class="checked"/g) || []).length,
+        checkedInDebug: (html['debug-ingame'].innerHTML.match(/class="checked"/g) || []).length })));
+    """), tmp_path)
+    assert out["saved"] == [["ingame_confirmed", {"auto_sprint": True}]]
+    assert out["checkedInWelcome"] == 1 and out["checkedInDebug"] == 1
+
+
+def test_ticking_is_a_toggle_not_a_one_way_door(tmp_path):
+    out = run_js(_js("""
+      renderAllIngameChecklists();
+      toggleIngameCheck('ui_scale')
+        .then(() => toggleIngameCheck('ui_scale'))
+        .then(() => console.log(JSON.stringify({ last: saved[saved.length - 1] })));
+    """), tmp_path)
+    assert out["last"] == ["ingame_confirmed", {"ui_scale": False}]
+
+
+def test_a_saved_tick_comes_back_checked(tmp_path):
+    out = run_js(_js("""
+      renderIngameChecklist('onboarding-ingame');
+      console.log(JSON.stringify({ checked: (html['onboarding-ingame'].innerHTML.match(/class="checked"/g) || []).length }));
+    """, confirmed="{ auto_sprint: true, ui_scale: true }"), tmp_path)
+    assert out["checked"] == 2
+
+
+def test_get_started_is_never_disabled():
+    """Ticking is for the reader, never a gate -- nothing may trap someone
+    on first launch."""
+    html = open(INDEX_HTML, encoding="utf-8").read()
+    modal = html.split('id="onboarding-modal"', 1)[1]
+    button = modal[modal.index("closeOnboarding"):]
+    assert "disabled" not in button[:button.index("</button>")]
+
+
+def test_both_containers_exist_for_the_renderer_to_fill():
+    html = open(INDEX_HTML, encoding="utf-8").read()
+    assert 'id="onboarding-ingame"' in html
+    assert 'id="debug-ingame"' in html, "Settings > Debug must keep a permanent copy"
+
+
+# ---------------------------------------------------------------------------
+# "On this computer" -- verified, not self-reported
+# ---------------------------------------------------------------------------
+# Deliberately NOT tick-your-own-box like the Roblox list. Health Check
+# already measures most of these, and a box someone ticks for "display scale
+# is 100%" while it is really 175% is worse than no box at all -- that exact
+# setting is the most common cause of clicks landing slightly wrong.
+
+_MACHINE = """
+let html = {};
+global.IS_MAC = false;
+global.escapeHtml = s => String(s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+global.document = { getElementById: id => (html[id] = html[id] || { innerHTML: '' }) };
+%s
+eval(extract('machineCheckState'));
+eval(extract('renderMachineChecklist'));
+let lastHealthChecks = %s;
+renderMachineChecklist('m');
+console.log(JSON.stringify({ html: html['m'].innerHTML }));
+"""
+
+
+def _machine(checks="null"):
+    src = open(os.path.join(os.path.dirname(INDEX_HTML), "app.js"), encoding="utf-8").read()
+    arr = src[src.index("const MACHINE_REQUIREMENTS = ["):]
+    arr = arr[:arr.index("\n];") + 3]
+    return _MACHINE % (arr, checks)
+
+
+def test_nothing_is_marked_passing_before_health_check_has_run(tmp_path):
+    """An unmeasured row must never look like a tick."""
+    body = run_js(_machine(), tmp_path)["html"]
+    assert 'class="pass"' not in body
+    assert "not checked" in body
+    assert 'class="unknown"' in body
+
+
+def test_a_failing_check_shows_as_failing_with_its_reason(tmp_path):
+    checks = ("[{name:'Display scale', ok:false, detail:'175% -- set it to 100%'},"
+              " {name:'Elevation matches Roblox', ok:true, detail:''},"
+              " {name:'Critical reference images present', ok:true, detail:''},"
+              " {name:'Text reading (OCR)', ok:true, detail:''}]")
+    body = run_js(_machine(checks), tmp_path)["html"]
+    assert 'class="fail"' in body
+    assert "175% -- set it to 100%" in body, "Health Check's own detail must reach the user"
+    assert ">3/4<" in body
+
+
+def test_the_machine_list_has_no_checkboxes(tmp_path):
+    """These are verified, so there is nothing for the user to assert."""
+    body = run_js(_machine(), tmp_path)["html"]
+    assert "<input" not in body and "toggleIngameCheck" not in body
+
+
+def test_rows_with_nothing_to_measure_stay_informational(tmp_path):
+    """IS_MAC=false here, so the mac-only rows are filtered out and the
+    remaining rows all map to a real check."""
+    body = run_js(_machine(), tmp_path)["html"]
+    assert "Room for side-by-side" not in body, "mac-only row leaked onto Windows"
+
+
+# ---------------------------------------------------------------------------
+# First-run dialogs must wait for a window worth showing them in
+# ---------------------------------------------------------------------------
+# Before Roblox docks, the app window is still the small waiting-screen box
+# in a corner of the display. Opening the welcome into that gave a tiny
+# unreadable dialog -- observed on a real build at 676x678. It now waits for
+# the layout to come up, which is either Roblox docking or the user pressing
+# Skip on the waiting screen.
+
+_FIRSTRUN = """
+const shown = [];
+global.showOnboarding = () => shown.push('onboarding');
+global.showSubscribePrompt = () => shown.push('subscribe');
+eval(extract('runPendingFirstRun'));
+let pendingFirstRun = %s;
+%s
+console.log(JSON.stringify({ shown, pendingAfter: pendingFirstRun }));
+"""
+
+
+def test_a_queued_welcome_does_not_open_on_its_own(tmp_path):
+    out = run_js(_FIRSTRUN % ("'onboarding'", ""), tmp_path)
+    assert out["shown"] == [], "the welcome opened before the window was ready"
+
+
+def test_docking_releases_the_queued_welcome(tmp_path):
+    out = run_js(_FIRSTRUN % ("'onboarding'", "runPendingFirstRun();"), tmp_path)
+    assert out["shown"] == ["onboarding"]
+
+
+def test_it_only_ever_opens_once(tmp_path):
+    """Dock, undock, dock again must not reopen it."""
+    out = run_js(_FIRSTRUN % ("'onboarding'", "runPendingFirstRun(); runPendingFirstRun();"), tmp_path)
+    assert out["shown"] == ["onboarding"]
+    assert out["pendingAfter"] is None
+
+
+def test_nothing_queued_means_nothing_opens(tmp_path):
+    """Someone who already dismissed it -- an update must not bring it back."""
+    out = run_js(_FIRSTRUN % ("null", "runPendingFirstRun();"), tmp_path)
+    assert out["shown"] == []
+
+
+def test_the_subscribe_prompt_waits_the_same_way(tmp_path):
+    out = run_js(_FIRSTRUN % ("'subscribe'", "runPendingFirstRun();"), tmp_path)
+    assert out["shown"] == ["subscribe"]
+
+
+def test_both_dock_and_skip_release_it():
+    """The two ways the layout comes up must both call it, or someone who
+    skips waiting never sees the welcome at all."""
+    src = open(os.path.join(os.path.dirname(INDEX_HTML), "app.js"), encoding="utf-8").read()
+    for fn in ("showDocked", "skipWaiting"):
+        body = src[src.index(f"function {fn}("):]
+        body = body[:body.index("\n}\n") + 2]
+        assert "runPendingFirstRun()" in body, f"{fn} never releases a queued first-run dialog"
