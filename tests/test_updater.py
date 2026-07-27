@@ -126,3 +126,91 @@ def test_updater_no_longer_exposes_detached_process():
     """Guards against it being reintroduced by name."""
     from core import updater
     assert not hasattr(updater, "DETACHED_PROCESS")
+
+
+# ---------------------------------------------------------------------------
+# The relaunch after the exe swap
+# ---------------------------------------------------------------------------
+# A onefile build's bootloader extracts to %TEMP%\_MEI<random>, exports
+# _PYI_ARCHIVE_FILE / _PYI_APPLICATION_HOME_DIR / _PYI_PARENT_PROCESS_LEVEL,
+# and re-runs itself -- so our code is the second process and those are in
+# os.environ. They get inherited all the way down to the `start ""` in the
+# helper, and because the update puts the new exe on the OLD exe's path, the
+# fresh build sees _PYI_ARCHIVE_FILE equal to its own path, concludes it is
+# already extracted, and loads the interpreter from the previous process's
+# _MEI dir -- which the helper deleted at step [2/5]:
+#
+#     [PYI-28940:ERROR] Failed to load Python DLL '...\_MEI302922\python313.dll'
+#     LoadLibrary: The specified module could not be found.
+#
+# Reported as "the update applies but the app never comes back". Running the
+# same _update.bat by hand works, because Explorer starts it with a clean
+# environment -- which is exactly what relaunch_env() reproduces.
+
+def test_relaunch_env_drops_pyinstaller_bootloader_state(monkeypatch):
+    from core import updater
+
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", r"C:\App\Creams Macro.exe")
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\Temp\_MEI302922")
+    monkeypatch.setenv("_PYI_PARENT_PROCESS_LEVEL", "1")
+    monkeypatch.setenv("_MEIPASS2", r"C:\Temp\_MEI99")  # PyInstaller 5.x's name
+    monkeypatch.setenv("APPDATA", r"C:\Users\someone\AppData\Roaming")
+
+    env = updater.relaunch_env()
+
+    assert not [k for k in env if k.startswith("_PYI_")]
+    assert "_MEIPASS2" not in env
+    # Everything else has to survive -- the relaunched app still needs a
+    # usable environment, this is not a bare env=... wipe.
+    assert env["APPDATA"] == r"C:\Users\someone\AppData\Roaming"
+    assert len(env) == len(os.environ) - 4
+
+
+def test_launch_helper_starts_the_helper_with_that_env(monkeypatch):
+    """The strip has to be applied where the process boundary is. Doing it
+    anywhere later is too late -- cmd.exe has already inherited them."""
+    from core import updater
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\Temp\_MEI302922")
+    seen = {}
+
+    def fake_popen(cmd, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return object()
+
+    monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
+    updater.launch_helper(r"C:\somewhere\_update.bat")
+
+    assert seen["env"] is not None, "helper must not inherit this process's environment as-is"
+    assert "_PYI_APPLICATION_HOME_DIR" not in seen["env"]
+
+
+def test_helper_waits_for_the_app_before_force_killing_it(tmp_path, monkeypatch):
+    """taskkill is the safety net for a hung shutdown, not the normal path.
+
+    main.Api.apply_update schedules close_window() at +0.4s; the helper used
+    to force-kill at a measured +0.28s, so close_window -- which un-parents
+    the docked Roblox window, persists all-time stats and closes the
+    capture/log handles -- never ran at all on a frozen build. A fixed grace
+    period is not enough either: the real build takes seconds to tear down,
+    so the helper has to poll for the app to go and only force it if it
+    genuinely hangs.
+    """
+    from core import updater
+
+    fake_exe = str(tmp_path / "MacroApp.exe")
+    open(fake_exe, "w").write("fake binary")
+    open(fake_exe + ".update", "w").write("fake new binary")
+    monkeypatch.setattr(updater, "_current_exe_path", lambda: fake_exe)
+
+    with open(updater.stage_exe_update(fake_exe + ".update"), encoding="utf-8") as f:
+        content = f.read()
+
+    kills = [i for i in range(len(content))
+             if content.startswith('taskkill /F /IM "MacroApp.exe"', i)]
+    assert kills, "the helper still needs a force-kill for a shutdown that hangs"
+    assert content.index(":waitloop") < kills[0], (
+        "the helper force-kills the app before waiting for it to close itself")
+    assert content.index("goto closeditself") < kills[0], (
+        "the wait loop must be able to finish without ever force-killing")

@@ -828,32 +828,45 @@ setlocal enabledelayedexpansion
 set LOG="{log_path}"
 echo ---- %date% %time% ---- > %LOG%
 echo Updating Cream's Macro -- please wait, this window closes itself...
-echo [1/5] Stopping the running app (image: {exe_name})... >> %LOG%
-rem Force-kill as a safety net -- main.Api.apply_update already calls
-rem close_window() (which un-parents the docked Roblox window before
-rem closing, so it doesn't get taken down with this process) before
-rem launching this, so by the time this runs the app should already be
-rem gone. The wait loop below just covers a slow shutdown.
-taskkill /F /IM "{exe_name}" >>%LOG% 2>&1
+echo [1/5] Waiting for the app to close itself (image: {exe_name})... >> %LOG%
+rem taskkill is the SAFETY NET for a shutdown that hangs, not the way the app
+rem normally closes -- so wait for the app to go on its own FIRST and only
+rem force it if it doesn't.
+rem
+rem main.Api.apply_update launches this helper and only then schedules
+rem close_window() at +0.4s, which un-parents the docked Roblox window,
+rem persists all-time stats, and closes the capture and log handles. This
+rem used to force-kill immediately: measured at +0.28s, ahead of that 0.4s
+rem timer every time, so on a frozen build none of that cleanup ever ran.
+rem
+rem A fixed grace period before the kill is not enough either. The real
+rem build takes seconds to tear down (webview, capture and OCR handles, a
+rem 90MB onefile's own exit), and any constant long enough for a slow
+rem machine is dead time on a fast one. Polling costs nothing when the app
+rem is already gone and adapts to whatever the machine actually needs.
+rem
 rem "ping" instead of "timeout" -- timeout needs a real console input
 rem handle, which this .bat (launched detached, see launch_helper) doesn't
 rem reliably have; same trick _write_source_helper_script already uses.
 set _wait=0
 :waitloop
-ping -n 3 127.0.0.1 >nul
+ping -n 2 127.0.0.1 >nul
 tasklist /FI "IMAGENAME eq {exe_name}" /NH 2>nul | findstr /i "{exe_name}" >nul
-if errorlevel 1 goto proceed
+if errorlevel 1 goto closeditself
 set /a _wait+=1
 rem Bounded, not infinite -- a process that never actually dies (locked by
 rem AV, a permission mismatch, a protected-process edge case, ...) used to
 rem leave this waiting forever with the window just sitting there showing
-rem nothing happening. After ~30s, force-kill once more and proceed
-rem anyway: a failed move below at least surfaces a real error instead of
-rem hanging indefinitely with no explanation.
+rem nothing happening. After ~15s, force it and proceed anyway: a failed
+rem move below at least surfaces a real error instead of hanging
+rem indefinitely with no explanation.
 if !_wait! lss 15 goto waitloop
-echo Still running after 30s -- forcing it closed and continuing anyway. >>%LOG%
+echo Still running after ~15s -- forcing it closed and continuing anyway. >>%LOG%
 taskkill /F /IM "{exe_name}" >>%LOG% 2>&1
-ping -n 2 127.0.0.1 >nul
+ping -n 3 127.0.0.1 >nul
+goto proceed
+:closeditself
+echo App closed itself cleanly. >>%LOG%
 :proceed
 echo [2/5] Old process confirmed gone (or timed out waiting). >>%LOG%
 rem Wait mandatory cooldown for Windows file system and antivirus real-time scanner to release file handles.
@@ -923,11 +936,59 @@ del "%~f0"
 
 # ---------------------------------------------------------------------------
 
+def relaunch_env() -> dict:
+    """This process's environment with PyInstaller's private bootloader
+    handshake removed, so a child can start a onefile exe from scratch.
+
+    A onefile build runs twice: the bootloader extracts the bundle to
+    %TEMP%\\_MEI<random>, sets
+
+        _PYI_ARCHIVE_FILE        the exe the bundle came out of
+        _PYI_APPLICATION_HOME_DIR   the _MEI dir it was extracted to
+        _PYI_PARENT_PROCESS_LEVEL   how deep we are
+
+    and re-runs itself. Our Python code is that second process, so those
+    three are sitting in os.environ and every child we spawn inherits them.
+
+    That is what broke Update & Restart. The helper is a child of the app,
+    so `start "" "<exe>"` handed the fresh build an _PYI_ARCHIVE_FILE equal
+    to its OWN path -- because the update swaps the new exe onto the old
+    one's path. The bootloader reads that as "I am already extracted",
+    skips extraction, and loads the interpreter out of
+    _PYI_APPLICATION_HOME_DIR -- the previous process's _MEI dir, which
+    step [2/5] of the helper deletes. Measured, driving a real frozen build
+    through the real helper:
+
+        [PYI-28940:ERROR] Failed to load Python DLL
+            'C:\\Users\\...\\Temp\\_MEI302922\\python313.dll'.
+        LoadLibrary: The specified module could not be found.
+
+    The exe swap itself always worked; the app just never came back, with
+    that error going to a console nobody sees. It also explains why running
+    the same _update.bat by hand works -- Explorer starts it with a clean
+    environment.
+
+    The path match is the whole trigger, which is why this is specific to
+    updating and not to launching in general: bootstrap.exe starting the
+    app exe passes the same variables down and is fine, because
+    _PYI_ARCHIVE_FILE names bootstrap.exe rather than the exe being
+    started, and the bootloader extracts normally.
+
+    Matched by prefix rather than by listing the three names: PyInstaller
+    has renamed these before (5.x used a single _MEIPASS2, kept here for
+    anyone still building with it), they are private to the bootloader, and
+    a rename would bring this failure back silently.
+    """
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith("_PYI_") and k != "_MEIPASS2"}
+
+
 def launch_helper(helper_path: str) -> None:
     if sys.platform == "darwin":
         # start_new_session detaches from this process's group, so the helper
         # survives the app exiting right after this call.
-        subprocess.Popen(["/bin/bash", helper_path], start_new_session=True, close_fds=True)
+        subprocess.Popen(["/bin/bash", helper_path], start_new_session=True,
+                         close_fds=True, env=relaunch_env())
         return
     # CREATE_NO_WINDOW, *not* DETACHED_PROCESS.
     #
@@ -950,4 +1011,5 @@ def launch_helper(helper_path: str) -> None:
         ["cmd.exe", "/c", helper_path],
         creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
+        env=relaunch_env(),
     )
