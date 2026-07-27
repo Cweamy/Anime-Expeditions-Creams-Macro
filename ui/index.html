@@ -44,7 +44,15 @@
       </div>
       <span style="color: var(--border);">|</span>
       <span class="text-sm font-semibold" style="color: var(--text-dim);">Cream's Macro</span>
-      <span id="ver-badge" class="text-[10px] px-1.5 py-0.5 rounded border ver-badge-btn" style="color: var(--brand); border-color: var(--border); background: var(--bg-surface); cursor: pointer;" title="Click to check for updates" onclick="manualCheckForUpdate()">v0.0.1</span>
+      <button type="button" id="ver-badge" class="ver-badge-btn flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-md border font-medium no-drag" style="color: var(--brand); border-color: var(--border); background: var(--bg-surface); cursor: pointer;" title="Click to check for updates" onclick="manualCheckForUpdate()">
+        <svg class="w-3 h-3 ver-badge-icon flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+          <path d="M3 21v-5h5"/>
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+          <path d="M21 3v5h-5"/>
+        </svg>
+        <span id="ver-badge-text">v0.0.1</span>
+      </button>
     </div>
 
     <div class="flex items-center gap-1 no-drag">
@@ -666,6 +674,16 @@
             </div>
           </div>
           <div class="grid grid-cols-2 gap-x-6 px-2 pb-2">
+            <div class="setting-row" style="border-bottom: none; grid-column: span 2; padding-bottom: 12px; margin-bottom: 6px; border-bottom: 1px dashed var(--border);">
+              <div>
+                <div class="setting-label">Software Updates</div>
+                <div class="setting-desc">Check GitHub for the latest releases, bug fixes, and feature updates.</div>
+              </div>
+              <button type="button" id="btn-check-updates" onclick="manualCheckForUpdate()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn flex items-center gap-1.5" style="color: var(--brand); border-color: var(--border);">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+                Check for Updates
+              </button>
+            </div>
             <div class="setting-row" style="border-bottom: none;">
               <div>
                 <div class="setting-label">Start Minimized</div>
