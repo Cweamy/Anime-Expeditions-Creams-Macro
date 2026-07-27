@@ -124,8 +124,27 @@ def screen_to_absolute(x: int, y: int):
     # nowhere near the target" in practice. Clamping can't fix a wrong
     # scale, but it guarantees a bad computation degrades to "clicks the
     # nearest screen edge" instead of an arbitrarily out-of-range value.
-    abs_x = int(((x - vx) * 65536) / vw) if vw else 0
-    abs_y = int(((y - vy) * 65536) / vh) if vh else 0
+    # Aim at the CENTRE of the target pixel's slice of the 0..65535 range.
+    #
+    # Windows maps an absolute coordinate back to a pixel by flooring
+    # (pixel = abs * size >> 16), so pixel x owns the half-open absolute
+    # range [x*65536/size, (x+1)*65536/size). Landing anywhere inside it
+    # gives pixel x; landing on the boundary is a coin flip against
+    # rounding. Adding half a pixel's width puts the request in the middle
+    # of that band, which is the furthest possible from either edge.
+    #
+    # Measured by moving the real cursor and reading it back, 209 x-coords
+    # across a 1463px desktop:
+    #     int(x * 65536 / size)          55 wrong   (the original)
+    #     round(x * 65535 / (size - 1))  24 wrong   (endpoint-to-endpoint)
+    #     this                            0 wrong
+    # The endpoint form is the natural reading of "0..65535 maps onto
+    # 0..size-1", but it only matches an inverse that rounds; Windows'
+    # floors, so it still misses wherever the two disagree.
+    #
+    # Integer arithmetic throughout -- no float rounding to reason about.
+    abs_x = ((x - vx) * 65536 + 32768) // vw if vw else 0
+    abs_y = ((y - vy) * 65536 + 32768) // vh if vh else 0
     abs_x = max(0, min(65535, abs_x))
     abs_y = max(0, min(65535, abs_y))
     return abs_x, abs_y

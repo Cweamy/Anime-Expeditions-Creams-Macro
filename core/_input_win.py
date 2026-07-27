@@ -69,6 +69,32 @@ _EXTENDED_VKS = {
     0xA3, 0xA5,              # Right Ctrl, Right Alt
 }
 
+_CHAR_MODIFIERS = (
+    (0x01, 0x10),  # SHIFT
+    (0x02, 0x11),  # CTRL
+    (0x04, 0x12),  # ALT
+)
+
+
+def key_for_char(ch: str):
+    """Return ``(virtual_key, modifiers)`` for one character on the current
+    Windows keyboard layout.
+
+    ``ord(ch.upper())`` only happens to be a virtual-key code for A-Z/0-9;
+    punctuation values collide with navigation keys (apostrophe became Right
+    Arrow, hyphen became Insert). VkKeyScanW is the OS-provided character to
+    key/modifier mapping and preserves lower/upper case for the active layout.
+    """
+    if not isinstance(ch, str) or len(ch) != 1:
+        return None
+    mapped = ctypes.windll.user32.VkKeyScanW(ord(ch))
+    if mapped == -1:
+        return None
+    vk = mapped & 0xFF
+    shift_state = (mapped >> 8) & 0xFF
+    modifiers = tuple(vk_mod for bit, vk_mod in _CHAR_MODIFIERS if shift_state & bit)
+    return vk, modifiers
+
 
 def _key_flags(vk: int) -> int:
     flags = si.KEYEVENTF_SCANCODE
