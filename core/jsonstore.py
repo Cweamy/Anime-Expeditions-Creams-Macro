@@ -17,19 +17,45 @@ the NEW complete file, never a half-written one.
 """
 import json
 import os
+import tempfile
+import time
+
+# Windows-only transient-failure allowance on the final rename -- see the
+# retry loop in write_json_atomic.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF = 0.02  # seconds, multiplied by the attempt number
 
 
 def write_json_atomic(path: str, data) -> None:
     """Serialize `data` to `path` as JSON, atomically. Raises whatever the
     write would have raised (a caller that can't write at all should still
     hear about it) but never leaves a partial file behind."""
-    tmp = f"{path}.tmp"
+    # A UNIQUE scratch file per writer, not a fixed "<path>.tmp": two threads
+    # writing the same target shared one temp name, so they interleaved into
+    # each other's buffer and then raced os.replace -- which on Windows
+    # surfaces as PermissionError [WinError 32] ("used by another process")
+    # rather than any kind of clean failure. mkstemp keeps it in the SAME
+    # directory so os.replace stays a same-filesystem atomic rename.
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + ".", suffix=".tmp")
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        # Windows only: MoveFileEx can come back ACCESS_DENIED/SHARING_VIOLATION
+        # if the destination is momentarily open -- another writer replacing it,
+        # an indexer or AV holding a read handle. It's transient, so a couple of
+        # short retries turn a spurious crash into a completed write. POSIX
+        # rename has no such window and takes the first attempt every time.
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_BACKOFF * (attempt + 1))
     except BaseException:
         # BaseException, not Exception: a KeyboardInterrupt mid-write is one
         # of the very cases this exists to survive, and it must not leave the
