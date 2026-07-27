@@ -2929,98 +2929,57 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             time.sleep(0.3)  # let the prompt actually close before clicking the gamemode card
 
         if mode == "expedition":
-            self._log("[Macro] Menu open -- searching for Expedition...")
-            self._set_status(action="Clicking Expedition...")
-            try:
-                match, name = vision.wait_for_image_any(
-                    hwnd, EXPEDITION_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't find Expedition: {exc}")
-                return False
-            if match is None:
-                if not stop_event.is_set():
-                    self._log(f'[Macro] "expedition" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
-                               f'Expedition card never showed up, stopping.')
-                return False
-            debug_path = self._debug_save(hwnd, name, match)
-            suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found Expedition (score {match['score']:.2f}) -- clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, match)
-            return True
+            return self._click_gamemode_card(hwnd, stop_event, "Expedition", EXPEDITION_IMAGE_NAMES)
 
         if mode == "challenge":
-            self._log("[Macro] Menu open -- searching for Challenge...")
-            self._set_status(action="Clicking Challenge...")
-            try:
-                match, name = vision.wait_for_image_any(
-                    hwnd, CHALLENGE_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't find Challenge: {exc}")
-                return False
-            if match is None:
-                if not stop_event.is_set():
-                    self._log(f'[Macro] "challenge" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
-                               f'Challenge card never showed up, stopping.')
-                return False
-            debug_path = self._debug_save(hwnd, name, match)
-            suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found Challenge (score {match['score']:.2f}) -- clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, match)
-            return True
+            return self._click_gamemode_card(hwnd, stop_event, "Challenge", CHALLENGE_IMAGE_NAMES)
 
         if mode == "raid":
-            self._log("[Macro] Menu open -- searching for Raid...")
-            self._set_status(action="Clicking Raid...")
-            try:
-                match, name = vision.wait_for_image_any(
-                    hwnd, RAID_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't find Raid: {exc}")
-                return False
-            if match is None:
-                if not stop_event.is_set():
-                    self._log(f'[Macro] "raid" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
-                               f'Raid card never showed up, stopping.')
-                return False
-            debug_path = self._debug_save(hwnd, name, match)
-            suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found Raid (score {match['score']:.2f}) -- clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, match)
-            return True
+            return self._click_gamemode_card(hwnd, stop_event, "Raid", RAID_IMAGE_NAMES)
 
-        # story.png alone used to not be distinct enough to match reliably
-        # (see STORY_CLICK's comment) -- Assets/ui/story/ holds a second
-        # reference crop of the same card (every image in the folder is
-        # tried per search, see vision.template_variant_paths), so image
-        # search is worth trying again here before falling back to the
-        # fixed coordinate.
-        self._log("[Macro] Menu open -- searching for Story...")
-        self._set_status(action="Clicking Story...")
+        # Story: try image search first, then fall back to a fixed coordinate
+        # if the template isn't distinct enough (see STORY_CLICK's comment).
+        return self._click_gamemode_card(
+            hwnd, stop_event, "Story", STORY_IMAGE_NAMES,
+            fallback_click=lambda: self._cxy("story_click"))
+
+    def _click_gamemode_card(self, hwnd, stop_event: threading.Event, label: str, image_names: tuple,
+                               fallback_click=None) -> bool:
+        """Shared search-and-click for a gamemode card (Expedition, Challenge,
+        Raid, Story) -- waits for one of `image_names` to appear, clicks it,
+        and returns True.  When nothing matches and `fallback_click` is set,
+        calls it for a (x, y) fixed coordinate to click instead of failing
+        outright (Story's fixed-coord path).  Returns False on failure/stop."""
+        self._log(f"[Macro] Menu open -- searching for {label}...")
+        self._set_status(action=f"Clicking {label}...")
         try:
             match, name = vision.wait_for_image_any(
-                hwnd, STORY_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
-        except vision.TemplateNotFound:
+                hwnd, image_names, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound as exc:
+            if fallback_click is None:
+                self._log(f"[Macro] Can't find {label}: {exc}")
+                return False
             match, name = None, None
         if match is not None:
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found Story (score {match['score']:.2f}) -- clicking it.{suffix}")
+            self._log(f"[Macro] Found {label} (score {match['score']:.2f}) -- clicking it.{suffix}")
             vision.click_match(self._mouse, hwnd, match)
-        else:
+        elif fallback_click is not None:
             if stop_event.is_set():
                 return False
-            story_x, story_y = self._cxy("story_click")
-            self._log(f"[Macro] Story card not found by image search -- falling back to fixed coordinate ({story_x}, {story_y}).")
+            fx, fy = fallback_click()
+            self._log(f"[Macro] {label} card not found by image search -- falling back to fixed coordinate ({fx}, {fy}).")
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            self._mouse.click(left + story_x, top + story_y)
-        # Unlike Raid/Expedition/Challenge (which wait_for_image their own
-        # gamemode card before clicking, naturally giving the screen a
-        # moment), the fixed-coordinate fallback above is blind -- nav_back
-        # confirms the MENU is open, not that the map carousel it leads to
-        # has finished rendering. The very first carousel scan used to fire
-        # immediately after this click, which could catch it mid-transition
-        # and misread/misclick the wrong card (reported: landing on the
-        # wrong map, e.g. a different Story map instead of the one asked
-        # for).
+            self._mouse.click(left + fx, top + fy)
+        else:
+            if not stop_event.is_set():
+                self._log(f'[Macro] "{image_names[0]}" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
+                           f'{label} card never showed up, stopping.')
+            return False
+        # Unlike modes that wait_for_image their own card (natural settle),
+        # a fixed-coordinate fallback is blind -- settle so the next screen
+        # is ready.
         time.sleep(SETTLE_DELAY)
         return True
+
