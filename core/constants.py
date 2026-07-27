@@ -90,3 +90,8 @@ ASSETS_DIR = os.path.join(APP_DIR, "Assets")
 # Folder", etc.) written against the old override-dir name -- same folder
 # now, see above.
 ASSETS_OVERRIDE_DIR = ASSETS_DIR
+
+# Reward panel scrollbar probe region and target color
+REWARD_SCROLLBAR_PROBE = (710, 428, 4, 2)  # (x, y, width, height)
+REWARD_SCROLLBAR_COLOR = 0x373737
+

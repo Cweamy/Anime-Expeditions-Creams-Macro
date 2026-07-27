@@ -30,15 +30,10 @@ from core import constants
 _ICON_DIR = os.path.join(constants.ASSETS_DIR, "item_icons")
 _icon_histograms = None  # lazily built on first use, cached for the process's lifetime
 
-# Fixed spot (relative to the docked game window's top-left, same convention
-# as the calibrated reward region itself) where the Gained Rewards panel's
-# scrollbar track renders -- it only shows up there at all when the drop
-# overflows the visible grid, so sampling its color is a cheap way to know
-# whether a second, scrolled-to-bottom capture is needed. Shared by
-# main.Api.read_rewards (on-demand) and core.runner's automatic post-match
-# read, so it only needs to be right in one place.
-SCROLLBAR_PROBE = (710, 428, 4, 2)  # (x, y, width, height)
-SCROLLBAR_COLOR = 0x373737
+# Imported from single source of truth (core.constants)
+SCROLLBAR_PROBE = constants.REWARD_SCROLLBAR_PROBE
+SCROLLBAR_COLOR = constants.REWARD_SCROLLBAR_COLOR
+
 # Stricter than sample_color_matches' own default (20) -- the reward panel's
 # own background sits close enough to this dark gray that the default
 # tolerance was reading "there's more to scroll" when there wasn't, which
