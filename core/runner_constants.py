@@ -38,9 +38,7 @@ TASK_RECOVERY_ATTEMPTS = 3
 # keep feeding it more attempts, the run leaves the stage and forces a full
 # Roblox restart (the same deep-link rejoin a detected disconnect already
 # uses, see _attempt_rejoin) before retrying the task fresh.
-
-# Make this into a feature so u can set it as a variable from the ui itself and save it so people can choose what the max losses streak can be.
-MAX_CONSECUTIVE_LOSSES_SAME_MAP = 1
+MAX_CONSECUTIVE_LOSSES_SAME_MAP = 3
 
 # The Story card's position on the gamemode-select screen (after Play) is
 # fixed -- unlike Play itself, nothing here needs to be found by image
