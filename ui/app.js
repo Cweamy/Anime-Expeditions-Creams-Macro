@@ -529,7 +529,10 @@ function setMacroButtons(running, paused) {
   const pauseBtn = document.getElementById('btn-macro-pause');
   const stopBtn = document.getElementById('btn-macro-stop');
   if (startBtn) startBtn.disabled = running;
-  if (stopBtn) stopBtn.disabled = !running;
+  if (stopBtn) {
+    stopBtn.disabled = !running;
+    stopBtn.classList.toggle('ui-running-glow', running && !paused);
+  }
   if (pauseBtn) {
     pauseBtn.disabled = !running;
     pauseBtn.classList.toggle('on', !!paused);
