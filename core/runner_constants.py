@@ -381,6 +381,12 @@ BATTLE_BLOCK_CLICK_SETTLE = 0.3
 # not_upgradeable (not enough gold yet, on cooldown, ...) -- not a failure,
 # just not ready, so it keeps its remaining `times` budget and tries again
 # later rather than giving up or burning through a poll every second.
+# Consecutive "not upgradeable" reads before giving up on a unit. At
+# UPGRADE_RETRY_WAIT apart that is roughly 100 seconds -- long enough to
+# ride out a slow-gold stretch, short enough that a maxed unit does not eat
+# the rest of the match. Reset by any successful upgrade.
+UPGRADE_MAX_IDLE_ATTEMPTS = 20
+
 UPGRADE_RETRY_WAIT = 5.0
 UPGRADE_PANEL_LOAD_TIMEOUT = 3.0  # how long to wait for the info panel to actually finish loading after clicking the unit
 
