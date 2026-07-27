@@ -20,7 +20,7 @@ const LOG_TAG_COLORS = ['var(--brand)', 'var(--teal)', 'var(--amber)', 'var(--li
 // Oldest lines get dropped past this: the log is a live view, not an archive
 // (Python keeps its own history buffer for pop-out replay), and an
 // ever-growing list makes "am I at the newest line?" ambiguous.
-const LOG_MAX_LINES = 400;
+const LOG_MAX_LINES = 500;
 
 // How far from the bottom still counts as "at the bottom". Not zero: a
 // fractional scrollHeight (sub-pixel line heights, zoom levels -- see
@@ -129,6 +129,45 @@ function addLog(line) {
     logUnreadCount = 0;
   } else {
     logUnreadCount++;
+  }
+  updateLogJumpBtn();
+}
+
+// Batched twin of addLog: Python coalesces bursts of lines and pushes them in
+// one evaluate_js call (see Api._flush_log_queue), so a whole batch is one
+// layout/scroll pass instead of one per line. Same follow-only-when-at-bottom
+// and place-preserving top-trim behaviour as addLog -- the follow decision is
+// made once, before anything is appended.
+function appendLogBatch(entries) {
+  if (!entries || !entries.length) return;
+  const list = logListEl();
+  if (!list) return;
+  const following = logIsAtBottom(list);
+
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < entries.length; i++) {
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    renderLogLine(div, entries[i]);
+    frag.appendChild(div);
+  }
+  list.appendChild(frag);
+
+  while (list.childElementCount > LOG_MAX_LINES) {
+    if (following) {
+      list.removeChild(list.firstElementChild);
+      continue;
+    }
+    const heightBefore = list.scrollHeight;
+    list.removeChild(list.firstElementChild);
+    list.scrollTop = Math.max(0, list.scrollTop - (heightBefore - list.scrollHeight));
+  }
+
+  if (following) {
+    list.scrollTop = list.scrollHeight;
+    logUnreadCount = 0;
+  } else {
+    logUnreadCount += entries.length;
   }
   updateLogJumpBtn();
 }

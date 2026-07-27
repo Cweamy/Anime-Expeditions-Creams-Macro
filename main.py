@@ -8,6 +8,7 @@ import re
 import sys
 import time
 import json
+import queue
 import subprocess
 import threading
 from datetime import date
@@ -111,6 +112,19 @@ LOGS_WINDOW_HTML = os.path.join(constants.UI_DIR, "logs_window.html")
 WAVE_MONITOR_HTML = os.path.join(constants.UI_DIR, "wave_monitor.html")
 LOGO_ICO = os.path.join(constants.BUNDLE_DIR, "logo.ico")
 LOG_HISTORY_LIMIT = 500  # caps what a freshly popped-out window gets replayed with
+
+# Log lines are coalesced and pushed to the UI in ~100ms batches (see
+# Api._log_flush_worker) to avoid one evaluate_js IPC round-trip per line
+# during bursty logging. A line whose text mentions one of these is flushed
+# immediately instead of waiting for the next tick -- an error should show
+# now, and if it's the last thing before a crash/shutdown the tick might not
+# run at all.
+_CRITICAL_LOG_KEYWORDS = ("error", "critical", "exception", "failed")
+
+
+def _is_critical_log(message: str) -> bool:
+    low = message.lower()
+    return any(k in low for k in _CRITICAL_LOG_KEYWORDS)
 
 # Auto-reopen throttle: after a run's Roblox window closes, the dock watchdog
 # relaunches the game via deep link, but a fresh Roblox can take a good while
@@ -380,6 +394,14 @@ class Api:
         self._mac_panel_width = None  # last applied width, so repeat calls are free
         self._mac_geometry_lock = threading.Lock()
         self.stopping = threading.Event()
+        # Log lines queue here and a background worker flushes them to the UI
+        # in batches (see push_log / _log_flush_worker) -- one evaluate_js per
+        # ~100ms instead of one per line. Daemon so it dies with the process;
+        # it also exits on self.stopping (set on shutdown).
+        self._log_queue = queue.Queue()
+        self._log_flush_lock = threading.Lock()
+        self._log_thread = threading.Thread(target=self._log_flush_worker, daemon=True)
+        self._log_thread.start()
         self.logger = Logger()
         self.session_start = time.time()
         self._all_time_base = cfg.load().get("all_time_seconds", 0)
@@ -1258,23 +1280,68 @@ class Api:
         }
         return webhook.send(url or "", embed)
 
-    def push_log(self, message: str) -> None:
+    def push_log(self, message: str, immediate: bool = False) -> None:
         self.logger.log(message)
         self._log_history.append(message)
         if len(self._log_history) > LOG_HISTORY_LIMIT:
             self._log_history = self._log_history[-LOG_HISTORY_LIMIT:]
-        for win in (self._window, self._log_window):
-            if not win:
-                continue
+        # Queue for the batching worker rather than firing an IPC call per line
+        # (see _log_flush_worker). Errors jump the queue so they don't wait a
+        # tick -- or get lost if that line is the last thing before a crash.
+        self._log_queue.put(message)
+        if immediate or _is_critical_log(message):
+            self._flush_log_queue()
+
+    def _log_flush_worker(self) -> None:
+        """Drains the log queue to the UI ~10x/sec so a burst of lines costs one
+        evaluate_js round-trip instead of one per line."""
+        while not self.stopping.is_set():
+            time.sleep(0.1)
             try:
-                win.evaluate_js(f"window.addLog && window.addLog({json.dumps(message)})")
+                self._flush_log_queue()
             except Exception:
                 pass
+
+    def _flush_log_queue(self) -> None:
+        with self._log_flush_lock:
+            batch = []
+            while True:
+                try:
+                    batch.append(self._log_queue.get_nowait())
+                except queue.Empty:
+                    break
+            if not batch:
+                return
+            wins = [w for w in (self._window, self._log_window) if w]
+            if not wins:
+                # No window yet -- the lines are already in _log_history, which
+                # is what a window opened later replays from. Matches the old
+                # behaviour where a line pushed before the window existed never
+                # hit the live view.
+                return
+            payload = json.dumps(batch)
+            # appendLogBatch (ui/log_view.js) renders the whole batch in one
+            # pass; fall back to per-line addLog if an older page is loaded.
+            js = (f"if (window.appendLogBatch) {{ window.appendLogBatch({payload}); }} "
+                  f"else if (window.addLog) {{ {payload}.forEach(function(l){{ window.addLog(l); }}); }}")
+            for win in wins:
+                try:
+                    win.evaluate_js(js)
+                except Exception:
+                    pass
 
     def clear_logs(self) -> None:
         # Drops the replay buffer too, so a log window popped out *after* this
         # won't come back seeded with lines the user just cleared.
         self._log_history = []
+        # Drop anything queued but not yet flushed, or it would repaint the
+        # view right after the clear.
+        with self._log_flush_lock:
+            while not self._log_queue.empty():
+                try:
+                    self._log_queue.get_nowait()
+                except queue.Empty:
+                    break
         for win in (self._window, self._log_window):
             if not win:
                 continue
@@ -1303,11 +1370,15 @@ class Api:
         self._log_window = win
 
         def _seed():
-            for line in self._log_history:
-                try:
-                    win.evaluate_js(f"window.addLog && window.addLog({json.dumps(line)})")
-                except Exception:
-                    pass
+            if not self._log_history:
+                return
+            payload = json.dumps(self._log_history)
+            try:
+                win.evaluate_js(
+                    f"if (window.appendLogBatch) {{ window.appendLogBatch({payload}); }} "
+                    f"else if (window.addLog) {{ {payload}.forEach(function(l){{ window.addLog(l); }}); }}")
+            except Exception:
+                pass
 
         def _on_closed():
             self._log_window = None
