@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import base64
 import json
 import urllib.request
 import zlib
+from typing import Any
 
 HEADER_PREFIX_V1 = "CREAM:v1:"   # legacy: standard zlib, no preset dictionary
 HEADER_PREFIX_V2 = "CREAM:v2:"   # current: raw deflate + the shared _ZDICT below
@@ -110,7 +113,7 @@ def decode_template_code(input_str: str) -> dict:
     return _parse_payload(payload)
 
 
-def count_template_blocks(blocks) -> int:
+def count_template_blocks(blocks: dict | list) -> int:
     """Calculates total block count across prestart, battle, and flat list formats."""
     if isinstance(blocks, list):
         return len(blocks)
@@ -126,7 +129,7 @@ def count_template_blocks(blocks) -> int:
     return 0
 
 
-def _parse_payload(payload: dict) -> dict:
+def _parse_payload(payload: Any) -> dict:
     """Parses and validates a decoded payload dictionary."""
     if not isinstance(payload, dict):
         return {"ok": False, "reason": "Payload is not a valid JSON object."}

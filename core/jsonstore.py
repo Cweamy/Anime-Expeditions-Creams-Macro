@@ -15,10 +15,13 @@ settings.json, for the same reason -- os.replace is atomic on both Windows and
 POSIX, so an interrupted write can only ever leave the OLD complete file or
 the NEW complete file, never a half-written one.
 """
+from __future__ import annotations
+
 import json
 import os
 import tempfile
 import time
+from typing import Any
 
 # Windows-only transient-failure allowance on the final rename -- see the
 # retry loop in write_json_atomic.
@@ -26,7 +29,7 @@ _REPLACE_ATTEMPTS = 5
 _REPLACE_BACKOFF = 0.02  # seconds, multiplied by the attempt number
 
 
-def write_json_atomic(path: str, data) -> None:
+def write_json_atomic(path: str, data: Any) -> None:
     """Serialize `data` to `path` as JSON, atomically. Raises whatever the
     write would have raised (a caller that can't write at all should still
     hear about it) but never leaves a partial file behind."""
