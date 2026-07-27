@@ -4897,16 +4897,44 @@ async function importTemplates() {
   const data = result.data || {};
   const templates = data.templates && typeof data.templates === 'object' ? data.templates : null;
   if (!templates) { addLog('[Macro Manager] Import failed: that file is not a template export.'); return; }
-  const pathAdded = await importCustomPaths(data.paths);
   let existing = [];
   try { existing = await pywebview.api.list_templates(); } catch (e) {}
-  let added = 0;
-  for (const [name, t] of Object.entries(templates)) {
-    if (existing.includes(name) || !t || t.blocks == null) continue;
-    try { await pywebview.api.save_template(name, t.blocks); added++; } catch (e) {}
+  const entries = Object.entries(templates).filter(([, t]) => t && t.blocks != null);
+  if (entries.length === 0) {
+    addLog('[Macro Manager] Import failed: that file contains no valid templates.');
+    return;
+  }
+  const conflicts = entries.filter(([name]) => existing.includes(name));
+  const replaceExisting = conflicts.length === 0 || confirm(
+    `${conflicts.length} imported template(s) already exist. Replace them with the exported versions?`);
+  const pathAdded = await importCustomPaths(data.paths);
+  const importedNames = [];
+  let replaced = 0;
+  for (const [name, t] of entries) {
+    const isConflict = existing.includes(name);
+    if (isConflict && !replaceExisting) continue;
+    try {
+      await pywebview.api.save_template(name, t.blocks);
+      importedNames.push(name);
+      if (isConflict) replaced++;
+    } catch (e) {}
   }
   await refreshTemplateList();
-  addLog(`[Macro Manager] Imported ${added} template(s)${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
+  if (importedNames.length > 0) {
+    // Put the first imported macro straight into the editor. Previously the
+    // dropdown refreshed but retained its empty selection, so even a
+    // successful import looked like it had done nothing.
+    const sel = document.getElementById('template-select');
+    if (sel) {
+      sel.value = importedNames[0];
+      await loadSelectedTemplate();
+    }
+  }
+  const skipped = conflicts.length - replaced;
+  addLog(`[Macro Manager] Imported ${importedNames.length} template(s)`
+    + `${replaced ? ` (${replaced} replaced)` : ''}`
+    + `${skipped ? `; kept ${skipped} existing` : ''}`
+    + `${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
 }
 
 async function refreshTemplateList() {
