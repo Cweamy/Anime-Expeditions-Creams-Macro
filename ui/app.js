@@ -1876,6 +1876,51 @@ async function refreshTaskTemplates() {
   try { taskTemplates = await pywebview.api.list_templates(); } catch (e) { taskTemplates = []; }
 }
 
+function collectCustomPathNames(templates) {
+  const names = new Set();
+  for (const template of Object.values(templates || {})) {
+    const root = template && template.blocks != null ? template.blocks : template;
+    const lists = Array.isArray(root)
+      ? [root]
+      : Object.values(root || {}).filter(Array.isArray);
+    for (const blocks of lists) {
+      for (const block of blocks) {
+        if (block && block.type === 'walk_path' && block.mode === 'custom' && block.pathName) {
+          names.add(block.pathName);
+        }
+      }
+    }
+  }
+  return [...names];
+}
+
+async function exportCustomPaths(templates) {
+  const paths = {};
+  for (const name of collectCustomPathNames(templates)) {
+    try {
+      const saved = await pywebview.api.load_walk_path(name);
+      if (saved && Array.isArray(saved.events)) paths[name] = saved;
+    } catch (e) {}
+  }
+  return paths;
+}
+
+async function importCustomPaths(paths) {
+  let existing = [];
+  // A shipped default with the same name must not suppress the custom
+  // recording carried by the export. Only user recordings count as existing.
+  try { existing = await pywebview.api.list_custom_paths(); } catch (e) {}
+  let added = 0;
+  for (const [name, saved] of Object.entries(paths || {})) {
+    if (existing.includes(name) || !saved || !Array.isArray(saved.events)) continue;
+    try {
+      const result = await pywebview.api.save_walk_path(name, saved.events);
+      if (result && result.ok) { existing.push(name); added++; }
+    } catch (e) {}
+  }
+  return added;
+}
+
 async function exportSettings() {
   try {
     const s = await pywebview.api.get_settings();
@@ -1928,9 +1973,10 @@ async function exportTasks() {
       try { templates[t.macro] = await pywebview.api.load_template(t.macro); } catch (e) {}
     }
   }
+  const paths = await exportCustomPaths(templates);
   const payload = {
-    kind: 'anime-expeditions-tasks', version: 1, exported: new Date().toISOString(),
-    tasks: taskCards, templates,
+    kind: 'anime-expeditions-tasks', version: 2, exported: new Date().toISOString(),
+    tasks: taskCards, templates, paths,
   };
   let result = null;
   try { result = await pywebview.api.export_tasks_file(payload); } catch (e) {}
@@ -1940,7 +1986,7 @@ async function exportTasks() {
 
 async function importTasks() {
   let result = null;
-  try { result = await pywebview.api.import_tasks_file(); } catch (e) {}
+  try { result = await pywebview.api.import_tasks_file('tasks'); } catch (e) {}
   if (!result || !result.ok) {
     if (result && result.reason !== 'cancelled') addLog(`[Task] Import failed: ${result.reason || 'error'}`);
     return;
@@ -1954,6 +2000,7 @@ async function importTasks() {
     return;
   }
   if (!Array.isArray(data.tasks)) { addLog('[Task] Import failed: that file is not a task export.'); return; }
+  const pathAdded = await importCustomPaths(data.paths);
   let tplAdded = 0;
   try {
     const existing = await pywebview.api.list_templates();
@@ -1980,7 +2027,7 @@ async function importTasks() {
   renderTaskList();
   renderTaskBuilder();
   saveTaskQueue();
-  addLog(`[Task] Imported ${added} task(s)${tplAdded ? ` and ${tplAdded} macro template(s)` : ''}.`);
+  addLog(`[Task] Imported ${added} task(s)${tplAdded ? `, ${tplAdded} macro template(s)` : ''}${pathAdded ? `, and ${pathAdded} custom path(s)` : ''}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -4830,8 +4877,9 @@ async function exportTemplates() {
   for (const name of names) {
     try { templates[name] = await pywebview.api.load_template(name); } catch (e) {}
   }
+  const paths = await exportCustomPaths(templates);
   const payload = {
-    kind: 'anime-expeditions-templates', version: 1, exported: new Date().toISOString(), templates,
+    kind: 'anime-expeditions-templates', version: 2, exported: new Date().toISOString(), templates, paths,
   };
   let result = null;
   try { result = await pywebview.api.export_tasks_file(payload, 'templates'); } catch (e) {}
@@ -4841,7 +4889,7 @@ async function exportTemplates() {
 
 async function importTemplates() {
   let result = null;
-  try { result = await pywebview.api.import_tasks_file(); } catch (e) {}
+  try { result = await pywebview.api.import_tasks_file('templates'); } catch (e) {}
   if (!result || !result.ok) {
     if (result && result.reason !== 'cancelled') addLog(`[Macro Manager] Import failed: ${result.reason || 'error'}`);
     return;
@@ -4849,6 +4897,7 @@ async function importTemplates() {
   const data = result.data || {};
   const templates = data.templates && typeof data.templates === 'object' ? data.templates : null;
   if (!templates) { addLog('[Macro Manager] Import failed: that file is not a template export.'); return; }
+  const pathAdded = await importCustomPaths(data.paths);
   let existing = [];
   try { existing = await pywebview.api.list_templates(); } catch (e) {}
   let added = 0;
@@ -4857,7 +4906,7 @@ async function importTemplates() {
     try { await pywebview.api.save_template(name, t.blocks); added++; } catch (e) {}
   }
   await refreshTemplateList();
-  addLog(`[Macro Manager] Imported ${added} template(s).`);
+  addLog(`[Macro Manager] Imported ${added} template(s)${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
 }
 
 async function refreshTemplateList() {
