@@ -643,7 +643,7 @@ class BlockOps:
             self._keyboard.key_up(keys.VK_SHIFT)
             self._quick_place_shift_down = False
 
-    def _scan_place_search_box(self, left: int, top: int, orig_x: int, orig_y: int):
+    def _scan_place_search_box(self, hwnd, orig_x: int, orig_y: int):
         """One capture of the PLACE_SEARCH_BOX_SIZE x PLACE_SEARCH_BOX_SIZE
         region around (orig_x, orig_y) -- window-client coords -- scanned in
         memory for a pixel at/near 0xffffff (white, within
@@ -664,7 +664,7 @@ class BlockOps:
         offset are both measured from where the caller actually asked about,
         not from the middle of the captured region."""
         import numpy as np
-        from core.ocr import capture_region
+        from core import vision
         size = PLACE_SEARCH_BOX_SIZE
         half = size // 2
         # Top-left of the box, pulled back inside the window if centering it
@@ -672,7 +672,13 @@ class BlockOps:
         # narrower than the box degrades to "start at 0" rather than negative.
         box_x = max(0, min(orig_x - half, FIXED_WIN_W - size))
         box_y = max(0, min(orig_y - half, FIXED_WIN_H - size))
-        patch = capture_region(left + box_x, top + box_y, size, size)
+        # Use the same WGC -> PrintWindow -> MSS fallback chain as every
+        # navigation image search. Raw MSS is black on the exact Roblox/GPU
+        # setups WGC exists to support, which made navigation work but every
+        # Place Unit scan fail.
+        patch = vision.capture_game_bgr(hwnd, (box_x, box_y, size, size))
+        if patch is None:
+            return None
         b, g, r = patch[:, :, 0].astype(int), patch[:, :, 1].astype(int), patch[:, :, 2].astype(int)
         floor = 255 - PLACE_VALID_PIXEL_TOLERANCE
         valid_mask = (r >= floor) & (g >= floor) & (b >= floor)
@@ -706,7 +712,7 @@ class BlockOps:
         while True:
             if self._checkpoint(stop_event):
                 return None
-            found = self._scan_place_search_box(left, top, orig_x, orig_y)
+            found = self._scan_place_search_box(hwnd, orig_x, orig_y)
             if found is not None:
                 dx, dy = found
                 cx, cy = orig_x + dx, orig_y + dy
@@ -753,7 +759,7 @@ class BlockOps:
                 self._mouse.move_to(left + px, top + py)
                 self._mouse.nudge()  # the highlight needs real relative motion to render
                 time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
-                found = self._scan_place_search_box(left, top, px, py)
+                found = self._scan_place_search_box(hwnd, px, py)
                 if found is not None:
                     dx, dy = found
                     cx, cy = px + dx, py + dy

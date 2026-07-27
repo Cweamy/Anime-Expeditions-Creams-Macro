@@ -136,6 +136,7 @@ const world = (data) => new Function('data', `
   function defaultTask() { return { mode: 'story', map: 'x', stage: '1', repeat: 1 }; }
   function renderTaskList() {} function renderTaskBuilder() {} function saveTaskQueue() {}
   async function refreshTaskTemplates() {}
+  async function importCustomPaths() { return 0; }
   const pywebview = { api: {
     import_tasks_file: async () => ({ ok: true, data }),
     list_templates: async () => [],
@@ -196,6 +197,27 @@ def test_import_tasks_still_accepts_an_export_without_a_kind_field(tmp_path):
         }})();
     """, tmp_path)
     assert out["cards"] == 1
+
+
+def test_custom_paths_are_discovered_in_modern_and_legacy_templates(tmp_path):
+    templates = {
+        "Modern": {"blocks": {"prestart": [
+            {"type": "walk_path", "mode": "custom", "pathName": "Boss Route"},
+            {"type": "walk_path", "mode": "auto", "pathName": "Ignore Me"},
+        ], "battle": []}},
+        "Legacy": {"blocks": [
+            {"type": "walk_path", "mode": "custom", "pathName": "Old Route"},
+            {"type": "walk_path", "mode": "custom", "pathName": "Boss Route"},
+        ]},
+    }
+    out = run_js(f"""
+        const w = new Function(`
+          ${{extract('collectCustomPathNames')}}
+          return collectCustomPathNames;
+        `)();
+        console.log(JSON.stringify({{ names: w({json.dumps(templates)}).sort() }}));
+    """, tmp_path)
+    assert out["names"] == ["Boss Route", "Old Route"]
 
 
 # ---------------------------------------------------------------------------

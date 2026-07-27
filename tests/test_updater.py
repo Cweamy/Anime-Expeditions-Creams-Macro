@@ -1,5 +1,6 @@
 import os
 import sys
+import zipfile
 
 from core.updater import _parse_version
 
@@ -75,6 +76,9 @@ def test_stage_exe_update_script_contains_retries(tmp_path, monkeypatch):
     assert ":moveoldloop" in content
     assert ":movenewloop" in content
     assert "start \"\"" in content
+    grace = content.index("ping -n 3 127.0.0.1 >nul")
+    force_kill = content.index('taskkill /F /IM "MacroApp.exe"')
+    assert grace < force_kill, "helper force-kills before graceful close_window gets a chance to run"
 
 
 
@@ -126,3 +130,42 @@ def test_updater_no_longer_exposes_detached_process():
     """Guards against it being reintroduced by name."""
     from core import updater
     assert not hasattr(updater, "DETACHED_PROCESS")
+
+
+def test_source_zip_extraction_stays_inside_destination(tmp_path):
+    from core import updater
+
+    archive = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("repo/main.py", "safe")
+        zf.writestr("../escaped.py", "bad")
+        zf.writestr("repo/../../also-escaped.py", "bad")
+    destination = tmp_path / "out"
+    with zipfile.ZipFile(archive) as zf:
+        updater._extract_zip_contained(zf, str(destination))
+
+    assert (destination / "repo" / "main.py").read_text() == "safe"
+    assert not (tmp_path / "escaped.py").exists()
+    assert not (tmp_path / "also-escaped.py").exists()
+
+
+def test_release_asset_merge_adds_icons_without_overwriting_user_icon(monkeypatch, tmp_path):
+    from core import updater
+
+    assets_dir = tmp_path / "Assets"
+    icon_dir = assets_dir / "item_icons"
+    icon_dir.mkdir(parents=True)
+    custom_icon = icon_dir / "Custom.png"
+    custom_icon.write_bytes(b"user-edited")
+    release_zip = tmp_path / "release.zip"
+    with zipfile.ZipFile(release_zip, "w") as archive:
+        archive.writestr("Assets/item_icons/New.png", b"new-release-icon")
+        archive.writestr("Assets/item_icons/Custom.png", b"release-icon")
+
+    monkeypatch.setattr(updater.constants, "ASSETS_DIR", str(assets_dir))
+    monkeypatch.setattr(updater, "ASSETS_MANIFEST_FILE", str(tmp_path / "manifest.json"))
+    written = updater._extract_assets_zip_addonly(str(release_zip), lambda _message: None)
+
+    assert written == 1
+    assert (icon_dir / "New.png").read_bytes() == b"new-release-icon"
+    assert custom_icon.read_bytes() == b"user-edited"

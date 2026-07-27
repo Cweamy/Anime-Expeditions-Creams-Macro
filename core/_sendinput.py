@@ -124,8 +124,12 @@ def screen_to_absolute(x: int, y: int):
     # nowhere near the target" in practice. Clamping can't fix a wrong
     # scale, but it guarantees a bad computation degrades to "clicks the
     # nearest screen edge" instead of an arbitrarily out-of-range value.
-    abs_x = int(((x - vx) * 65536) / vw) if vw else 0
-    abs_y = int(((y - vy) * 65536) / vh) if vh else 0
+    # SendInput maps the inclusive 0..65535 range onto the inclusive pixel
+    # indices 0..(size-1). Dividing by the pixel count (and using 65536)
+    # lands roughly half of coordinates one pixel away from the requested
+    # point. Single-pixel virtual desktops are degenerate but still map to 0.
+    abs_x = round(((x - vx) * 65535) / (vw - 1)) if vw > 1 else 0
+    abs_y = round(((y - vy) * 65535) / (vh - 1)) if vh > 1 else 0
     abs_x = max(0, min(65535, abs_x))
     abs_y = max(0, min(65535, abs_y))
     return abs_x, abs_y

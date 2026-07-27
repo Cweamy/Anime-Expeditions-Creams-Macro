@@ -1059,6 +1059,16 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._set_status(action="Battle in progress...")
         battle_blocks = battle_blocks or []
         deadline = time.time() + MATCH_RESULT_TIMEOUT
+        if mode != "expedition":
+            # Required result templates fail fast once, before the hot loop.
+            # The loop can then search reconnect/victory/defeat against one
+            # captured frame instead of re-capturing once per name.
+            try:
+                vision.load_template_grays("victory")
+                vision.load_template_grays("defeat")
+            except vision.TemplateNotFound as exc:
+                self._log(f"[Macro] {exc}")
+                return None
         while time.time() < deadline:
             if self._checkpoint(stop_event):
                 return None
@@ -1074,40 +1084,33 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             # kept polling for Victory/Defeat/exp_continue/exp_extract
             # against a dead screen until MATCH_RESULT_TIMEOUT gave up,
             # instead of recognizing the disconnect and rejoining promptly.
-            for name in RECONNECT_IMAGE_NAMES:
-                try:
-                    reconnect_match = vision.find_image(hwnd, name)
-                except vision.TemplateNotFound:
-                    continue
-                if reconnect_match is not None:
-                    self._handle_disconnect(hwnd, stop_event, webhook, task, "disconnected")
-                    return None
-
             if watch_close_popup:
                 self._click_close_popup_if_found(hwnd)
 
             if mode == "expedition":
+                try:
+                    reconnect_match, _ = vision.find_image_any(hwnd, RECONNECT_IMAGE_NAMES)
+                except vision.TemplateNotFound:
+                    reconnect_match = None
+                if reconnect_match is not None:
+                    self._handle_disconnect(hwnd, stop_event, webhook, task, "disconnected")
+                    return None
                 result = self._check_expedition_wave_result(hwnd, stop_event)
                 if result is not None:
                     return result
                 time.sleep(MATCH_RESULT_POLL_INTERVAL)
                 continue
 
-            try:
-                victory_match = vision.find_image(hwnd, "victory")
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] {exc}")
+            match, matched_name = vision.find_image_any(
+                hwnd, tuple(RECONNECT_IMAGE_NAMES) + ("victory", "defeat"))
+            if matched_name in RECONNECT_IMAGE_NAMES:
+                self._handle_disconnect(hwnd, stop_event, webhook, task, "disconnected")
                 return None
-            if victory_match is not None:
-                self._log(f"[Macro] Victory! (score {victory_match['score']:.2f})")
+            if matched_name == "victory":
+                self._log(f"[Macro] Victory! (score {match['score']:.2f})")
                 return "win"
-            try:
-                defeat_match = vision.find_image(hwnd, "defeat")
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] {exc}")
-                return None
-            if defeat_match is not None:
-                self._log(f"[Macro] Defeat. (score {defeat_match['score']:.2f})")
+            if matched_name == "defeat":
+                self._log(f"[Macro] Defeat. (score {match['score']:.2f})")
                 return "loss"
             time.sleep(MATCH_RESULT_POLL_INTERVAL)
         self._log(f'[Macro] Neither "victory" nor "defeat" matched within {MATCH_RESULT_TIMEOUT / 60:.0f} min. '
@@ -1797,39 +1800,34 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         image search in this file."""
         deadline = time.time() + timeout
         stuck_since = None
-        stuck_template_missing = False
+        try:
+            vision.load_template_grays("nav_unitmanager")
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't confirm teleport-in: {exc}")
+            return "timeout"
+        available_names = ["nav_unitmanager"]
+        for optional_name in tuple(RECONNECT_IMAGE_NAMES) + ("teleportstuck",):
+            try:
+                vision.load_template_grays(optional_name)
+                available_names.append(optional_name)
+            except vision.TemplateNotFound:
+                pass
         while time.time() < deadline:
             if stop_event.is_set():
                 return "stopped"
-            try:
-                match = vision.find_image(hwnd, "nav_unitmanager")
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't confirm teleport-in: {exc}")
-                return "timeout"
-            if match is not None:
+            match, matched_name = vision.find_image_any(hwnd, tuple(available_names))
+            if matched_name == "nav_unitmanager":
                 return "ok"
 
-            for name in RECONNECT_IMAGE_NAMES:
-                try:
-                    reconnect_match = vision.find_image(hwnd, name)
-                except vision.TemplateNotFound:
-                    continue  # that particular crop hasn't been added -- try the next one
-                if reconnect_match is not None:
-                    return "disconnected"
-
-            if not stuck_template_missing:
-                try:
-                    stuck_match = vision.find_image(hwnd, "teleportstuck")
-                except vision.TemplateNotFound:
-                    stuck_match = None
-                    stuck_template_missing = True  # don't keep re-searching for a crop that was never added
-                if stuck_match is not None:
-                    if stuck_since is None:
-                        stuck_since = time.time()
-                    elif time.time() - stuck_since >= TELEPORT_STUCK_TIMEOUT:
-                        return "stuck"
-                else:
-                    stuck_since = None  # only counts while CONTINUOUSLY visible
+            if matched_name in RECONNECT_IMAGE_NAMES:
+                return "disconnected"
+            if matched_name == "teleportstuck":
+                if stuck_since is None:
+                    stuck_since = time.time()
+                elif time.time() - stuck_since >= TELEPORT_STUCK_TIMEOUT:
+                    return "stuck"
+            else:
+                stuck_since = None  # only counts while CONTINUOUSLY visible
 
             time.sleep(TELEPORT_POLL_INTERVAL)
         return "timeout"
@@ -2125,22 +2123,17 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         while time.time() < deadline:
             if stop_event is not None and stop_event.is_set():
                 return False
-            still_showing = False
-            for name in names:
-                try:
-                    match = vision.find_image(hwnd, name)
-                except vision.TemplateNotFound:
-                    continue
-                if match is not None:
-                    still_showing = True
-                    break
-            if not still_showing:
+            try:
+                match, _ = vision.find_image_any(hwnd, tuple(names))
+            except vision.TemplateNotFound:
+                match = None
+            if match is None:
                 return True
             time.sleep(0.3)
         self._log(f'[Macro] {"/".join(names)} still showing after {timeout:.0f}s -- continuing anyway.')
         return False
 
-    def _click_start_game_2_if_found(self, hwnd) -> bool:
+    def _click_start_game_confirm(self, hwnd, skip_match: dict) -> None:
         # nav_start_game_confirm (was "nav_start_game_2" -- renamed because
         # the _2 suffix made it look like a mere visual variant of
         # nav_start_game, which it is NOT): a second Start Game/confirm
@@ -2149,23 +2142,16 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # _wait_out_start_game_warning entirely instead of sitting through
         # the full timeout for a warning that's actually already
         # dismissable right now.
-        try:
-            skip_match = vision.find_image(hwnd, "nav_start_game_confirm")
-        except vision.TemplateNotFound:
-            return False
-        if skip_match is None:
-            return False
         self._log(f"[Macro] Found nav_start_game_confirm (score {skip_match['score']:.2f}) -- "
                    f"clicking it to skip the warning wait.")
         vision.click_match(self._mouse, hwnd, skip_match)
-        return True
 
     def _find_start_game_button(self, hwnd, stop_event: threading.Event = None, timeout: float = 0):
         """Tries nav_start_game (whose folder holds every visual variant of
         the ready-up button seen in practice -- the old separately-named
         _3/_4 crops live in there now, all tried automatically per search),
         then nav_start_game_confirm (a DIFFERENT button -- the "Start
-        Anyway"-style second confirm, see _click_start_game_2_if_found) --
+        Anyway"-style second confirm, see _click_start_game_confirm) --
         so the actual "start the round" click (see _play_one_match) isn't
         dependent on just one image matching. Returns (name, match) for
         whichever was found first, or (None, None) if none of them were --
@@ -2181,13 +2167,13 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         Pre Start's place_unit clicks run right up until this point."""
         deadline = time.time() + max(0.0, timeout)
         while True:
-            for name in ("nav_start_game", "nav_start_game_confirm"):
-                try:
-                    match = vision.find_image(hwnd, name)
-                except vision.TemplateNotFound:
-                    continue
-                if match is not None:
-                    return name, match
+            try:
+                match, name = vision.find_image_any(
+                    hwnd, ("nav_start_game", "nav_start_game_confirm"))
+            except vision.TemplateNotFound:
+                match, name = None, None
+            if match is not None:
+                return name, match
             if time.time() >= deadline or (stop_event is not None and stop_event.is_set()):
                 return None, None
             time.sleep(0.3)
@@ -2201,33 +2187,34 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         missing warning.png just skips this check entirely, same as any
         other optional template."""
         try:
-            warning_match = vision.find_image(hwnd, "warning")
+            warning_match, warning_name = vision.find_image_any(
+                hwnd, ("nav_start_game_confirm", "warning"))
         except vision.TemplateNotFound:
             return
-        if warning_match is None:
+        if warning_name == "nav_start_game_confirm":
+            self._click_start_game_confirm(hwnd, warning_match)
+            return
+        if warning_name != "warning":
             return
 
         self._log(f"[Macro] Found a warning (score {warning_match['score']:.2f}) -- checking for a way past it.")
-        if self._click_start_game_2_if_found(hwnd):
-            return
-
         self._log(f"[Macro] Waiting up to {WARNING_WAIT_TIMEOUT:.0f}s for it to clear.")
         self._set_status(action="Waiting for warning to clear...")
         deadline = time.time() + WARNING_WAIT_TIMEOUT
         while time.time() < deadline:
             if self._checkpoint(stop_event):
                 return
-            if self._click_start_game_2_if_found(hwnd):
+            try:
+                match, name = vision.find_image_any(
+                    hwnd, ("nav_start_game_confirm", "warning", "nav_start_game"))
+            except vision.TemplateNotFound:
+                match, name = None, None
+            if name == "nav_start_game_confirm":
+                self._click_start_game_confirm(hwnd, match)
                 return
-            try:
-                warning_gone = vision.find_image(hwnd, "warning") is None
-            except vision.TemplateNotFound:
-                warning_gone = True
-            try:
-                start_visible = vision.find_image(hwnd, "nav_start_game") is not None
-            except vision.TemplateNotFound:
-                start_visible = False
-            if warning_gone and start_visible:
+            # Candidates are priority ordered: Start Game can only be the
+            # returned match when the warning ahead of it was absent.
+            if name == "nav_start_game":
                 self._log("[Macro] Warning cleared -- Start Game is up.")
                 return
             time.sleep(WARNING_POLL_INTERVAL)

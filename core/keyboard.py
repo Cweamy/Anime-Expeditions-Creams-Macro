@@ -51,7 +51,18 @@ class Keyboard:
         # turn typing a setting name into several seconds at higher Macro
         # Speed delays. One pause at the end covers the whole string.
         for ch in text:
-            self.tap(ord(ch.upper()), pace=False)
+            mapper = getattr(backend, "key_for_char", None)
+            mapped = mapper(ch) if mapper is not None else (ord(ch.upper()), ())
+            if mapped is None:
+                raise ValueError(f"Character {ch!r} cannot be typed with the current keyboard layout.")
+            vk, modifiers = mapped
+            for modifier in modifiers:
+                self.key_down(modifier)
+            try:
+                self.tap(vk, pace=False)
+            finally:
+                for modifier in reversed(modifiers):
+                    self.key_up(modifier)
             time.sleep(delay)
         pacing.action_pause()
 

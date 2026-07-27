@@ -72,7 +72,17 @@ class ExpeditionOps:
         # shot per tick (not the full retried version _play_one_match uses)
         # is enough here -- a missed click just gets caught on the very
         # next poll a moment later.
-        start_name, start_match = self._find_start_game_button(hwnd)
+        candidates = (
+            "nav_start_game", "nav_start_game_confirm", "select upgrade card", "defeat")
+        if not self._expedition_color_buttons:
+            candidates += ("exp_extract", "exp_continue")
+        try:
+            frame_match, frame_name = vision.find_image_any(hwnd, candidates)
+        except vision.TemplateNotFound:
+            frame_match, frame_name = None, None
+
+        start_name = frame_name if frame_name in ("nav_start_game", "nav_start_game_confirm") else None
+        start_match = frame_match if start_name is not None else None
         if start_match is not None:
             debug_path = self._debug_save(hwnd, start_name, start_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -102,7 +112,13 @@ class ExpeditionOps:
         # its own dedicated check here too, not just the middle-screen click
         # bundled into the exp_extract branch, since it can show up on ANY
         # tick, not only the one where exp_extract happens to also be found.
-        if self._dismiss_reward_card_if_found(hwnd):
+        if frame_name == "select upgrade card":
+            debug_path = self._debug_save(hwnd, frame_name, frame_match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f'[Macro] Found "select upgrade card" (score {frame_match["score"]:.2f}) -- '
+                      f"clicking it.{suffix}")
+            left, top, _, _ = wm.get_window_rect_screen(hwnd)
+            self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
             return None
 
         # A failed run (team/base wiped) ends on the Defeat result screen
@@ -115,10 +131,7 @@ class ExpeditionOps:
         # optional template -- a missing defeat image just skips the check
         # (and a real failure then falls back to the old slow
         # timeout-and-recover path).
-        try:
-            defeat_match = vision.find_image(hwnd, "defeat")
-        except vision.TemplateNotFound:
-            defeat_match = None
+        defeat_match = frame_match if frame_name == "defeat" else None
         if defeat_match is not None:
             debug_path = self._debug_save(hwnd, "defeat", defeat_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -142,10 +155,7 @@ class ExpeditionOps:
         # fields). Decline every sighting up to extract_after (click the
         # "exp_extract_continue" choice THIS screen offers), only accept
         # the sighting right after that.
-        try:
-            extract_match = vision.find_image(hwnd, "exp_extract")
-        except vision.TemplateNotFound:
-            extract_match = None
+        extract_match = frame_match if frame_name == "exp_extract" else None
         if extract_match is not None:
             self._expedition_extract_count += 1
             debug_path = self._debug_save(hwnd, "exp_extract", extract_match)
@@ -262,10 +272,7 @@ class ExpeditionOps:
             self._log("[Macro] Extracted -- on the reward screen.")
             return "win"
 
-        try:
-            continue_match = vision.find_image(hwnd, "exp_continue")
-        except vision.TemplateNotFound:
-            continue_match = None
+        continue_match = frame_match if frame_name == "exp_continue" else None
         if continue_match is not None:
             debug_path = self._debug_save(hwnd, "exp_continue", continue_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""

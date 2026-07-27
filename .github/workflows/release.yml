@@ -55,6 +55,11 @@ jobs:
       - name: Build app exe (PyInstaller)
         run: python build_pyinstaller.py
 
+      - name: Generate reward reference data
+        run: |
+          python tools/fetch_stage_data.py
+          python tools/fetch_item_icons.py
+
       # Assets/ is deliberately NOT bundled inside the exe (see
       # build_pyinstaller.py) -- it ships as a loose, user-editable folder so
       # anyone can open/replace/add the macro's reference images (one folder

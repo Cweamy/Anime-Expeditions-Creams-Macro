@@ -199,6 +199,19 @@ def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> st
     treat that as "unknown", e.g. an indeterminate spinner instead of a
     percentage).
     """
+    git_dir = os.path.join(app_dir, ".git")
+    if os.path.exists(git_dir):
+        try:
+            dirty = subprocess.run(
+                ["git", "-C", app_dir, "status", "--porcelain", "--untracked-files=no"],
+                capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            dirty = None
+        if dirty is not None and dirty.returncode == 0 and dirty.stdout.strip():
+            raise RuntimeError(
+                "Source update stopped because this Git checkout has local changes. "
+                "Commit or stash them first so the updater cannot overwrite your work.")
+
     tmp_root = tempfile.mkdtemp(prefix="aecm_update_")
     zip_path = os.path.join(tmp_root, "update.zip")
 
@@ -219,7 +232,7 @@ def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> st
 
     extract_dir = os.path.join(tmp_root, "extracted")
     with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(extract_dir)
+        _extract_zip_contained(zf, extract_dir)
 
     # GitHub's zipball wraps everything in one top-level folder
     # (<owner>-<repo>-<sha>/) -- that's the actual source root to copy from.
@@ -242,6 +255,24 @@ def stage_source_update(zip_url: str, app_dir: str, log, on_progress=None) -> st
     helper_path = os.path.join(tmp_root, "apply_update.bat")
     _write_source_helper_script(helper_path, src_root, app_dir, tmp_root)
     return helper_path
+
+
+def _extract_zip_contained(zf: zipfile.ZipFile, root: str) -> None:
+    """Extract a zip without allowing absolute/``..`` entries outside root."""
+    root = os.path.realpath(root)
+    for info in zf.infolist():
+        parts = info.filename.replace("\\", "/").split("/")
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            continue
+        dest = os.path.realpath(os.path.join(root, *parts))
+        if dest != root and not dest.startswith(root + os.sep):
+            continue
+        if info.is_dir():
+            os.makedirs(dest, exist_ok=True)
+            continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with zf.open(info) as source, open(dest, "wb") as target:
+            shutil.copyfileobj(source, target, length=1 << 16)
 
 
 def _write_source_helper_script(helper_path: str, src_root: str, app_dir: str, tmp_root: str) -> None:
@@ -377,9 +408,10 @@ def _assets_rel_parts(filename: str):
     down to its path relative to Assets/ (see _extract_assets_zip_addonly's
     old docstring for the "Assets at the root or one wrapper folder down"
     and zip-slip reasoning), or None if this entry isn't an Assets file at
-    all. item_icons/ is runtime-fetched wiki icon cache (core.rewards),
-    never actually shipped in a release, but skipped defensively anyway in
-    case that ever changes -- same exclusion the robocopy/rsync passes use."""
+    all. Reward icons are generated into release zips and intentionally go
+    through the same manifest-backed add/refresh policy as every other
+    shipped asset, so existing installs receive them without overwriting a
+    user's untracked or edited icon."""
     parts = filename.replace("\\", "/").split("/")
     asset_idx = next((i for i, p in enumerate(parts[:2]) if p.lower() == "assets"), None)
     if asset_idx is None or len(parts) < asset_idx + 2:
@@ -394,8 +426,6 @@ def _assets_rel_parts(filename: str):
     dest = os.path.realpath(os.path.join(constants.ASSETS_DIR, *parts))
     root = os.path.realpath(constants.ASSETS_DIR)
     if dest != root and not dest.startswith(root + os.sep):
-        return None
-    if parts[0] == "item_icons":
         return None
     return parts
 
@@ -462,7 +492,6 @@ def _merge_assets_dir(src_assets_dir: str, dest_assets_dir: str, log) -> int:
     added = 0
     refreshed = 0
     for root, dirs, files in os.walk(src_assets_dir):
-        dirs[:] = [d for d in dirs if d != "item_icons"]
         for name in files:
             src_file = os.path.join(root, name)
             rel = os.path.relpath(src_file, src_assets_dir)
@@ -829,11 +858,12 @@ set LOG="{log_path}"
 echo ---- %date% %time% ---- > %LOG%
 echo Updating Cream's Macro -- please wait, this window closes itself...
 echo [1/5] Stopping the running app (image: {exe_name})... >> %LOG%
-rem Force-kill as a safety net -- main.Api.apply_update already calls
-rem close_window() (which un-parents the docked Roblox window before
-rem closing, so it doesn't get taken down with this process) before
-rem launching this, so by the time this runs the app should already be
-rem gone. The wait loop below just covers a slow shutdown.
+rem main.Api.apply_update launches this helper first, then schedules its
+rem graceful close_window() 0.4s later. Give that cleanup time to un-parent
+rem Roblox, persist runtime, and close capture/log handles before taskkill is
+rem allowed to act as a safety net. Without this grace period taskkill won the
+rem race in ~0.3s and bypassed close_window entirely.
+ping -n 3 127.0.0.1 >nul
 taskkill /F /IM "{exe_name}" >>%LOG% 2>&1
 rem "ping" instead of "timeout" -- timeout needs a real console input
 rem handle, which this .bat (launched detached, see launch_helper) doesn't

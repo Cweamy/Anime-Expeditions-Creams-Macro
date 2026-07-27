@@ -123,14 +123,15 @@ class _ScanRunner(BlockOps):
 
 
 def _record_capture(white_at=None):
-    """capture_region stand-in: records the region asked for, and optionally
+    """capture_game_bgr stand-in: records the region asked for, and optionally
     paints one white pixel at a given WINDOW coordinate."""
     import numpy as np
     seen = {}
 
-    def capture_region(x, y, w, h):
+    def capture_region(hwnd, region):
+        x, y, w, h = region
         seen.clear()
-        seen.update(x=x, y=y, w=w, h=h)
+        seen.update(hwnd=hwnd, x=x, y=y, w=w, h=h)
         patch = np.zeros((h, w, 3), np.uint8)
         if white_at is not None:
             px, py = white_at[0] - x, white_at[1] - y
@@ -147,9 +148,9 @@ def _record_capture(white_at=None):
 def test_scan_box_never_reads_outside_the_window(spot, monkeypatch):
     from core.config import FIXED_WIN_H, FIXED_WIN_W
     capture, seen = _record_capture()
-    monkeypatch.setattr("core.ocr.capture_region", capture)
+    monkeypatch.setattr("core.vision.capture_game_bgr", capture)
 
-    _ScanRunner()._scan_place_search_box(0, 0, *spot)
+    _ScanRunner()._scan_place_search_box(123, *spot)
 
     assert seen["x"] >= 0 and seen["y"] >= 0, f"captured off the top/left: {seen}"
     assert seen["x"] + seen["w"] <= FIXED_WIN_W, f"captured past the right edge: {seen}"
@@ -160,8 +161,8 @@ def test_scan_box_does_not_accept_a_white_pixel_outside_the_window(monkeypatch):
     # x=5 used to capture x=-14..24; a white pixel at x=-6 is the macro's own
     # panel, and was returned as a placement tile at offset (-11, 0).
     capture, _ = _record_capture(white_at=(-6, 400))
-    monkeypatch.setattr("core.ocr.capture_region", capture)
-    assert _ScanRunner()._scan_place_search_box(0, 0, 5, 400) is None
+    monkeypatch.setattr("core.vision.capture_game_bgr", capture)
+    assert _ScanRunner()._scan_place_search_box(123, 5, 400) is None
 
 
 @pytest.mark.parametrize("spot,white,expected", [
@@ -175,8 +176,26 @@ def test_scan_box_offset_is_measured_from_the_requested_spot(spot, white, expect
     caller asked about -- not the middle of whatever region got captured. Get
     this wrong and every placement near an edge lands somewhere else."""
     capture, _ = _record_capture(white_at=white)
-    monkeypatch.setattr("core.ocr.capture_region", capture)
-    assert _ScanRunner()._scan_place_search_box(0, 0, *spot) == expected
+    monkeypatch.setattr("core.vision.capture_game_bgr", capture)
+    assert _ScanRunner()._scan_place_search_box(123, *spot) == expected
+
+
+def test_scan_box_uses_window_capture_fallback_chain(monkeypatch):
+    import numpy as np
+
+    seen = {}
+
+    def capture(hwnd, region):
+        seen.update(hwnd=hwnd, region=region)
+        patch = np.zeros((region[3], region[2], 3), np.uint8)
+        patch[region[3] // 2, region[2] // 2] = 255
+        return patch
+
+    monkeypatch.setattr("core.vision.capture_game_bgr", capture)
+    _ScanRunner()._scan_place_search_box(987, 576, 378)
+
+    assert seen["hwnd"] == 987
+    assert seen["region"] == (557, 359, 38, 38)
 
 
 # ---------------------------------------------------------------------------

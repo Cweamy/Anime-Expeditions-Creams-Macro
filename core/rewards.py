@@ -25,8 +25,9 @@ import cv2
 from core.ocr import capture_region  # noqa: F401 -- re-exported for main.Api.read_rewards
 from core import constants
 
-# Reference icon art scraped from the game's wiki (see tools/fetch_item_icons.py) --
-# transparent-background PNGs named after the item, one per known reward.
+# Reference icon art generated for release packages from the game's wiki (see
+# tools/fetch_item_icons.py) -- transparent-background PNGs named after the
+# item, one per known reward.
 _ICON_DIR = os.path.join(constants.ASSETS_DIR, "item_icons")
 _icon_histograms = None  # lazily built on first use, cached for the process's lifetime
 
