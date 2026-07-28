@@ -59,9 +59,17 @@ def is_roblox_process_or_title(hwnd: int, title: str) -> bool:
     if "roblox" not in title_lower:
         return False
     proc_name = get_process_name(hwnd)
+    # Roblox Studio is NOT the game client the macro plays -- but its process
+    # is "robloxstudiobeta.exe" (starts with "roblox") and its window title
+    # ends in "Roblox Studio", so both checks below would otherwise match it,
+    # and the macro would dock/target Studio alongside the real Player window.
+    # The process name is authoritative here; the title guard only covers the
+    # rare no-process case below.
+    if "studio" in proc_name:
+        return False
     if proc_name in ROBLOX_PROCESS_NAMES or proc_name.startswith("roblox") or proc_name.startswith("bloxstrap"):
         return True
-    if not proc_name and (title_lower == "roblox" or title_lower.startswith("roblox")):
+    if not proc_name and title_lower.startswith("roblox") and "studio" not in title_lower:
         return True
     return False
 
