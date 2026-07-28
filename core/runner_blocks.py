@@ -277,12 +277,33 @@ class BlockOps:
             self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
             state["remaining"] -= 1
             state["next_attempt"] = 0.0
+            # Gold is clearly coming in, so the give-up count starts over --
+            # a slow stage should never be mistaken for a maxed unit.
+            state["idle_attempts"] = 0
             return state["remaining"] <= 0
 
         if not_upgrade_match is not None:
+            # A fully-upgraded unit is visually identical to one you cannot
+            # afford -- both show the same dimmed button -- so this block had
+            # no way to tell "wait for gold" from "there is nothing left to
+            # buy", and waited forever on the second. Every Battle block
+            # behind it waits too, so one finished unit stalls the whole
+            # match. Observed live: 14 consecutive retries on a maxed unit
+            # until the run was stopped by hand.
+            #
+            # Reading the "x / y" counter on the button would distinguish the
+            # two properly and say which it was; that is worth doing and is
+            # not this. This just stops one block hanging the queue.
+            state["idle_attempts"] = state.get("idle_attempts", 0) + 1
+            if state["idle_attempts"] >= UPGRADE_MAX_IDLE_ATTEMPTS:
+                self._log(f'{label}: still not upgradeable after {state["idle_attempts"]} attempts '
+                           f'-- the unit is probably fully upgraded (or gold is not coming). '
+                           f'Moving on.')
+                return True
             self._log(f'{label}: not upgradeable yet (score {not_upgrade_match["score"]:.2f}, '
                        f'green {not_upgrade_match.get("green_fraction", 0) * 100:.0f}%) -- '
-                       f'waiting {UPGRADE_RETRY_WAIT:.0f}s and retrying.')
+                       f'waiting {UPGRADE_RETRY_WAIT:.0f}s and retrying '
+                       f'({state["idle_attempts"]}/{UPGRADE_MAX_IDLE_ATTEMPTS}).')
         else:
             self._log(f'{label}: neither "upgradeable" nor "not_upgradeable" found on the info panel '
                        f'(within {UPGRADE_PANEL_LOAD_TIMEOUT:.0f}s) -- waiting {UPGRADE_RETRY_WAIT:.0f}s '
