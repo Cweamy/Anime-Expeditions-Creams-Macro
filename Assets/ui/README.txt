@@ -95,6 +95,14 @@ nav_disband.png
   "Decline" buttons. The prompt is dismissed and verified before the
   gamemode click; a missing template just skips the optional check.
 
+invite_players_open.png / invite_players_close.png
+  Optional. The outgoing "Invite Players" browser can also block a
+  gamemode click after an accidental click on a player portrait or invite
+  control. Its unique title must be detected before the generic-looking
+  Close button is accepted; the same zero-hold, park, and verify recovery
+  used for Disband/Decline then clears it. If the intended gamemode click
+  itself opened this browser, that exact gamemode is retried once.
+
 story/
   The Story gamemode card. Searched first (its folder holds two crops of
   the same card -- one alone wasn't distinct enough to match reliably,
