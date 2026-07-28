@@ -194,14 +194,16 @@ King's Tomb.png / Flower Forest.png
 challenge.png
   Regular Challenge's gamemode card, same idea as raid.png/expedition.png
   (core.runner._click_gamemode) -- found by image search on the Play
-  menu, no fixed coordinate like Story's.
+  menu, no fixed coordinate like Story's. Folder variants cover both
+  observed card/text scales.
 
 challenge_loaded.png
   Confirms the Challenge screen has actually finished opening
   (core.runner._enter_challenge_stage) before clicking a stage slot at
   one of its 3 fixed positions (CHALLENGE_STAGE_CLICK) -- a load-
   confirmation banner, not a button, so it's only waited on, never
-  clicked itself.
+  clicked itself. Folder variants cover the older layouts plus the
+  larger current Daily Challenge panel.
 
 chal_enter.png
   Challenge's own "Enter Matchmaking" button, Matchmaking play mode only
