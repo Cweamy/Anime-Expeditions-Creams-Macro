@@ -1793,6 +1793,23 @@ class Api:
                                       "cramped. Try resizing or maximizing it by hand.")
         self.push_log("Skipped waiting for Roblox.")
 
+    def launch_roblox(self) -> dict:
+        """Opens Roblox directly into Anime Expeditions via protocol deeplink."""
+        from core.runner_constants import REJOIN_DEEPLINK
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(REJOIN_DEEPLINK)
+            else:
+                import webbrowser
+                webbrowser.open(REJOIN_DEEPLINK)
+            self.push_log("Launching Roblox via deeplink...")
+            return {"ok": True}
+        except Exception as exc:
+            self.push_log(f"Failed to launch Roblox: {exc}")
+            return {"ok": False, "error": str(exc)}
+
+
+
     def save_debug_screenshot(self) -> dict:
         # Settings > Debug > "Screenshot": grabs just the Roblox region (its
         # own window rect works whether docked or not -- no need to touch

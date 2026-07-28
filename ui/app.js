@@ -381,6 +381,11 @@ function skipWaiting() {
   document.getElementById('titlebar').style.display = 'flex';
 }
 
+function launchRoblox() {
+  try { window.pywebview && pywebview.api.launch_roblox(); } catch (e) {}
+}
+
+
 // ---------------------------------------------------------------------------
 // Screen switching (Dashboard / Macro Manager / Settings)
 // ---------------------------------------------------------------------------
