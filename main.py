@@ -75,6 +75,10 @@ REWARD_SCROLLBAR_COLOR = 0x373737
 IMAGE_MANAGER_CATEGORIES = {
     "ui": ("ui", "UI Buttons"),
     "maps": ("maps", "Map Names"),
+    # Reusable images the Detect block searches for. Saved once here, then
+    # referenced by name from any Detect block (core/detect.py). Same
+    # folder-per-name layout every other category uses -- Assets/detect/<name>/.
+    "detect": ("detect", "Detection Images"),
 }
 
 GUI_TITLE = "Cream's Macro | Anime Expeditions"

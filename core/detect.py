@@ -1,0 +1,228 @@
+"""Detect block -- the macro's one branching primitive.
+
+A `detect` block searches for an image (or a combination of images, or a raw
+condition expression) and runs one of two nested block lists: `then` when the
+condition holds, `else` when it doesn't.
+
+The runner executes a FLAT block list with a single index (see
+core.runner_blocks). To leave that engine essentially unchanged, flatten()
+expands each detect block into a flat instruction stream with two synthetic
+control ops:
+
+    detect(_else_offset=E)     # evaluate; if the condition is FALSE, the
+     ...then blocks...          #   engine does index += E to land on the
+    _jump(_offset=J)           #   first else block. If TRUE, it falls through.
+     ...else blocks...          # _jump skips the else branch after then ran.
+
+Both branches stay inline in the flat list, so place_unit blocks are numbered
+by their static position (then before else) no matter which branch runs at
+runtime -- the same order ui/app.js's listPlacedUnits() walks, so "unit #N"
+means the same unit on both sides.
+"""
+import ast
+
+from . import vision
+
+
+# ---------------------------------------------------------------------------
+# flatten
+# ---------------------------------------------------------------------------
+def flatten(blocks, ordinal_start: int = 1):
+    """(flat_list, next_ordinal).
+
+    Expand nested detect then/else into one flat list with detect/_jump
+    control entries, and stamp every place_unit (nested ones included) with
+    its positional `_ordinal`, continuing from `ordinal_start`. Non-detect
+    blocks pass through. next_ordinal is where a later phase should resume the
+    count -- Battle continues Pre Start's unit numbering."""
+    flat = []
+    ordinal = _flatten_into(blocks or [], flat, ordinal_start)
+    return flat, ordinal
+
+
+def _flatten_into(blocks, flat, ordinal):
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "place_unit":
+            # Shallow copy so stamping never mutates the saved template dict
+            # (flatten can run more than once across a session).
+            block = dict(block)
+            block["_ordinal"] = ordinal
+            ordinal += 1
+            flat.append(block)
+        elif btype == "detect":
+            ctrl = dict(block)
+            flat.append(ctrl)
+            detect_index = len(flat) - 1
+            ordinal = _flatten_into(block.get("then") or [], flat, ordinal)
+            jump = {"type": "_jump"}
+            flat.append(jump)
+            jump_index = len(flat) - 1
+            ordinal = _flatten_into(block.get("else") or [], flat, ordinal)
+            end_index = len(flat)
+            # A FALSE condition jumps from the detect entry to the first else
+            # block (right after the _jump). With no else blocks that lands on
+            # end_index, i.e. straight past the whole construct.
+            ctrl["_else_offset"] = (jump_index + 1) - detect_index
+            # After the then branch runs and falls through to _jump, skip the
+            # else branch entirely.
+            jump["_offset"] = end_index - jump_index
+        else:
+            flat.append(block)
+    return ordinal
+
+
+# ---------------------------------------------------------------------------
+# evaluate
+# ---------------------------------------------------------------------------
+def evaluate(runner, hwnd, block):
+    """(found: bool, matches: list[dict]).
+
+    `matches` are location dicts (as vision.find_image returns) for the
+    single-image path, best score first -- used only for logging where it
+    matched. Multi-image and expression conditions return an empty match list
+    (their "where" isn't a single point)."""
+    log = getattr(runner, "_log", None)
+    ctx = _Ctx(hwnd, _region_tuple(block.get("region")), block.get("threshold"), log)
+    mode = block.get("mode") or "single"
+
+    if mode == "expr":
+        return bool(_eval_expr(block.get("expr") or "", ctx, log)), []
+
+    if mode == "multi":
+        names = [str(n) for n in (block.get("images") or []) if n]
+        if not names:
+            return False, []
+        results = [ctx.find(n) for n in names]
+        found = any(results) if (block.get("logic") == "or") else all(results)
+        return found, []
+
+    # single
+    name = str(block.get("image") or "")
+    if not name:
+        return False, []
+    if block.get("showAll"):
+        matches = ctx.find_all(name)
+        return (len(matches) > 0), matches
+    match = ctx.find_match(name)
+    return (match is not None), ([match] if match else [])
+
+
+def _region_tuple(region):
+    """A saved {x,y,w,h} region dict as vision's (x, y, w, h) tuple, or None
+    for a missing/whole-screen/invalid region."""
+    if not isinstance(region, dict):
+        return None
+    try:
+        x, y, w, h = int(region["x"]), int(region["y"]), int(region["w"]), int(region["h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return (x, y, w, h)
+
+
+class _Ctx:
+    """Holds the search parameters for one detect evaluation and exposes the
+    find/count helpers the expression evaluator calls. A missing reference
+    image is warned about once, then treated as "not found" so a typo'd name
+    can never hard-fail a run."""
+
+    def __init__(self, hwnd, region, threshold, log):
+        self.hwnd = hwnd
+        self.region = region
+        self.threshold = threshold
+        self.log = log
+        self._missing = set()
+
+    def _dir_and_thr(self, name):
+        tdir = vision.detect_template_dir(name)
+        thr = vision.DEFAULT_THRESHOLD if self.threshold is None else float(self.threshold)
+        return tdir, thr
+
+    def find_match(self, name):
+        name = str(name)
+        try:
+            tdir, thr = self._dir_and_thr(name)
+            return vision.find_image(self.hwnd, name, region=self.region, threshold=thr, template_dir=tdir)
+        except vision.TemplateNotFound:
+            self._warn_missing(name)
+            return None
+
+    def find_all(self, name):
+        name = str(name)
+        try:
+            tdir, thr = self._dir_and_thr(name)
+            return vision.find_image_all(self.hwnd, name, region=self.region, threshold=thr, template_dir=tdir)
+        except vision.TemplateNotFound:
+            self._warn_missing(name)
+            return []
+
+    def find(self, name):
+        return self.find_match(name) is not None
+
+    def count(self, name):
+        return len(self.find_all(name))
+
+    def _warn_missing(self, name):
+        if name not in self._missing and self.log:
+            self._missing.add(name)
+            self.log(f'[Macro] Detect: no reference image named "{name}" -- treating it as not found. '
+                     f'Add one in Image Manager > Detection Images.')
+
+
+# ---------------------------------------------------------------------------
+# raw condition expression -- AST allowlist, fail-safe to "not found"
+# ---------------------------------------------------------------------------
+_ALLOWED_CALLS = {"find", "count"}
+_ALLOWED_NODES = (
+    ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not,
+    ast.USub, ast.UAdd, ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE,
+    ast.Gt, ast.GtE, ast.Constant, ast.Load,
+)
+
+
+def _check_nodes(tree):
+    """Reject anything outside a tiny boolean/comparison grammar over
+    find(...)/count(...) calls with quoted-name arguments. No attribute
+    access, subscripts, comprehensions, lambdas, or arbitrary names."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if (not isinstance(node.func, ast.Name) or node.func.id not in _ALLOWED_CALLS
+                    or node.keywords or any(isinstance(a, ast.Starred) for a in node.args)):
+                raise ValueError("only find(...) and count(...) calls are allowed")
+            for arg in node.args:
+                if not isinstance(arg, ast.Constant):
+                    raise ValueError("find()/count() take a plain image name in quotes")
+            continue
+        if isinstance(node, ast.Name):
+            if node.id not in _ALLOWED_CALLS:
+                raise ValueError(f"unknown name `{node.id}`")
+            continue
+        if not isinstance(node, _ALLOWED_NODES):
+            raise ValueError(f"`{type(node).__name__}` is not allowed in a condition")
+
+
+def _eval_expr(expr, ctx, log=None):
+    expr = (expr or "").strip()
+    if not expr:
+        return False
+    try:
+        tree = ast.parse(expr, mode="eval")
+        _check_nodes(tree)
+    except (SyntaxError, ValueError) as exc:
+        if log:
+            log(f"[Macro] Detect: can't read condition `{expr}` -- {exc}. Treating as not found.")
+        return False
+    env = {
+        "find": lambda n: ctx.find(str(n)),
+        "count": lambda n: ctx.count(str(n)),
+    }
+    try:
+        return bool(eval(compile(tree, "<detect>", "eval"), {"__builtins__": {}}, env))  # noqa: S307
+    except Exception as exc:  # any runtime hiccup -> fail safe, never crash the run
+        if log:
+            log(f"[Macro] Detect: condition `{expr}` failed to run -- {exc}. Treating as not found.")
+        return False

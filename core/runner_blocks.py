@@ -10,6 +10,7 @@ import math
 import threading
 import time
 
+from . import detect
 from . import keys
 from . import paths as walk_paths
 from . import vision
@@ -37,22 +38,34 @@ class BlockOps:
                        f'open it in Macro Manager and Save again to run its Battle blocks.')
             return []
         if "battle" in blocks:
-            return self._strip_auto_upgrade_for_expedition(blocks.get("battle") or [], task)
-        # Three-phase legacy shape (before/during/after, from before Pre
-        # Start/Battle existed) -- Battle-eligible content lived in
-        # "during"+"after", the same combination ui/app.js's
-        # migrateLegacyBlocks() uses when it migrates this shape
-        # client-side. _run_prestart_blocks already has an equivalent
-        # fallback to "before" for Pre Start; this was the missing half --
-        # without it, an unmigrated template's Battle blocks just silently
-        # never ran, which is exactly what got reported as "Battle blocks
-        # aren't firing."
-        legacy_battle = (blocks.get("during") or []) + (blocks.get("after") or [])
-        if legacy_battle:
-            self._log(f'[Macro] Template "{macro_name}" is saved in an old format -- running its Battle '
-                       f'blocks from the legacy during/after lists. Open it in Creation and Save again '
-                       f'to migrate it properly.')
-        return self._strip_auto_upgrade_for_expedition(legacy_battle, task)
+            battle = self._strip_auto_upgrade_for_expedition(blocks.get("battle") or [], task)
+            prestart = blocks.get("prestart") or []
+        else:
+            # Three-phase legacy shape (before/during/after, from before Pre
+            # Start/Battle existed) -- Battle-eligible content lived in
+            # "during"+"after", the same combination ui/app.js's
+            # migrateLegacyBlocks() uses when it migrates this shape
+            # client-side. _run_prestart_blocks already has an equivalent
+            # fallback to "before" for Pre Start; this was the missing half --
+            # without it, an unmigrated template's Battle blocks just silently
+            # never ran, which is exactly what got reported as "Battle blocks
+            # aren't firing."
+            legacy_battle = (blocks.get("during") or []) + (blocks.get("after") or [])
+            if legacy_battle:
+                self._log(f'[Macro] Template "{macro_name}" is saved in an old format -- running its Battle '
+                           f'blocks from the legacy during/after lists. Open it in Creation and Save again '
+                           f'to migrate it properly.')
+            battle = self._strip_auto_upgrade_for_expedition(legacy_battle, task)
+            prestart = blocks.get("before") or []
+        # Battle place_unit numbering continues Pre Start's (ui/app.js numbers
+        # place_unit blocks across BOTH phases as one list), so flatten Battle
+        # starting one past Pre Start's static place_unit count -- computed
+        # from the template, not from whether Pre Start actually ran, so the
+        # "Test Battle blocks" path numbers the same as a real match. Flatten
+        # also expands any detect then/else groups into the linear list the
+        # tick engine walks (see core.detect).
+        start = detect.flatten(prestart, 1)[1]
+        return detect.flatten(battle, start)[0]
 
     def _run_battle_blocks_tick(self, hwnd, stop_event: threading.Event, battle_blocks: list, first_repeat: bool,
                                   macro_name: str = None) -> None:
@@ -70,16 +83,25 @@ class BlockOps:
         """
         while self._battle_block_index < len(battle_blocks):
             block = battle_blocks[self._battle_block_index]
-            # Counted BEFORE the "once" skip, exactly as _run_prestart_blocks
-            # already does it. ui/app.js's listPlacedUnits() numbers every
-            # place_unit block whether or not it runs, so skipping one here
-            # without counting it shifted every LATER unit's #ordinal down by
-            # one from the second repeat on -- and since
-            # _placed_unit_positions is keyed by that ordinal and never reset,
-            # the later placement overwrote the skipped unit's stored spot.
-            # Upgrade/Sell/Auto Upgrade Unit then clicked the wrong unit.
-            if block.get("type") == "place_unit":
-                self._last_unit_ordinal += 1
+            btype = block.get("type")
+            # Control ops that core.detect.flatten injected for detect
+            # then/else groups. _jump is pure index bookkeeping (skipping the
+            # else branch after then ran) -- no game action, so it never
+            # costs a tick. detect evaluates its condition once and jumps into
+            # the branch NOT taken when the condition is false.
+            if btype == "_jump":
+                self._battle_block_index += block.get("_offset", 1)
+                continue
+            if btype == "detect":
+                found, matches = detect.evaluate(self, hwnd, block)
+                self._log_detect_outcome(block, found, matches, self._battle_block_index + 1, "Battle")
+                self._battle_block_index += 1 if found else block.get("_else_offset", 1)
+                self._battle_block_state = {}
+                return
+            # place_unit numbering is now the block's own static _ordinal
+            # (stamped by flatten over the whole prestart+battle tree, so a
+            # not-taken detect branch never shifts anyone's number) -- no
+            # runtime counter to advance here.
             if block.get("once") and not first_repeat:
                 # Breaks a quick-place chain: the previous placement held Shift
                 # because THIS block was the next same-hotkey place_unit, but
@@ -94,7 +116,6 @@ class BlockOps:
                 self._battle_block_state = {}
                 continue
 
-            btype = block.get("type")
             if btype == "upgrade_unit":
                 done = self._run_upgrade_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
             elif btype == "sell_unit":
@@ -121,7 +142,7 @@ class BlockOps:
                     next_block and next_block.get("type") == "place_unit"
                     and block.get("hotkey") and next_block.get("hotkey") == block.get("hotkey"))
                 self._run_place_unit_block(hwnd, stop_event, left, top, block, self._battle_block_index + 1,
-                                             macro_name, self._last_unit_ordinal,
+                                             macro_name, block.get("_ordinal", next_index),
                                              next_is_same_unit=next_is_same_unit)
                 done = True
                 self._battle_block_state = {}
@@ -562,24 +583,37 @@ class BlockOps:
                 "pathName": (legacy_walk.get("pathName") or "") if legacy_walk else "",
             }] + prestart_blocks
 
+        # Flatten detect then/else groups into the linear list, stamping each
+        # place_unit with its static _ordinal -- the same numbering
+        # ui/app.js's listPlacedUnits() produces (place_unit blocks across
+        # both phases as one list, then before else), so "unit #N" means the
+        # same unit in the editor and at runtime no matter which branch runs.
+        prestart_blocks, _ = detect.flatten(prestart_blocks, 1)
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._log(f'[Macro] Running {len(prestart_blocks)} Pre Start block(s) from "{macro_name}"...')
+        self._log(f'[Macro] Running Pre Start blocks from "{macro_name}"...')
         self._set_status(action=f'Running "{macro_name}" Pre Start blocks...')
-        # Separate from the generic #i below -- this only counts place_unit
-        # blocks, matching ui/app.js's listPlacedUnits() numbering (the #1,
-        # #2, ... the Upgrade/Sell Unit pickers show), so a template mixing
-        # place_unit and setting_change blocks still numbers its units the
-        # same way the UI does. self._last_unit_ordinal (not a local var)
-        # since Battle-phase place_unit blocks (see _run_battle_blocks_tick)
-        # continue this same count after Pre Start's blocks are done.
         self._last_unit_ordinal = 0
         self._quick_place_shift_down = False
         try:
-            for i, block in enumerate(prestart_blocks, start=1):
+            # An index loop (not enumerate) so detect/_jump control blocks can
+            # jump over the branch not taken. `step` numbers only real,
+            # non-control blocks for the log, so the numbers a user sees don't
+            # count the synthetic jumps.
+            idx, step = 0, 0
+            while idx < len(prestart_blocks):
                 if self._checkpoint(stop_event):
                     return
-                if block.get("type") == "place_unit":
-                    self._last_unit_ordinal += 1
+                block = prestart_blocks[idx]
+                btype = block.get("type")
+                if btype == "_jump":
+                    idx += block.get("_offset", 1)
+                    continue
+                step += 1
+                if btype == "detect":
+                    found, matches = detect.evaluate(self, hwnd, block)
+                    self._log_detect_outcome(block, found, matches, step, "Pre Start")
+                    idx += 1 if found else block.get("_else_offset", 1)
+                    continue
                 if block.get("once") and not first_repeat:
                     # "Once" (see the block's Once chip in Creation) means only
                     # the task's FIRST entry into this stage runs it -- e.g. a
@@ -594,34 +628,14 @@ class BlockOps:
                     # run with Shift still down and place the PREVIOUS unit on
                     # its tile. Release it here, where the chain actually breaks.
                     self._release_quick_place_shift()
-                    self._log(f'[Macro] Skipping block #{i} -- marked "Once" and this isn\'t the first repeat.')
+                    self._log(f'[Macro] Skipping block #{step} -- marked "Once" and this isn\'t the first repeat.')
+                    idx += 1
                     continue
-                btype = block.get("type")
-                if btype == "place_unit":
-                    next_block = prestart_blocks[i] if i < len(prestart_blocks) else None
-                    next_is_same_unit = bool(
-                        next_block and next_block.get("type") == "place_unit"
-                        and block.get("hotkey") and next_block.get("hotkey") == block.get("hotkey"))
-                    self._run_place_unit_block(hwnd, stop_event, left, top, block, i, macro_name,
-                                                 self._last_unit_ordinal, next_is_same_unit=next_is_same_unit,
-                                                 verify=False)
-                elif btype == "setting_change":
-                    self._run_setting_block(hwnd, stop_event, block, i)
-                elif btype == "auto_upgrade_unit":
-                    self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, i)
-                elif btype == "walk_path":
-                    self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {}, block, first_repeat)
-                elif btype == "walk":
-                    self._run_walk_block_tick(stop_event, block, i, phase_label="Pre Start")
-                elif btype == "click":
-                    self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
-                elif btype == "wait_ms":
-                    self._run_wait_ms_tick(stop_event, block, i, phase_label="Pre Start")
-                elif btype == "send_key":
-                    self._run_send_key_tick(block, i, phase_label="Pre Start")
-                else:
-                    self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
+                next_block = prestart_blocks[idx + 1] if idx + 1 < len(prestart_blocks) else None
+                self._run_prestart_single_block(hwnd, stop_event, task, default_walk_paths or {},
+                                                  block, step, macro_name, first_repeat, next_block)
                 time.sleep(0.2)  # brief gap between blocks so the game UI can settle
+                idx += 1
         finally:
             # Safety net -- a "Once"-skipped block right after the last
             # quick-place placement (or the list just ending mid-chain)
@@ -630,6 +644,63 @@ class BlockOps:
             # it. Whatever else happens, Shift never leaves this function
             # still held.
             self._release_quick_place_shift()
+
+    def _run_prestart_single_block(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
+                                     block: dict, i: int, macro_name: str, first_repeat: bool, next_block: dict) -> None:
+        """Runs ONE non-control Pre Start block. Split out of
+        _run_prestart_blocks so both the top-level list and a detect block's
+        then/else branches dispatch through the exact same code."""
+        btype = block.get("type")
+        if btype == "place_unit":
+            next_is_same_unit = bool(
+                next_block and next_block.get("type") == "place_unit"
+                and block.get("hotkey") and next_block.get("hotkey") == block.get("hotkey"))
+            self._run_place_unit_block(hwnd, stop_event, *wm.get_window_rect_screen(hwnd)[:2], block, i, macro_name,
+                                         block.get("_ordinal", i), next_is_same_unit=next_is_same_unit, verify=False)
+        elif btype == "setting_change":
+            self._run_setting_block(hwnd, stop_event, block, i)
+        elif btype == "auto_upgrade_unit":
+            self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, i)
+        elif btype == "walk_path":
+            self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {}, block, first_repeat)
+        elif btype == "walk":
+            self._run_walk_block_tick(stop_event, block, i, phase_label="Pre Start")
+        elif btype == "click":
+            self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
+        elif btype == "wait_ms":
+            self._run_wait_ms_tick(stop_event, block, i, phase_label="Pre Start")
+        elif btype == "send_key":
+            self._run_send_key_tick(block, i, phase_label="Pre Start")
+        else:
+            self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
+
+    def _log_detect_outcome(self, block: dict, found: bool, matches: list, num: int, phase_label: str) -> None:
+        """Report a Detect block's result to the Process Log: whether it
+        matched, which branch that takes, and where it matched (the whole
+        point of the block is being able to read that back)."""
+        label = f"{phase_label} block #{num} (Detect)"
+        what = self._detect_condition_label(block)
+        branch = "Then" if found else "Else"
+        if matches:
+            where = ", ".join(f"({m['cx']}, {m['cy']}) score {m['score']:.2f}" for m in matches[:8])
+            more = f" (+{len(matches) - 8} more)" if len(matches) > 8 else ""
+            self._log(f'{label}: {what} -- FOUND at {where}{more}. Running {branch} branch.')
+        else:
+            verdict = "FOUND" if found else "not found"
+            self._log(f'{label}: {what} -- {verdict}. Running {branch} branch.')
+
+    @staticmethod
+    def _detect_condition_label(block: dict) -> str:
+        """A short human description of what a Detect block is looking for,
+        for the log line."""
+        mode = block.get("mode") or "single"
+        if mode == "expr":
+            return f'condition `{(block.get("expr") or "").strip() or "(empty)"}`'
+        if mode == "multi":
+            names = [str(n) for n in (block.get("images") or []) if n]
+            joiner = " OR " if block.get("logic") == "or" else " AND "
+            return "images " + (joiner.join(f'"{n}"' for n in names) if names else "(none set)")
+        return f'image "{block.get("image") or "(none set)"}"'
 
     def _run_walk_path_block(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
                                block: dict, first_repeat: bool) -> None:

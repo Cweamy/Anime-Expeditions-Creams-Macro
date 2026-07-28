@@ -110,19 +110,30 @@ def decode_template_code(input_str: str) -> dict:
     return _parse_payload(payload)
 
 
+def _count_block_list(blocks) -> int:
+    """Length of a block list, counting a Detect block's nested then/else
+    blocks too (each still a real block the user built)."""
+    total = 0
+    for b in blocks:
+        total += 1
+        if isinstance(b, dict) and b.get("type") == "detect":
+            total += _count_block_list(b.get("then") or []) + _count_block_list(b.get("else") or [])
+    return total
+
+
 def count_template_blocks(blocks) -> int:
     """Calculates total block count across prestart, battle, and flat list formats."""
     if isinstance(blocks, list):
-        return len(blocks)
+        return _count_block_list(blocks)
     if isinstance(blocks, dict):
         # Known block phases in Creams Macro templates
         prestart = blocks.get("prestart") if isinstance(blocks.get("prestart"), list) else (blocks.get("before") if isinstance(blocks.get("before"), list) else [])
         battle = blocks.get("battle") if isinstance(blocks.get("battle"), list) else []
         legacy = (blocks.get("during") if isinstance(blocks.get("during"), list) else []) + (blocks.get("after") if isinstance(blocks.get("after"), list) else [])
-        total = len(prestart) + len(battle) + len(legacy)
+        total = _count_block_list(prestart) + _count_block_list(battle) + _count_block_list(legacy)
         if total > 0:
             return total
-        return sum(len(v) for v in blocks.values() if isinstance(v, list))
+        return sum(_count_block_list(v) for v in blocks.values() if isinstance(v, list))
     return 0
 
 

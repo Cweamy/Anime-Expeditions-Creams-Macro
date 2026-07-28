@@ -73,6 +73,8 @@ const world = () => new Function(`
     const id = /data-id="([^"]+)"/.exec(sel)[1];
     return PHASES.some(p => creationPhases[p].some(b => b.id === id)) ? { classList: { add() {} } } : null;
   } };
+  ${extract('containerPhase')}
+  ${extract('_findInContainer')}
   ${extract('findBlockLocation')}
   ${extract('removeBlock')}
   return { removeBlock, ids: () => creationPhases.battle.map(b => b.id).join(',') };
@@ -612,6 +614,7 @@ let nameValue = 'Boss Rush';
 global.document = { getElementById: () => ({ get value() { return nameValue; } }) };
 global.creationTeam = ''; global.creationEquipment = 'include';
 global.creationPhases = { prestart: [], battle: [] };
+eval(extract('serializeBlock'));
 eval(extract('currentCreationPayload'));
 eval(extract('currentCreationSnapshot'));
 eval(extract('markCreationEditorSaved'));
@@ -864,3 +867,65 @@ def test_both_dock_and_skip_release_it():
         body = src[src.index(f"function {fn}("):]
         body = body[:body.index("\n}\n") + 2]
         assert "runPendingFirstRun()" in body, f"{fn} never releases a queued first-run dialog"
+
+
+# ---------------------------------------------------------------------------
+# Detect block: nested then/else and its advanced fields must round-trip
+# through the real serializeBlock/blockFromSaved pair.
+# ---------------------------------------------------------------------------
+def test_detect_block_round_trips_through_save_and_load(tmp_path):
+    out = run_js("""
+      global.newBlockId = (() => { let n = 0; return () => 'id' + (++n); })();
+      eval(extract('serializeBlock'));
+      eval(extract('blockFromSaved'));
+      const saved = {
+        type: 'detect', image: 'boss', advanced: true, mode: 'multi',
+        images: ['a', 'b'], logic: 'or', expr: "find('x')",
+        region: { x: 1, y: 2, w: 3, h: 4 }, threshold: 0.8, showAll: true,
+        then: [{ type: 'wait_ms', params: { ms: 500 } }],
+        else: [{ type: 'send_key', params: {}, key: 'q',
+                 then: undefined }],
+      };
+      const loaded = blockFromSaved(saved);
+      const reser = serializeBlock(loaded);
+      console.log(JSON.stringify({
+        mode: loaded.mode, images: loaded.images, logic: loaded.logic,
+        region: loaded.region, threshold: loaded.threshold, showAll: loaded.showAll,
+        thenType: loaded.then[0].type, thenMs: loaded.then[0].params.ms,
+        elseType: loaded.else[0].type, elseKey: loaded.else[0].key,
+        thenHasId: !!loaded.then[0].id,
+        reserThen: reser.then.length, reserElse: reser.else.length,
+        reserImages: reser.images, reserRegion: reser.region,
+      }));
+    """, tmp_path)
+    assert out['mode'] == 'multi'
+    assert out['images'] == ['a', 'b']
+    assert out['logic'] == 'or'
+    assert out['region'] == {'x': 1, 'y': 2, 'w': 3, 'h': 4}
+    assert out['threshold'] == 0.8
+    assert out['showAll'] is True
+    assert out['thenType'] == 'wait_ms' and out['thenMs'] == 500
+    assert out['elseType'] == 'send_key' and out['elseKey'] == 'q'
+    assert out['thenHasId'] is True           # nested blocks get real ids on load
+    assert out['reserThen'] == 1 and out['reserElse'] == 1
+    assert out['reserImages'] == ['a', 'b'] and out['reserRegion'] == {'x': 1, 'y': 2, 'w': 3, 'h': 4}
+
+
+def test_list_placed_units_numbers_across_detect_branches(tmp_path):
+    out = run_js("""
+      global.PHASES = ['prestart', 'battle'];
+      global.creationPhases = {
+        prestart: [{ type: 'place_unit', params: { name: 'A' } }],
+        battle: [
+          { type: 'detect', type_: 'd',
+            then: [{ type: 'place_unit', params: { name: 'B' } }],
+            else: [{ type: 'place_unit', params: { name: 'C' } }] },
+          { type: 'place_unit', params: { name: 'D' } },
+        ],
+      };
+      eval(extract('listPlacedUnits'));
+      console.log(JSON.stringify(listPlacedUnits()));
+    """, tmp_path)
+    # then before else, prestart before battle -- matches core.detect.flatten
+    assert out == [{'n': 1, 'name': 'A'}, {'n': 2, 'name': 'B'},
+                   {'n': 3, 'name': 'C'}, {'n': 4, 'name': 'D'}]
