@@ -426,6 +426,13 @@ AUTO_UPGRADE_CLICK_SETTLE = 0.6
 # then Loadout 1-3 are stacked rows at a fixed position. 4+ exist in
 # Creation's picker but aren't reachable yet without scrolling.
 TEAM_PANEL_TIMEOUT = 5.0
+# The first "Teams" click only opens the Load Team list; it does not select
+# anything. Do not scroll/click a row until the list's own title is visible.
+# A missed Teams click is retried as a Teams click, rather than incorrectly
+# repeating row clicks against the still-closed Unit Manager screen.
+TEAM_LOADOUT_OPEN_RETRY_ATTEMPTS = 3
+TEAM_LOADOUT_OPEN_THRESHOLD = 0.85
+TEAM_LOADOUT_OPEN_SETTLE = 0.5
 # Clicking the Loadout row is what actually equips the team for the match --
 # if Confirm never shows up afterward (a dropped click, same flakiness class
 # as START_GAME_CLICK_RETRY_ATTEMPTS/SOLO_START_RETRY_ATTEMPTS), the run
