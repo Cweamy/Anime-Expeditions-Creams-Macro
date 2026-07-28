@@ -105,6 +105,22 @@ def test_is_roblox_process_or_title(monkeypatch):
     monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "robloxplayerbeta.exe")
     assert window_win.is_roblox_process_or_title(1, "Discord") is False
 
+    # Scenario 6: Roblox Studio -- its process starts with "roblox" but is NOT
+    # the game client, so it must be excluded (this was the multi-window
+    # attach bug: Studio got docked alongside the real Player window).
+    monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "robloxstudiobeta.exe")
+    assert window_win.is_roblox_process_or_title(1, "Baseplate - Roblox Studio") is False
+
+    # Scenario 7: Studio window with no readable process name -- excluded by
+    # its "Roblox Studio" title.
+    monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "")
+    assert window_win.is_roblox_process_or_title(1, "Place1 - Roblox Studio") is False
+
+    # Scenario 8: A real Player window whose place name happens to contain
+    # "studio" still matches -- the PLAYER process is authoritative.
+    monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "robloxplayerbeta.exe")
+    assert window_win.is_roblox_process_or_title(1, "Art Studio Tycoon - Roblox") is True
+
 
 
 def test_base_window_manager_and_factory():
