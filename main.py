@@ -2340,6 +2340,23 @@ class Api:
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True}
 
+    def get_ocr_status(self) -> dict:
+        # Returns whether Windows OCR is available and whether Tesseract is installed.
+        from core import ocr_windows, ocr
+        win_available = ocr_windows.is_available()
+        tess_ok = False
+        try:
+            ocr.get_pytesseract()
+            tess_ok = True
+        except Exception:
+            tess_ok = False
+        return {
+            "ok": True,
+            "windows_ocr": win_available,
+            "tesseract_installed": tess_ok,
+        }
+
+
     def list_roblox_windows(self) -> list:
         # Settings > Debug > "Select Roblox Window": every standalone Roblox
         # window NOT already docked (see core.window.list_roblox_windows),

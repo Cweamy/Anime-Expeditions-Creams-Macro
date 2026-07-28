@@ -10,6 +10,8 @@ on Windows 10 1809+/Windows 11 as "App Installer", so this covers the vast
 majority of users this macro already targets (see README's Windows 10/11
 requirement) without bundling or downloading anything ourselves.
 """
+import os
+import shutil
 import subprocess
 
 WINGET_PACKAGE_ID = "UB-Mannheim.TesseractOCR"
@@ -20,11 +22,11 @@ INSTALL_TIMEOUT = 300.0  # winget downloads ~50MB -- generous for a slow connect
 # unsigned and the sign-extended reading of each code are listed, since which
 # one subprocess surfaces as returncode depends on how the exit status is
 # interpreted. NOTE: 0x8A15002B and 2316632107 are the SAME number written two
-# ways (likewise 0x8A15002C and 2316632108), so only the hex and the negative
-# forms are needed -- listing the unsigned decimal too was a no-op duplicate.
+# ways (likewise 0x8A15002C and 2316632084/0x8A150014 etc.).
 _NO_UPDATE_APPLICABLE = {
-    0x8A15002B, -1978335189,
-    0x8A15002C, -1978335188,
+    0x8A15002B, -1978335189, 2316632107,
+    0x8A15002C, -1978335188, 2316632108,
+    0x8A150014, -1978335212, 2316632084,
 }
 
 
@@ -60,6 +62,7 @@ def install_tesseract(log=None) -> bool:
         return False
 
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
+    output_lower = output.lower()
 
     # winget returns 0 for a fresh install. 0x8A15002B / 0x8A15002C means "already
     # installed, no update available" -- tesseract.exe is already on disk,
@@ -68,14 +71,29 @@ def install_tesseract(log=None) -> bool:
         log("[Tesseract] Installed successfully.")
         return True
 
-    if result.returncode in _NO_UPDATE_APPLICABLE:
+    if result.returncode in _NO_UPDATE_APPLICABLE or any(phrase in output_lower for phrase in (
+        "pacote existente", "already installed", "no available upgrade",
+        "nenhuma atualização disponível", "no upgrade found", "ja instalado", "já instalado"
+    )):
         log("[Tesseract] Already installed and up to date.")
         return True
 
     # Fallback check: if winget returned another code but Tesseract binary is already executable
-    for path in (r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-                "tesseract"):
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    fallback_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.join(local_appdata, r"Programs\Tesseract-OCR\tesseract.exe"),
+        os.path.join(local_appdata, r"Tesseract-OCR\tesseract.exe"),
+        "tesseract",
+    ]
+    which_tess = shutil.which("tesseract")
+    if which_tess:
+        fallback_paths.insert(0, which_tess)
+
+    for path in fallback_paths:
+        if not path:
+            continue
         try:
             res = subprocess.run(
                 [path, "--version"], capture_output=True, timeout=5,
@@ -89,3 +107,4 @@ def install_tesseract(log=None) -> bool:
 
     log(f"[Tesseract] winget install failed (exit {result.returncode}): {output or 'no output'}")
     return False
+
