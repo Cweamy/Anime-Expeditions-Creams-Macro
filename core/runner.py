@@ -2938,7 +2938,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             self._set_status(action="Clicking Expedition...")
             try:
                 match, name = vision.wait_for_image_any(
-                    hwnd, EXPEDITION_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+                    hwnd, EXPEDITION_IMAGE_NAMES, region=GAMEMODE_CARD_REGION, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
             except vision.TemplateNotFound as exc:
                 self._log(f"[Macro] Can't find Expedition: {exc}")
                 return False
@@ -2958,7 +2958,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             self._set_status(action="Clicking Challenge...")
             try:
                 match, name = vision.wait_for_image_any(
-                    hwnd, CHALLENGE_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+                    hwnd, CHALLENGE_IMAGE_NAMES, region=GAMEMODE_CARD_REGION, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
             except vision.TemplateNotFound as exc:
                 self._log(f"[Macro] Can't find Challenge: {exc}")
                 return False
@@ -2978,7 +2978,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             self._set_status(action="Clicking Raid...")
             try:
                 match, name = vision.wait_for_image_any(
-                    hwnd, RAID_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+                    hwnd, RAID_IMAGE_NAMES, region=GAMEMODE_CARD_REGION, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
             except vision.TemplateNotFound as exc:
                 self._log(f"[Macro] Can't find Raid: {exc}")
                 return False
@@ -3003,7 +3003,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._set_status(action="Clicking Story...")
         try:
             match, name = vision.wait_for_image_any(
-                hwnd, STORY_IMAGE_NAMES, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+                hwnd, STORY_IMAGE_NAMES, region=GAMEMODE_CARD_REGION, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound:
             match, name = None, None
         if match is not None:

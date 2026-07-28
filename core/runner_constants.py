@@ -284,6 +284,11 @@ RECONNECT_IMAGE_NAMES = ("reconnect",)
 # .png in the folder" (or Settings > General > Image Manager), not a code
 # change. Kept as tuples because every call site feeds them to
 # vision.find_image_any/wait_for_image_any, which take a tuple of names.
+# Search region for the gamemode select menu cards (Story, Raid, Challenge, Expedition):
+# restricted to the right-side cards panel (x: 440..1152) to exclude the left 3D viewport
+# where player silhouettes and party [+] invite buttons render.
+GAMEMODE_CARD_REGION = (440, 0, 712, 756)
+
 NAV_PLAY_IMAGE_NAMES = ("nav_play",)
 EXPEDITION_IMAGE_NAMES = ("expedition",)
 CHALLENGE_IMAGE_NAMES = ("challenge",)
