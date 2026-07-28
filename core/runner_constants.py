@@ -340,6 +340,10 @@ START_GAME_CHECK_TIMEOUT = 1.5
 NAV_CLICK_TIMEOUT = 8.0  # nav_settings / nav_search in the Auto Vote Start fallback
 REPEAT_STAGE_MODAL_CLEAR_TIMEOUT = 5.0  # how long to wait for the Victory/Defeat banner to actually clear after Repeat Stage
 REWARD_CARD_CLEAR_TIMEOUT = 6.0  # how long to spend dismissing "select upgrade card" before Repeat/Leave Stage
+# Character/reward portraits on Victory can open a centered Obtainments
+# modal. Its Close button stays in this middle-bottom band even when the
+# underlying result panel and hotbar shift slightly.
+RESULT_MODAL_CLOSE_REGION = (350, 500, 450, 110)
 # The Victory/Defeat panel's reward row streams its items in one at a time, so
 # the screenshot (and the Crow Relic drop check) used to be able to fire before
 # they'd all rendered. A short settle lets the row finish populating first.

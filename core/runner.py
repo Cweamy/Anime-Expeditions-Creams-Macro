@@ -499,6 +499,48 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
         return True
 
+    def _clear_result_obtainment_modal(self, hwnd, stop_event: threading.Event = None) -> bool:
+        """Dismiss a character/reward Obtainments modal over Victory.
+
+        The modal can be opened by a stray click on the result panel's unit
+        portraits. Its Close button disappears over another clickable result
+        control, so use a zero-hold click and immediately park away to avoid
+        clicking through into the newly exposed panel.
+        """
+        try:
+            match = vision.find_image(
+                hwnd, "result_modal_close", region=RESULT_MODAL_CLOSE_REGION)
+        except vision.TemplateNotFound:
+            return True
+        if match is None:
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        park_x, park_y = self._cxy("unit_info_reset")
+        for attempt in range(1, 3):
+            debug_path = self._debug_save(hwnd, "result_modal_close", match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f"[Macro] Found a Victory Obtainments modal (score {match['score']:.2f}) -- "
+                       f"closing it (attempt {attempt}/2).{suffix}")
+            if not wm.activate_window(hwnd):
+                self._log("[Macro] Couldn't confirm focus before closing the Victory modal.")
+            click_x, click_y = vision.ref_to_screen(hwnd, match["cx"], match["cy"])
+            self._mouse.click(click_x, click_y, hold=0.0)
+            self._mouse.move_to(left + park_x, top + park_y)
+            if stop_event is not None and stop_event.is_set():
+                return False
+            time.sleep(0.3)
+            try:
+                match = vision.find_image(
+                    hwnd, "result_modal_close", region=RESULT_MODAL_CLOSE_REGION)
+            except vision.TemplateNotFound:
+                return True
+            if match is None:
+                return True
+
+        self._log("[Macro] Victory Obtainments modal still showing after 2 close attempts -- stopping.")
+        return False
+
 
     def _debug_save(self, hwnd, name: str, match: dict) -> str:
         """Gated behind Settings > Debug > "Debug Match Screenshots" (off by
@@ -1530,6 +1572,9 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             # repeat_stage/leave_stage search below.
             self._mouse.move_to(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
             time.sleep(0.1)
+
+        if result == "win" and not self._clear_result_obtainment_modal(hwnd, stop_event):
+            return False
 
         # Matchmaking never uses Repeat Stage, even with more repeats left --
         # a matchmade lobby is a one-shot party for that specific match, not
