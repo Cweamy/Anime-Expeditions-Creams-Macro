@@ -67,6 +67,60 @@ class BlockOps:
         start = detect.flatten(prestart, 1)[1]
         return detect.flatten(battle, start)[0]
 
+    def _load_loop_blocks(self, task: dict) -> dict:
+        """The two looping phases' flattened block lists, keyed 'loop_a' /
+        'loop_b'. These run DURING the match like Battle, but their whole
+        list repeats (see _tick_loop_phases) -- for "watch for an image, then
+        act" patterns a once-through list can't express. place_unit numbering
+        continues past Pre Start + Battle so unit #N stays consistent with
+        ui/app.js's listPlacedUnits (which walks all four phases in order)."""
+        empty = {"loop_a": [], "loop_b": []}
+        macro_name = task.get("macro")
+        if not macro_name:
+            return empty
+        from . import templates as tpl
+        data = tpl.load_template(macro_name)
+        blocks = data.get("blocks") or {}
+        if not isinstance(blocks, dict):
+            return empty
+        prestart = blocks.get("prestart") if "prestart" in blocks else (blocks.get("before") or [])
+        battle = blocks.get("battle") if "battle" in blocks else ((blocks.get("during") or []) + (blocks.get("after") or []))
+        # Continue the ordinal count past Pre Start then Battle, matching the UI.
+        start = detect.flatten(prestart or [], 1)[1]
+        start = detect.flatten(self._strip_auto_upgrade_for_expedition(battle or [], task), start)[1]
+        out = {}
+        for key in ("loop_a", "loop_b"):
+            loop = self._strip_auto_upgrade_for_expedition(blocks.get(key) or [], task)
+            flat, start = detect.flatten(loop, start)
+            out[key] = flat
+        return out
+
+    def _tick_loop_phases(self, hwnd, stop_event: threading.Event, first_repeat: bool, macro_name: str = None) -> None:
+        """Advance each looping phase by one block, restarting it from the top
+        when it reaches the end -- so Loop A/B keep cycling for the whole match
+        alongside Battle. Reuses _run_battle_blocks_tick by swapping its
+        index/state in and out, so detect/_jump, place_unit, and Once all
+        behave exactly as they do in Battle."""
+        runtime = getattr(self, "_loop_runtime", None)
+        if not runtime:
+            return
+        saved_index, saved_state = self._battle_block_index, self._battle_block_state
+        for key in ("loop_a", "loop_b"):
+            rt = runtime.get(key)
+            if not rt or not rt["blocks"]:
+                continue
+            self._battle_block_index, self._battle_block_state = rt["index"], rt["state"]
+            try:
+                self._run_battle_blocks_tick(hwnd, stop_event, rt["blocks"], first_repeat, macro_name)
+                if self._battle_block_index >= len(rt["blocks"]):
+                    self._battle_block_index = 0  # reached the end -> loop restarts
+                    self._battle_block_state = {}
+            finally:
+                rt["index"], rt["state"] = self._battle_block_index, self._battle_block_state
+            if self._checkpoint(stop_event):
+                break
+        self._battle_block_index, self._battle_block_state = saved_index, saved_state
+
     def _run_battle_blocks_tick(self, hwnd, stop_event: threading.Event, battle_blocks: list, first_repeat: bool,
                                   macro_name: str = None) -> None:
         """Advances the Battle-phase block list by one step, called once per

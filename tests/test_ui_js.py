@@ -943,3 +943,17 @@ def test_target_priority_block_type_registered(tmp_path):
     assert out["hasBlockType"] is True
     assert out["inPrestartAllowed"] is True
     assert out["hasTargetPriorities"] is True
+
+
+def test_loop_phases_registered(tmp_path):
+    body = """
+    console.log(JSON.stringify({
+        inPhases: src.includes("['prestart', 'battle', 'loop_a', 'loop_b']"),
+        hasLabels: src.includes("loop_a: 'Loop A'") && src.includes("loop_b: 'Loop B'"),
+        allowed: src.includes("loop_a: _BATTLE_ALLOWED") && src.includes("loop_b: _BATTLE_ALLOWED")
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out["inPhases"] is True
+    assert out["hasLabels"] is True
+    assert out["allowed"] is True

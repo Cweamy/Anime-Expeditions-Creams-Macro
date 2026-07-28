@@ -130,7 +130,8 @@ def count_template_blocks(blocks) -> int:
         prestart = blocks.get("prestart") if isinstance(blocks.get("prestart"), list) else (blocks.get("before") if isinstance(blocks.get("before"), list) else [])
         battle = blocks.get("battle") if isinstance(blocks.get("battle"), list) else []
         legacy = (blocks.get("during") if isinstance(blocks.get("during"), list) else []) + (blocks.get("after") if isinstance(blocks.get("after"), list) else [])
-        total = _count_block_list(prestart) + _count_block_list(battle) + _count_block_list(legacy)
+        loops = [b for key in ("loop_a", "loop_b") if isinstance(blocks.get(key), list) for b in blocks[key]]
+        total = _count_block_list(prestart) + _count_block_list(battle) + _count_block_list(legacy) + _count_block_list(loops)
         if total > 0:
             return total
         return sum(_count_block_list(v) for v in blocks.values() if isinstance(v, list))

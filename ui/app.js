@@ -3030,9 +3030,16 @@ const BLOCK_TYPES = {
 // settings that need to be set before the match begins -- plus Wait, for
 // pacing those against game UI that needs a beat to settle) and Battle
 // (everything else -- upgrades/sells/wave waits only make sense once it's live).
-const PHASES = ['prestart', 'battle'];
-const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle' };
-const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat' };
+// Four phases. Pre Start (walk to spot, place starters, flip settings) and
+// Battle (upgrades/sells/waits) both run ONCE through per match. Loop A and
+// Loop B run DURING the match too, but their whole list repeats continuously
+// alongside Battle -- built for polling patterns like "wait until an image
+// shows up, then do something" via the Detect block, which a once-through list
+// can't express.
+const PHASES = ['prestart', 'battle', 'loop_a', 'loop_b'];
+const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle', loop_a: 'Loop A', loop_b: 'Loop B' };
+const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat', loop_a: 'Repeats', loop_b: 'Repeats' };
+const _BATTLE_ALLOWED = Object.keys(BLOCK_TYPES).filter(t => t !== 'walk_path');
 const PHASE_ALLOWED = {
   // walk_path is deliberately in NEITHER palette: it's the one unique
   // pinned block -- every routine always has exactly one in Pre Start
@@ -3040,13 +3047,15 @@ const PHASE_ALLOWED = {
   // addable block would only create duplicates. 'walk' (replay a recorded
   // path) is a normal addable block, allowed in BOTH phases -- you can drop
   // several into Pre Start to walk between multiple starter-placement spots
-  // before the match begins.
+  // before the match begins. The Loop phases take the same set as Battle.
   prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'click', 'wait_ms', 'send_key', 'detect'],
-  battle: Object.keys(BLOCK_TYPES).filter(t => t !== 'walk_path'),
+  battle: _BATTLE_ALLOWED,
+  loop_a: _BATTLE_ALLOWED,
+  loop_b: _BATTLE_ALLOWED,
 };
 
-let creationPhases = { prestart: [], battle: [] };
-let phaseCollapsed = { prestart: false, battle: false };
+let creationPhases = { prestart: [], battle: [], loop_a: [], loop_b: [] };
+let phaseCollapsed = { prestart: false, battle: false, loop_a: false, loop_b: false };
 let recordingBlockId = null;
 let savedPaths = [];
 
@@ -5256,6 +5265,8 @@ function renderPhases() {
     const blocks = creationPhases[phase];
     const emptyText = phase === 'prestart'
       ? 'Drag Place Unit, Setting, Auto Upgrade Unit, Click, or Wait blocks here -- only those are possible before the match starts.'
+      : (phase === 'loop_a' || phase === 'loop_b')
+      ? 'Drag blocks here -- this list repeats over and over during the match. Pair a Detect block with a Wait to "watch for an image, then act".'
       : 'Drag blocks here -- upgrades, sells, waits, clicks, anything goes mid-battle.';
     const emptyDiv = `<div class="text-xs text-center" style="color: var(--text-muted); padding: 16px 0;">${emptyText}</div>`;
     // Pre Start always holds at least the pinned Walk Path (see the
@@ -5276,7 +5287,7 @@ function renderPhases() {
             <polyline points="6 9 12 15 18 9"/>
           </svg>
           ${PHASE_LABELS[phase]}
-          <span class="rp-head-tag" style="--rp-tag: ${phase === 'prestart' ? 'var(--teal)' : 'var(--rose)'}; margin-left: 2px;">${PHASE_TAGS[phase]}</span>
+          <span class="rp-head-tag" style="--rp-tag: ${phase === 'prestart' ? 'var(--teal)' : (phase === 'loop_a' || phase === 'loop_b') ? 'var(--sky)' : 'var(--rose)'}; margin-left: 2px;">${PHASE_TAGS[phase]}</span>
           <span class="phase-count">${blockCount}</span>
         </div>
         <div id="creation-canvas-${phase}" class="canvas-dropzone p-2"
@@ -5549,7 +5560,7 @@ async function saveCurrentTemplate() {
 function newTemplate() {
   // The unique pinned Auto Walk Path block (see renderBlockRow's
   // isPinnedWalk) -- always there, Once always on, still reorderable.
-  creationPhases = { prestart: [{ id: newBlockId(), type: 'walk_path', params: {}, once: true, mode: 'auto', pathName: '' }], battle: [] };
+  creationPhases = { prestart: [{ id: newBlockId(), type: 'walk_path', params: {}, once: true, mode: 'auto', pathName: '' }], battle: [], loop_a: [], loop_b: [] };
   creationTeam = '';
   creationEquipment = 'include';
   document.getElementById('template-name').value = '';
@@ -5712,7 +5723,7 @@ async function loadSelectedTemplate() {
   try {
     const data = await pywebview.api.load_template(name);
     const payload = data.blocks || {};
-    creationPhases = { prestart: [], battle: [] };
+    creationPhases = { prestart: [], battle: [], loop_a: [], loop_b: [] };
     creationTeam = '';
     creationEquipment = 'include';
 
