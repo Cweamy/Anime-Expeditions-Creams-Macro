@@ -1836,18 +1836,42 @@ async function installTesseract(btn) {
 }
 
 function finishTesseractInstall(success) {
-  const btn = tesseractInstallBtn;
+  const btn = tesseractInstallBtn || document.getElementById('btn-install-tesseract');
   if (!btn) return;
-  btn.textContent = success ? 'Installed' : 'Failed';
-  setTimeout(() => {
-    btn.textContent = btn.dataset.original || 'Install';
-    btn.disabled = false;
+  if (success) {
+    btn.textContent = 'Installed';
+    btn.disabled = true;
     tesseractInstallBtn = null;
-  }, 3200);
+  } else {
+    btn.textContent = 'Failed';
+    setTimeout(() => {
+      btn.textContent = btn.dataset.original || 'Install';
+      btn.disabled = false;
+      tesseractInstallBtn = null;
+    }, 3200);
+  }
+}
+
+async function updateTesseractButtonStatus() {
+  const btn = document.getElementById('btn-install-tesseract');
+  if (!btn || !window.pywebview) return;
+  try {
+    const status = await pywebview.api.get_ocr_status();
+    if (status && status.ok) {
+      if (status.tesseract_installed) {
+        btn.textContent = 'Installed';
+        btn.disabled = true;
+      } else if (status.windows_ocr) {
+        btn.textContent = 'Installed (Win OCR)';
+        btn.disabled = true;
+      }
+    }
+  } catch (e) {}
 }
 
 window.tesseractInstallDone = () => finishTesseractInstall(true);
 window.tesseractInstallFailed = () => finishTesseractInstall(false);
+
 
 // Settings > General > "Open Assets Folder" (also the Image Manager's
 // "Open Folder" button) -- the loose, user-editable folder every reference
@@ -5999,6 +6023,9 @@ window.addEventListener('pywebviewready', async () => {
     sessionStart = info.session_start;
     allTimeBase = info.all_time_base;
   } catch (e) {}
+
+  updateTesseractButtonStatus();
+
 
   renderPalette();
   renderPhases();
