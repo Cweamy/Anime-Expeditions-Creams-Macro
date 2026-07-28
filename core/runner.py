@@ -354,7 +354,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             self._log("[Macro] Resumed.")
             self._paused_logged = False
         if stop_event.is_set():
-            self._try_leave_stage()
+            self._try_leave_stage(stop_event)
             # Say WHAT was in flight when the stop landed, not just
             # "Stopped." -- someone stopping a run that's visibly hung
             # (e.g. sitting on "Waiting for gamemode menu...") is exactly
@@ -376,23 +376,20 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             return True
         return False
 
-    def _interruptible_sleep(self, seconds: float, stop_event: threading.Event) -> None:
+    def _interruptible_sleep(self, seconds: float, stop_event: threading.Event = None) -> None:
         """time.sleep(), but bails out immediately once stop_event fires
         instead of blocking it for the full duration -- F2/Stop is supposed
         to stay instant (see _checkpoint/_try_leave_stage's own comment on
         this), which a plain time.sleep(5.0) settle delay quietly breaks
-        for however long is left on it. Used for the multi-second Expedition
-        settle delays (EXTRACT_CONFIRM_SETTLE, EXPEDITION_CONTINUE_COOLDOWN)
-        -- short delays elsewhere (SETTLE_DELAY and smaller) aren't worth
-        the same treatment, they're not long enough to actually notice."""
-        deadline = time.time() + seconds
-        while True:
-            remaining = deadline - time.time()
-            if remaining <= 0 or (stop_event is not None and stop_event.is_set()):
-                return
-            time.sleep(min(0.15, remaining))
+        for however long is left on it."""
+        if seconds <= 0:
+            return
+        if stop_event is not None:
+            stop_event.wait(seconds)
+        else:
+            time.sleep(seconds)
 
-    def _try_leave_stage(self) -> None:
+    def _try_leave_stage(self, stop_event: threading.Event = None) -> None:
         # F2/Stop must stay instant (see main.py's hotkey wiring), so this is
         # a single one-shot check, not a wait -- no match just means either
         # Leave Stage isn't on screen right now (not mid-match) or the image
@@ -402,6 +399,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         if self._left_stage_this_run or self._current_hwnd is None:
             return
         self._left_stage_this_run = True
+        stop_evt = stop_event or getattr(self, "_stop_event", None)
         try:
             match = vision.find_image(self._current_hwnd, "leave_stage")
         except vision.TemplateNotFound:
@@ -409,8 +407,8 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         if match is not None:
             self._log(f"[Macro] Stopping -- clicking Leave Stage (score {match['score']:.2f}) to quit to menu.")
             vision.click_match(self._mouse, self._current_hwnd, match)
-            self._interruptible_sleep(0.5, stop_event)
-            self._click_return_to_lobby_if_found(self._current_hwnd, stop_event=stop_event)
+            self._interruptible_sleep(0.5, stop_evt)
+            self._click_return_to_lobby_if_found(self._current_hwnd, stop_event=stop_evt)
 
     def _click_return_to_lobby_if_found(self, hwnd, stop_event: threading.Event = None) -> bool:
         # Leave Stage can bring up its own "Return to Lobby" confirmation
@@ -966,7 +964,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         if leave_match is not None:
             self._log(f"[Macro] Found Leave Stage (score {leave_match['score']:.2f}) -- clicking it.")
             vision.click_match(self._mouse, hwnd, leave_match)
-            time.sleep(SETTLE_DELAY)
+            self._interruptible_sleep(SETTLE_DELAY, stop_event)
             self._click_return_to_lobby_if_found(hwnd, stop_event)
         if self._checkpoint(stop_event):
             return False
@@ -1035,7 +1033,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             if mode == "expedition":
                 # No stage-row picker to click through -- just the difficulty
                 # stepper, straight after the map.
-                time.sleep(DIFFICULTY_CLICK_DELAY)
+                self._interruptible_sleep(DIFFICULTY_CLICK_DELAY, stop_event)
                 self._select_expedition_difficulty(hwnd, stop_event, task.get("difficulty") or "1")
             else:
                 stage = task.get("stage") or "1"
@@ -1147,7 +1145,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                 self._keyboard.tap(ord("Z"))
                 time.sleep(0.1)
                 vision.click_match(self._mouse, hwnd, start_match)
-                time.sleep(START_GAME_CLICK_VERIFY_SETTLE)
+                self._interruptible_sleep(START_GAME_CLICK_VERIFY_SETTLE, stop_event)
                 if self._checkpoint(stop_event):
                     return None
 
@@ -1358,7 +1356,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                 result = self._check_expedition_wave_result(hwnd, stop_event)
                 if result is not None:
                     return result
-                time.sleep(MATCH_RESULT_POLL_INTERVAL)
+                self._interruptible_sleep(MATCH_RESULT_POLL_INTERVAL, stop_event)
                 continue
 
             try:
