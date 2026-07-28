@@ -985,3 +985,42 @@ def test_loop_phases_registered(tmp_path):
     assert out["inPhases"] is True
     assert out["hasLabels"] is True
     assert out["allowed"] is True
+
+
+def test_render_crafting_screen_has_drag_grip(tmp_path):
+    body = """
+    global.craftingState = {
+      enabled: true, every: 5, count: 2,
+      items: [
+        { key: 'sprite_rainbow', enabled: true, amount: 'max' },
+        { key: 'sprite_red', enabled: false, amount: 10 }
+      ]
+    };
+    global.escapeHtml = s => s;
+    global.CRAFT_SPRITE_LABELS = { sprite_rainbow: 'Rainbow', sprite_red: 'Red' };
+
+    const mockElements = {
+      'toggle-crafting-enabled': { classList: { toggle: () => {} } },
+      'crafting-every': { value: '' },
+      'crafting-progress': { textContent: '' },
+      'crafting-item-list': { innerHTML: '' }
+    };
+    global.document = {
+      getElementById: id => mockElements[id] || null
+    };
+
+    eval(extract('renderCraftingScreen'));
+    renderCraftingScreen();
+
+    const html = mockElements['crafting-item-list'].innerHTML;
+    console.log(JSON.stringify({
+      hasCraftingGrip: html.includes('crafting-grip'),
+      hasDataKeyRainbow: html.includes('data-key="sprite_rainbow"'),
+      hasDataKeyRed: html.includes('data-key="sprite_red"')
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out["hasCraftingGrip"] is True
+    assert out["hasDataKeyRainbow"] is True
+    assert out["hasDataKeyRed"] is True
+
