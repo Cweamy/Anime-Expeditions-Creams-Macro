@@ -69,9 +69,51 @@ def test_finite_wave_badge_cannot_trigger_infinite_exit(monkeypatch):
     assert left == []
 
 
+def test_impossible_unlimited_reads_cannot_confirm_the_exit_wave(monkeypatch):
+    runner = _runner()
+    readings = iter(((1414, None), (46, None), (46, None)))
+    left = []
+    state = {}
+
+    monkeypatch.setattr(
+        runner_module.vision, "capture_window_region_bgr", lambda *_args: object())
+    monkeypatch.setattr(runner_module.wave_module, "read_wave", lambda _image: next(readings))
+    monkeypatch.setattr(
+        runner, "_leave_infinite_at_wave_limit",
+        lambda _hwnd, _stop, limit: left.append(limit) or True)
+
+    for _ in range(3):
+        state["next_check"] = 0
+        result = runner._check_infinite_wave_limit(
+            123, threading.Event(), 45, state)
+
+    assert result == "wave_limit"
+    assert left == [45]
+
+
+def test_later_wave_cannot_substitute_for_the_configured_exit_wave(monkeypatch):
+    runner = _runner()
+    state = {}
+    left = []
+
+    monkeypatch.setattr(
+        runner_module.vision, "capture_window_region_bgr", lambda *_args: object())
+    monkeypatch.setattr(runner_module.wave_module, "read_wave", lambda _image: (47, None))
+    monkeypatch.setattr(
+        runner, "_leave_infinite_at_wave_limit",
+        lambda *_args: left.append(True) or True)
+
+    for _ in range(3):
+        state["next_check"] = 0
+        assert runner._check_infinite_wave_limit(
+            123, threading.Event(), 45, state) is None
+
+    assert left == []
+
+
 def test_failed_leave_reports_failure_to_match_loop(monkeypatch):
     runner = _runner()
-    state = {"confirmations": 1}
+    state = {"confirmations": 1, "confirmation_wave": 11}
 
     monkeypatch.setattr(
         runner_module.vision, "capture_window_region_bgr", lambda *_args: object())

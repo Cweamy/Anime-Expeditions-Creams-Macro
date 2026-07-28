@@ -1185,11 +1185,17 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._set_status(action=f"Infinite wave {current} -- leaving after wave {limit}...")
 
         exit_wave = limit + 1
-        if current < exit_wave:
+        if current != exit_wave:
             state.pop("confirmations", None)
+            state.pop("confirmation_wave", None)
             return None
 
-        confirmations = state.get("confirmations", 0) + 1
+        confirmations = (
+            state.get("confirmations", 0) + 1
+            if state.get("confirmation_wave") == current
+            else 1
+        )
+        state["confirmation_wave"] = current
         state["confirmations"] = confirmations
         if confirmations < INFINITE_WAVE_LIMIT_CONFIRMATIONS:
             self._log(
