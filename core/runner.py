@@ -95,6 +95,12 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         # a Crow Relic and the task opted into auto-clearing Act 4; read (and
         # cleared) by _run_task, which runs the divert. See _run_act4_diversion.
         self._act4_wants_in = False
+        # "Leave at Minute" battle block (see runner_blocks): battle clock +
+        # the flag it sets when it leaves. Real values set per match in
+        # _play_one_match; defaults here so the Settings > Debug battle test
+        # (which never goes through _play_one_match) resolves them too.
+        self._battle_started_at = 0.0
+        self._battle_leave_requested = False
         # Expedition checkpoint engine choice (see the EXP_COLOR_* block) +
         # the sighting debounce clock it uses; the real values arrive via
         # start()/_run, these are just never-ran-yet defaults. Same for the
@@ -755,7 +761,11 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                     task_failed = True
                     break
                 duration = self._format_duration(time.time() - battle_started)
-                left_for_wave_limit = result == "wave_limit"
+                # Both the Infinite wave-limit exit ("wave_limit") and a
+                # "Leave at Minute" battle block ("left") leave the LIVE match
+                # to the lobby themselves -- no Victory/Defeat screen follows,
+                # and the next repeat must re-enter from the lobby.
+                left_live_match = result in ("wave_limit", "left")
 
                 # Consecutive-loss fail-safe: a genuine unbroken loss streak
                 # on THIS map (not just losses somewhere in the run) usually
@@ -795,10 +805,10 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                 # reaches N, not the same one (a one-repeat lag, negligible on a
                 # farm and worth keeping the clean Leave-Stage-first ordering).
                 crafting_wants_in = (not is_last_repeat) and self._crafting_wants_in()
-                # The bounded-Infinite path (left_for_wave_limit) already left
-                # from the live match, so there is no Victory/Defeat screen to
-                # process here.
-                if not left_for_wave_limit and not self._handle_match_result(
+                # The bounded-Infinite path and the Leave-at-Minute block
+                # (left_live_match) already left the live match, so there is no
+                # Victory/Defeat screen to process here.
+                if not left_live_match and not self._handle_match_result(
                         hwnd, stop_event, task, result, duration, webhook,
                         repeat=(not is_last_repeat) and not challenge_wants_in
                         and not crafting_wants_in and not restart_needed):
@@ -906,7 +916,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                     continue
 
                 if not is_last_repeat:
-                    if left_for_wave_limit or task.get("play_mode") == "matchmaking":
+                    if left_live_match or task.get("play_mode") == "matchmaking":
                         # Leave Stage (see _handle_match_result -- matchmaking
                         # always leaves, never Repeat Stage), or the Infinite
                         # wave-limit exit, puts us back in the lobby rather
@@ -1163,6 +1173,10 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
         self._battle_block_state = {}
+        # Battle clock for the "Leave at Minute" block (see runner_blocks).
+        # Reset per match so the minute is measured from THIS battle's start.
+        self._battle_started_at = time.time()
+        self._battle_leave_requested = False
         # Loop A / Loop B: their own index+state, ticked and restarted every
         # poll alongside Battle (see _tick_loop_phases).
         loop_blocks = self._load_loop_blocks(task)
@@ -1302,6 +1316,16 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             self._tick_loop_phases(hwnd, stop_event, first_repeat, macro_name)
             if self._checkpoint(stop_event):
                 return None
+            # A "Leave at Minute" block (Battle or a Loop phase) hit its time
+            # and already left the live match to the lobby (clicked To Lobby ->
+            # Return). Checked here, after BOTH the Battle and Loop ticks, so it
+            # works from either -- and even with an empty Battle phase. Report
+            # "left" so _run_task skips the Victory/Defeat handling and re-
+            # enters from the lobby (same path as the Infinite wave-limit exit,
+            # see left_live_match).
+            if self._battle_leave_requested:
+                self._battle_leave_requested = False
+                return "left"
 
             # Roblox's own Reconnect/Retry prompt can show up mid-battle too,
             # not just during the teleport-in wait -- this used to only be

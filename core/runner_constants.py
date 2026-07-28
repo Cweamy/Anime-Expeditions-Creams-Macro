@@ -494,6 +494,9 @@ WAIT_WAVE_POLL_INTERVAL = 2.0
 # New Infinite tasks default to a bounded run instead of silently running
 # forever. The Task builder exposes this value per task.
 DEFAULT_INFINITE_WAVE_LIMIT = 20
+# Default for a new "Leave at Minute" battle block -- how many minutes into the
+# match it waits before leaving to the lobby (clicks nav_todalobby -> return).
+DEFAULT_LEAVE_AT_MINUTES = 10
 # Never let one OCR frame end an Infinite run.
 INFINITE_WAVE_LIMIT_CONFIRMATIONS = 2
 

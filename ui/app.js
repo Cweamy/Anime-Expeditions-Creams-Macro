@@ -3174,6 +3174,11 @@ const BLOCK_TYPES = {
   walk:               { label: 'Walk',              group: 'Pathing', color: 'var(--teal)', params: [] },
   wait_ms:            { label: 'Wait (ms)',         group: 'Timing', color: 'var(--amber)', params: [{ key: 'ms', type: 'number', placeholder: 'ms', default: 500 }] },
   wait_wave:          { label: 'Wait for Wave',     group: 'Timing', color: 'var(--amber)', params: [{ key: 'wave', type: 'number', placeholder: 'wave', default: 1 }] },
+  // After this many minutes into the match, leave to the lobby (clicks
+  // nav_todalobby -> Return); the next repeat re-enters from the lobby. The
+  // leave flag is checked after both the Battle and Loop ticks, so it works in
+  // Battle or a Loop phase. See core/runner_blocks._run_leave_at_minute_tick.
+  leave_at_minute:    { label: 'Leave at Minute',   group: 'Timing', color: 'var(--rose)',  params: [{ key: 'minutes', type: 'number', placeholder: 'min', default: 10 }] },
   // Value's meaning depends on kind (hotkey: a typed key spec like "hold w",
   // toggle: 'on'/'off') -- one variable-shape control instead of two near-
   // identical block types, see renderSettingControls().

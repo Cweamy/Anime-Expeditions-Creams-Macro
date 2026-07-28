@@ -225,6 +225,10 @@ class BlockOps:
                 self._run_send_key_tick(block, self._battle_block_index + 1)
                 done = True
                 self._battle_block_state = {}
+            elif btype == "leave_at_minute":
+                self._run_leave_at_minute_tick(hwnd, stop_event, block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
             else:
                 self._log(f'[Macro] Skipping Battle block #{self._battle_block_index + 1} '
                            f'("{btype}") -- not runnable in Battle yet.')
@@ -239,6 +243,44 @@ class BlockOps:
             # pick back up here on the next poll tick, rather than blocking
             # the whole loop (and the Victory/Defeat check) on it now.
             return
+
+    def _run_leave_at_minute_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int) -> None:
+        """Leave the match once it's been running `minutes` minutes.
+
+        Passive until then: on each rotation of the Battle block list it checks
+        the battle clock (self._battle_started_at, set per match in
+        _play_one_match) and, once the configured minute is reached, leaves to
+        the lobby -- clicks nav_todalobby, then the Return confirmation -- and
+        sets self._battle_leave_requested so _wait_for_match_result stops
+        watching for Victory/Defeat and reports "left" (see there). A failed
+        leave-button search just retries on the next rotation."""
+        try:
+            minutes = float(block.get("params", {}).get("minutes") or DEFAULT_LEAVE_AT_MINUTES)
+        except (TypeError, ValueError):
+            minutes = DEFAULT_LEAVE_AT_MINUTES
+        minutes = max(0.0, minutes)
+        started = self._battle_started_at or time.time()
+        elapsed_min = (time.time() - started) / 60.0
+        if elapsed_min < minutes:
+            return  # not yet -- let the rest of the Battle blocks keep running
+        self._log(f'Battle block #{block_num} (Leave at Minute): {minutes:g} min reached '
+                   f'-- leaving to the lobby.')
+        if self._leave_match_to_lobby(hwnd, stop_event):
+            self._battle_leave_requested = True
+
+    def _leave_match_to_lobby(self, hwnd, stop_event: threading.Event) -> bool:
+        """Leave a live match straight to the lobby: click the in-match To
+        Lobby button (nav_todalobby), then the Return to Lobby confirmation.
+        Mirrors the Infinite wave-limit exit (_leave_infinite_at_wave_limit),
+        which clicks leave_stage instead -- this block uses nav_todalobby."""
+        self._release_quick_place_shift()
+        self._set_status(action="Leaving to lobby (Leave at Minute)...")
+        if not self._click_and_verify_gone(
+                hwnd, stop_event, "nav_todalobby", NAV_CLICK_TIMEOUT, success_name="return"):
+            self._log('[Macro] "nav_todalobby" not found -- can\'t leave for Leave at Minute (will retry).')
+            return False
+        self._click_return_to_lobby_if_found(hwnd, stop_event)
+        return not self._checkpoint(stop_event)
 
     def _run_click_block(self, hwnd, stop_event: threading.Event, block: dict, block_num: int,
                            phase_label: str = "Battle") -> None:
