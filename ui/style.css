@@ -13,6 +13,7 @@
   --slate:  #8b93b8;  /* Target */
   --lilac:  #b58ce0;  /* Queue / game tag / All Time */
   --rose:   #d9667a;  /* close button hover / Losses */
+  --sky:    #5aa9e6;  /* Detect / Logic blocks */
 }
 
 /* ---- Theme (Settings > General > Theme) ----
@@ -1935,3 +1936,84 @@ li.fail .onb-ingame-name { color: var(--rose); }
   background: var(--panel, #171b24);
   border-top: 1px solid var(--border);
 }
+
+/* ============ Detect block (branching) ============
+   A Detect row is a column: a header (image/condition controls) over two
+   nested drop-zones, Then (found) and Else (not found). */
+.block-row.block-detect {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.detect-head { display: flex; align-items: center; gap: 8px; }
+.detect-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.detect-branches { display: flex; gap: 10px; }
+.detect-branch { flex: 1; min-width: 0; }
+.detect-branch-label {
+  font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-dim); margin-bottom: 4px; padding-left: 2px;
+}
+.detect-branch-then .detect-branch-label { color: var(--teal); }
+.detect-branch-else .detect-branch-label { color: var(--rose); }
+.detect-branch-sub { font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--text-muted); }
+.detect-dropzone {
+  min-height: 46px;
+  border: 1px dashed color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap: 6px;
+  background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
+}
+.detect-dropzone.drag-over { border-color: var(--sky); background: color-mix(in srgb, var(--sky) 8%, transparent); }
+.detect-branch-empty { font-size: 11px; color: var(--text-muted); text-align: center; padding: 8px 4px; }
+.detect-advanced {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px; border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 60%, transparent);
+  border: 1px solid var(--border);
+}
+.detect-adv-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--bg-surface); }
+.detect-adv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.detect-img-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.detect-img-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;
+  padding: 2px 4px 2px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--sky) 14%, var(--bg-surface)); color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--sky) 35%, var(--border));
+}
+.detect-img-chip .chip-x { cursor: pointer; font-weight: 800; color: var(--text-muted); padding: 0 2px; }
+.detect-img-chip .chip-x:hover { color: var(--rose); }
+.detect-hint { font-size: 10.5px; color: var(--text-muted); }
+.detect-hint code {
+  font-size: 10px; padding: 0 3px; border-radius: 3px;
+  background: var(--bg-surface); color: var(--text-dim);
+}
+.detect-expr {
+  width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+  resize: vertical; min-height: 40px;
+}
+.detect-thr-slider { flex: 1; min-width: 90px; max-width: 160px; }
+.detect-thr-val, .detect-region-val { font-size: 11px; font-weight: 700; color: var(--text-dim); }
+.detect-check { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); cursor: pointer; }
+
+/* Small pill button used inside Detect controls (pick image, set region, etc.) */
+.blk-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 600; color: var(--text-dim);
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 8px; cursor: pointer; transition: border-color 0.15s, color 0.15s, transform 0.1s;
+}
+.blk-btn:hover { color: var(--text); border-color: color-mix(in srgb, var(--brand) 40%, var(--border)); }
+.blk-btn:active { transform: scale(0.95); }
+.detect-pick { color: var(--text); border-color: color-mix(in srgb, var(--sky) 45%, var(--border)); }
+.detect-pick.unset { color: var(--text-muted); border-style: dashed; }
+
+/* Image Manager: Detection Images badge, pick-mode banner, and Use button */
+.im-badge-detect { background: color-mix(in srgb, var(--sky) 22%, var(--bg-surface)); color: var(--sky); }
+.im-pick-banner { font-size: 12px; color: var(--text-dim); }
+.im-pick-banner b { color: var(--brand); }
+.im-card-use {
+  font-size: 11px; font-weight: 700; color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 14%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--brand) 40%, var(--border));
+  border-radius: 6px; padding: 2px 10px; cursor: pointer; margin-left: 4px;
+}
+.im-card-use:hover { background: var(--brand); color: #000; }

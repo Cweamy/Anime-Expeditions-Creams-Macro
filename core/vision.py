@@ -75,6 +75,21 @@ UI_ASSETS_DIR = os.path.join(constants.ASSETS_DIR, "ui")
 # map preview thumbnails, a completely different, unrelated asset set).
 MAPS_DIR = os.path.join(constants.ASSETS_DIR, "maps")
 
+# Reusable Detect-block images (Image Manager > Detection Images, see
+# main.IMAGE_MANAGER_CATEGORIES). A Detect block references a name that is
+# searched here FIRST, then falls back to Assets/ui so a Detect block can
+# also point at an existing built-in UI image without re-saving it.
+DETECT_ASSETS_DIR = os.path.join(constants.ASSETS_DIR, "detect")
+
+
+def detect_template_dir(name: str) -> str:
+    """Which template folder a Detect-block image name lives in: its own
+    Assets/detect entry when one exists, otherwise Assets/ui. Lets a Detect
+    block reuse a built-in UI image by name without copying it into detect/."""
+    if template_variant_paths(name, DETECT_ASSETS_DIR):
+        return DETECT_ASSETS_DIR
+    return UI_ASSETS_DIR
+
 # Match-score cutoff (see find_in_gray for which method this is on). Was
 # 0.74 -- too permissive: nav_start.png matched the Back button (a visually
 # generic grey/green pill with bold white text, same as most of this UI's
@@ -878,6 +893,63 @@ def find_bottommost_image(hwnd: int, name: str, region: tuple = None, threshold:
             match["cy"] += region[1]
         return match
     return None
+
+
+def find_image_all(hwnd: int, name: str, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
+                    template_dir: str = UI_ASSETS_DIR, max_results: int = 50) -> list:
+    """Every distinct on-screen location of `name` at/above threshold, best
+    score first -- for the Detect block's "show all match locations" and its
+    count() expression helper. Overlapping hits (the same button matched at
+    several adjacent pixels) are collapsed by simple distance-based
+    non-max suppression so one button counts once, not dozens of times.
+
+    Returns a list of the same match dicts find_image returns
+    ({x,y,w,h,cx,cy,score}, in `region`'s space); empty list if nothing
+    matched. Only the first (primary) variant is scanned -- the extra
+    variants exist to catch DIFFERENT renders of one button, and mixing
+    their hits into one count would double-count."""
+    templates = load_template_grays(name, template_dir)
+    haystack = capture_game_gray(hwnd, region)
+    if haystack is None:
+        return []
+    threshold = _effective_threshold(name, threshold)
+    hh, hw = haystack.shape[:2]
+    template_gray, mask = templates[0]
+    th, tw = template_gray.shape[:2]
+    if th > hh or tw > hw:
+        return []
+    if mask is not None:
+        result = cv2.matchTemplate(haystack, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
+    else:
+        result = cv2.matchTemplate(haystack, template_gray, cv2.TM_CCOEFF_NORMED)
+    result[~np.isfinite(result)] = -1
+
+    ys, xs = np.where(result >= threshold)
+    if len(ys) == 0:
+        return []
+    # Best score first so non-max suppression keeps the strongest hit of each
+    # overlapping cluster.
+    scores = result[ys, xs]
+    order = np.argsort(scores)[::-1]
+    min_dist_sq = (max(tw, th) * 0.5) ** 2
+    kept = []
+    for i in order:
+        x, y = int(xs[i]), int(ys[i])
+        if any((x - k["_rx"]) ** 2 + (y - k["_ry"]) ** 2 < min_dist_sq for k in kept):
+            continue
+        match = {"_rx": x, "_ry": y, "x": x, "y": y, "w": tw, "h": th,
+                 "cx": x + tw // 2, "cy": y + th // 2, "score": float(result[y, x])}
+        kept.append(match)
+        if len(kept) >= max_results:
+            break
+    for match in kept:
+        del match["_rx"], match["_ry"]
+        if region is not None:
+            match["x"] += region[0]
+            match["y"] += region[1]
+            match["cx"] += region[0]
+            match["cy"] += region[1]
+    return kept
 
 
 def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,

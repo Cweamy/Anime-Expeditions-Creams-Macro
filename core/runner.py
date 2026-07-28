@@ -1032,6 +1032,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
         self._battle_block_state = {}
+        # Loop A / Loop B: their own index+state, ticked and restarted every
+        # poll alongside Battle (see _tick_loop_phases).
+        loop_blocks = self._load_loop_blocks(task)
+        self._loop_runtime = {key: {"blocks": loop_blocks[key], "index": 0, "state": {}}
+                              for key in ("loop_a", "loop_b")}
         self._release_quick_place_shift()  # safety net -- never enter a match with Shift stuck down from before
         # exp_extract is a recurring checkpoint choice (Extract AND Continue
         # offered side by side), not a one-shot terminal event -- confirmed
@@ -1066,6 +1071,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat, macro_name)
                 if self._checkpoint(stop_event):
                     return None
+            # Loop phases cycle continuously for the whole match, not once
+            # through -- ticked here every poll right after Battle.
+            self._tick_loop_phases(hwnd, stop_event, first_repeat, macro_name)
+            if self._checkpoint(stop_event):
+                return None
 
             # Roblox's own Reconnect/Retry prompt can show up mid-battle too,
             # not just during the teleport-in wait -- this used to only be

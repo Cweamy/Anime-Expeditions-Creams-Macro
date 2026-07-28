@@ -3019,15 +3019,27 @@ const BLOCK_TYPES = {
   // button + an optional hold time. See renderSendKeyControls / the runner's
   // _run_send_key_tick.
   send_key:           { label: 'Send Key',          group: 'Setup',  color: 'var(--brand)', params: [{ key: 'hold_ms', type: 'number', placeholder: 'hold ms', default: 0 }] },
+  // Detect: search for an image (or a combination, or a raw condition) and run
+  // one of two nested block groups -- Then when found, Else when not. The
+  // macro's one branching block. Bespoke controls: renderDetectControls();
+  // runs via core.detect on the Python side. Allowed in both phases.
+  detect:             { label: 'Detect',            group: 'Logic',  color: 'var(--sky)',   params: [] },
 };
 
 // Two phases: Pre Start (walk to your spot, place starter units, flip any
 // settings that need to be set before the match begins -- plus Wait, for
 // pacing those against game UI that needs a beat to settle) and Battle
 // (everything else -- upgrades/sells/wave waits only make sense once it's live).
-const PHASES = ['prestart', 'battle'];
-const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle' };
-const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat' };
+// Four phases. Pre Start (walk to spot, place starters, flip settings) and
+// Battle (upgrades/sells/waits) both run ONCE through per match. Loop A and
+// Loop B run DURING the match too, but their whole list repeats continuously
+// alongside Battle -- built for polling patterns like "wait until an image
+// shows up, then do something" via the Detect block, which a once-through list
+// can't express.
+const PHASES = ['prestart', 'battle', 'loop_a', 'loop_b'];
+const PHASE_LABELS = { prestart: 'Pre Start', battle: 'Battle', loop_a: 'Loop A', loop_b: 'Loop B' };
+const PHASE_TAGS = { prestart: 'Setup', battle: 'Combat', loop_a: 'Repeats', loop_b: 'Repeats' };
+const _BATTLE_ALLOWED = Object.keys(BLOCK_TYPES).filter(t => t !== 'walk_path');
 const PHASE_ALLOWED = {
   // walk_path is deliberately in NEITHER palette: it's the one unique
   // pinned block -- every routine always has exactly one in Pre Start
@@ -3035,13 +3047,15 @@ const PHASE_ALLOWED = {
   // addable block would only create duplicates. 'walk' (replay a recorded
   // path) is a normal addable block, allowed in BOTH phases -- you can drop
   // several into Pre Start to walk between multiple starter-placement spots
-  // before the match begins.
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'click', 'wait_ms', 'send_key'],
-  battle: Object.keys(BLOCK_TYPES).filter(t => t !== 'walk_path'),
+  // before the match begins. The Loop phases take the same set as Battle.
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'click', 'wait_ms', 'send_key', 'detect'],
+  battle: _BATTLE_ALLOWED,
+  loop_a: _BATTLE_ALLOWED,
+  loop_b: _BATTLE_ALLOWED,
 };
 
-let creationPhases = { prestart: [], battle: [] };
-let phaseCollapsed = { prestart: false, battle: false };
+let creationPhases = { prestart: [], battle: [], loop_a: [], loop_b: [] };
+let phaseCollapsed = { prestart: false, battle: false, loop_a: false, loop_b: false };
 let recordingBlockId = null;
 let savedPaths = [];
 
@@ -3071,19 +3085,61 @@ function newBlockId() {
 // every handler below (remove/update/toggle) just needs the id -- this finds
 // which phase array + index actually owns it instead of threading a phase
 // argument through every call site.
+// A "container" is any list blocks live in: a phase's own list, or one branch
+// (then/else) of a Detect block. It's addressed by a string key so drag-drop
+// and rendering can pass it around and resolve it back to the array:
+//   'prestart' | 'battle'                       -- a phase's top-level list
+//   '<phase>|<detectId>|then' (repeatable)      -- a Detect branch, nestable,
+//                                                  e.g. 'battle|d1|then|d2|else'
+function containerPhase(key) { return key.split('|')[0]; }
+
+function resolveContainer(key) {
+  const parts = key.split('|');
+  let list = creationPhases[parts[0]] || null;
+  for (let i = 1; list && i + 1 < parts.length; i += 2) {
+    const b = list.find(x => x.id === parts[i] && x.type === 'detect');
+    if (!b) return null;
+    if (!Array.isArray(b[parts[i + 1]])) b[parts[i + 1]] = [];
+    list = b[parts[i + 1]];
+  }
+  return list;
+}
+
+// Recursively locate a block by id anywhere in either phase, descending into
+// Detect then/else branches. Returns { phase, idx, container, key, block }:
+// `container` is the owning array (phase list OR a branch), `idx` its index in
+// it, `phase` the owning phase (for PHASE_ALLOWED), `key` the container key.
 function findBlockLocation(id) {
   for (const phase of PHASES) {
-    const idx = creationPhases[phase].findIndex(b => b.id === id);
-    if (idx !== -1) return { phase, idx };
+    const hit = _findInContainer(creationPhases[phase], phase, id);
+    if (hit) return hit;
   }
   return null;
 }
 
-function addBlock(type, phase, atIndex) {
+function _findInContainer(list, key, id) {
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (b.id === id) return { phase: containerPhase(key), idx: i, container: list, key, block: b };
+    if (b.type === 'detect') {
+      for (const branch of ['then', 'else']) {
+        const hit = _findInContainer(b[branch] || [], `${key}|${b.id}|${branch}`, id);
+        if (hit) return hit;
+      }
+    }
+  }
+  return null;
+}
+
+// `key` is a container key (a phase, or a Detect branch -- see
+// findBlockLocation). Palette clicks pass a bare phase; drops pass whichever
+// container was dropped into.
+function addBlock(type, key, atIndex) {
   const def = BLOCK_TYPES[type];
   if (!def) return;
-  if (!PHASE_ALLOWED[phase].includes(type)) {
-    addLog(`[Macro Manager] "${def.label}" can't go in Pre Start -- it belongs in Battle.`);
+  const phase = containerPhase(key);
+  if (!allowedInContainer(type, key)) {
+    addLog(`[Macro Manager] "${def.label}" can't go in ${PHASE_LABELS[phase] || phase}.`);
     return;
   }
   const params = {};
@@ -3099,7 +3155,14 @@ function addBlock(type, phase, atIndex) {
   if (type === 'auto_upgrade_unit') { block.params.index = ''; block.params.priority = 1; }
   if (type === 'sell_unit') { block.params.index = ''; }
   if (type === 'target_priority') { block.params.index = ''; block.params.priority = 'Boss'; }
-  const list = creationPhases[phase];
+  if (type === 'detect') {
+    Object.assign(block, {
+      image: '', advanced: false, mode: 'single', images: [], logic: 'and',
+      expr: '', region: null, threshold: null, showAll: false, then: [], else: [],
+    });
+  }
+  const list = resolveContainer(key);
+  if (!list) return;
   if (atIndex == null) list.push(block);
   else list.splice(atIndex, 0, block);
   renderPhases();
@@ -3112,7 +3175,7 @@ function removeBlock(id) {
   // The pinned Walk Path renders without a remove button at all (see
   // renderBlockRow's isPinnedWalk) -- this guard just backs that up so no
   // other path can strip the one block every routine must keep.
-  const b = creationPhases[loc.phase][loc.idx];
+  const b = loc.container[loc.idx];
   if (b.type === 'walk_path' && loc.phase === 'prestart'
       && creationPhases.prestart.filter(x => x.type === 'walk_path').length <= 1) {
     return;
@@ -3129,7 +3192,7 @@ function removeBlock(id) {
     // already filters by id for exactly this reason.
     const cur = findBlockLocation(id);
     if (!cur) return;                       // already gone -- nothing to do
-    creationPhases[cur.phase].splice(cur.idx, 1);
+    cur.container.splice(cur.idx, 1);
     renderPhases();
   };
   // Let the exit animation play before the row actually disappears. 180ms is
@@ -3143,16 +3206,29 @@ function removeBlock(id) {
 function cloneBlock(id) {
   const loc = findBlockLocation(id);
   if (!loc) return;
-  const src = creationPhases[loc.phase][loc.idx];
-  const copy = { ...src, id: newBlockId(), params: { ...src.params } };
+  const copy = deepCloneBlock(loc.block);
   enteringBlockIds.add(copy.id);
-  creationPhases[loc.phase].splice(loc.idx + 1, 0, copy);
+  loc.container.splice(loc.idx + 1, 0, copy);
   renderPhases();
+}
+
+// A fresh-id copy of a block. Detect blocks recurse into then/else so the
+// clone's nested blocks get their own ids too (sharing the arrays would make
+// edits to one copy silently change the other).
+function deepCloneBlock(src) {
+  const copy = { ...src, id: newBlockId(), params: { ...src.params } };
+  if (src.type === 'detect') {
+    copy.images = [...(src.images || [])];
+    copy.region = src.region ? { ...src.region } : null;
+    copy.then = (src.then || []).map(deepCloneBlock);
+    copy.else = (src.else || []).map(deepCloneBlock);
+  }
+  return copy;
 }
 
 function updateBlockParam(id, key, value) {
   const loc = findBlockLocation(id);
-  if (loc) creationPhases[loc.phase][loc.idx].params[key] = value;
+  if (loc) loc.container[loc.idx].params[key] = value;
 }
 
 // "Once" -- a block flagged this way only runs the first time the routine
@@ -3160,7 +3236,7 @@ function updateBlockParam(id, key, value) {
 // happen again every loop).
 function toggleBlockOnce(id) {
   const loc = findBlockLocation(id);
-  if (loc) creationPhases[loc.phase][loc.idx].once = !creationPhases[loc.phase][loc.idx].once;
+  if (loc) loc.container[loc.idx].once = !loc.container[loc.idx].once;
   renderPhases();
 }
 
@@ -3172,7 +3248,7 @@ function toggleBlockOnce(id) {
 function toggleIgnoreHighlight(id) {
   const loc = findBlockLocation(id);
   if (!loc) return;
-  const block = creationPhases[loc.phase][loc.idx];
+  const block = loc.container[loc.idx];
   block.ignoreHighlight = !block.ignoreHighlight;
   renderPhases();
 }
@@ -3182,7 +3258,7 @@ function toggleIgnoreHighlight(id) {
 function toggleRetryUntilPlaced(id) {
   const loc = findBlockLocation(id);
   if (!loc) return;
-  const block = creationPhases[loc.phase][loc.idx];
+  const block = loc.container[loc.idx];
   block.retryUntilPlaced = !block.retryUntilPlaced;
   renderPhases();
 }
@@ -3428,7 +3504,7 @@ async function savePathName() {
       await refreshSavedPaths();
       const loc = pendingRecordingTarget ? findBlockLocation(pendingRecordingTarget) : null;
       if (loc) {
-        const block = creationPhases[loc.phase][loc.idx];
+        const block = loc.container[loc.idx];
         if (block.type === 'walk_path') { block.mode = 'custom'; block.pathName = result.name; }
         else block.params.path = result.name;
       }
@@ -3495,7 +3571,7 @@ function renderParamInput(b, p) {
 function setSettingKind(id, kind) {
   const loc = findBlockLocation(id);
   if (!loc) return;
-  const b = creationPhases[loc.phase][loc.idx];
+  const b = loc.container[loc.idx];
   b.kind = kind;
   b.value = kind === 'toggle' ? 'off' : '';
   renderPhases();
@@ -3503,7 +3579,7 @@ function setSettingKind(id, kind) {
 
 function setSettingValue(id, value) {
   const loc = findBlockLocation(id);
-  if (loc) creationPhases[loc.phase][loc.idx].value = value;
+  if (loc) loc.container[loc.idx].value = value;
 }
 
 // Place Unit's hotkey field still uses real key-CAPTURE (press a key, it's
@@ -3528,7 +3604,7 @@ document.addEventListener('keydown', (e) => {
   const loc = findBlockLocation(blockId);
   // Esc clears the field (same convention as the Settings > Hotkeys capture)
   // rather than binding the Esc key itself.
-  if (loc) creationPhases[loc.phase][loc.idx][field] = e.key === 'Escape' ? '' : mapKeyName(e);
+  if (loc) loc.container[loc.idx][field] = e.key === 'Escape' ? '' : mapKeyName(e);
   renderPhases();
 });
 
@@ -3642,7 +3718,7 @@ function sprintToggle(b) {
 function toggleSprint(id) {
   const loc = findBlockLocation(id);
   if (!loc) return;
-  const block = creationPhases[loc.phase][loc.idx];
+  const block = loc.container[loc.idx];
   block.sprint = !block.sprint;
   renderPhases();
 }
@@ -3671,14 +3747,14 @@ function renderWalkPathControls(b) {
 function setWalkPathMode(id, mode) {
   const loc = findBlockLocation(id);
   if (!loc) return;
-  creationPhases[loc.phase][loc.idx].mode = mode;
+  loc.container[loc.idx].mode = mode;
   renderPhases();
 }
 
 function setWalkPathPath(id, name) {
   const loc = findBlockLocation(id);
   if (!loc) return;
-  creationPhases[loc.phase][loc.idx].pathName = name;
+  loc.container[loc.idx].pathName = name;
   renderPhases();
 }
 
@@ -3688,13 +3764,16 @@ function setWalkPathPath(id, name) {
 function listPlacedUnits() {
   const out = [];
   let n = 0;
-  for (const phase of PHASES) {
-    for (const b of creationPhases[phase]) {
-      if (b.type !== 'place_unit') continue;
-      n++;
-      out.push({ n, name: b.params.name || '' });
+  // Numbered in the same static order core.detect.flatten stamps _ordinal:
+  // both phases in order, descending into each Detect's then before its else,
+  // so "unit #N" means the same placement in the editor and at runtime.
+  const walk = (list) => {
+    for (const b of list) {
+      if (b.type === 'place_unit') { n++; out.push({ n, name: b.params.name || '' }); }
+      else if (b.type === 'detect') { walk(b.then || []); walk(b.else || []); }
     }
-  }
+  };
+  for (const phase of PHASES) walk(creationPhases[phase]);
   return out;
 }
 
@@ -3745,8 +3824,13 @@ function renderTargetPriorityControls(b) {
     + blkField('Target', `<select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'priority', this.value)">${options}</select>`);
 }
 
-function renderBlockRow(b, phase) {
+// `key` is the container key the block lives in (a phase, or a Detect branch
+// -- see findBlockLocation), threaded through every drag/drop handler so a row
+// knows which list it belongs to.
+function renderBlockRow(b, key) {
   const def = BLOCK_TYPES[b.type];
+  const phase = containerPhase(key);
+  if (b.type === 'detect') return renderDetectRow(b, key);
   // place_unit and click render ALL their fields bespoke (labeled X/Y +
   // the Set picker button) -- the generic anonymous param inputs would
   // duplicate them.
@@ -3776,8 +3860,8 @@ function renderBlockRow(b, phase) {
   if (isPinnedWalk) {
     return `
     <div class="block-row pinned${entering}" style="--blk: ${def.color};" data-id="${b.id}"
-         ondragover="onBlockRowDragOver(event, '${phase}', '${b.id}')"
-         ondrop="onBlockDrop(event, '${phase}', '${b.id}')">
+         ondragover="onBlockRowDragOver(event, '${key}', '${b.id}')"
+         ondrop="onBlockDrop(event, '${key}', '${b.id}')">
       <svg class="pinned-walk-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
         <circle cx="12" cy="10" r="3"/>
@@ -3792,9 +3876,9 @@ function renderBlockRow(b, phase) {
   const onceBtn = `<button type="button" class="block-mod-btn ${b.once ? 'on' : ''}" onclick="toggleBlockOnce('${b.id}')" title="Only run this block once, even if the routine repeats">Once</button>`;
   return `
     <div class="block-row${entering}" style="--blk: ${def.color};" draggable="true" data-id="${b.id}"
-         ondragstart="if (['INPUT','SELECT','BUTTON'].includes(event.target.tagName)) { event.preventDefault(); return false; } event.dataTransfer.setData('block-reorder', '${b.id}')"
-         ondragover="onBlockRowDragOver(event, '${phase}', '${b.id}')"
-         ondrop="onBlockDrop(event, '${phase}', '${b.id}')">
+         ondragstart="event.stopPropagation(); if (['INPUT','SELECT','BUTTON','TEXTAREA'].includes(event.target.tagName)) { event.preventDefault(); return false; } event.dataTransfer.setData('block-reorder', '${b.id}')"
+         ondragover="onBlockRowDragOver(event, '${key}', '${b.id}')"
+         ondrop="onBlockDrop(event, '${key}', '${b.id}')">
       <span class="block-drag-handle">&#8942;&#8942;</span>
       <span class="block-label">${def.label}</span>
       ${inputs}
@@ -3806,6 +3890,211 @@ function renderBlockRow(b, phase) {
       </div>
     </div>
   `;
+}
+
+// A Detect block: a header (image/condition controls + advanced panel) over
+// two nested drop-zones -- Then (found) and Else (not found). Each branch is a
+// real container (see findBlockLocation) so blocks drag into and out of it.
+function renderDetectRow(b, key) {
+  const def = BLOCK_TYPES.detect;
+  const entering = enteringBlockIds.has(b.id) ? ' entering' : '';
+  return `
+    <div class="block-row block-detect${entering}" style="--blk: ${def.color};" draggable="true" data-id="${b.id}"
+         ondragstart="event.stopPropagation(); if (['INPUT','SELECT','BUTTON','TEXTAREA'].includes(event.target.tagName)) { event.preventDefault(); return false; } event.dataTransfer.setData('block-reorder', '${b.id}')"
+         ondragover="onBlockRowDragOver(event, '${key}', '${b.id}')"
+         ondrop="onBlockDrop(event, '${key}', '${b.id}')">
+      <div class="detect-head">
+        <span class="block-drag-handle">&#8942;&#8942;</span>
+        <span class="block-label">${def.label}</span>
+        ${renderDetectControls(b)}
+        <span class="flex-1"></span>
+        <div class="block-actions">
+          <span class="block-clone" onclick="cloneBlock('${b.id}')" data-tooltip="Clone">&#10697;</span>
+          <span class="block-delete" onclick="removeBlock('${b.id}')" data-tooltip="Remove">&times;</span>
+        </div>
+      </div>
+      <div class="detect-branches">
+        ${renderDetectBranch(b, key, 'then', 'Then', 'found')}
+        ${renderDetectBranch(b, key, 'else', 'Else', 'not found')}
+      </div>
+    </div>
+  `;
+}
+
+function renderDetectBranch(b, key, branch, label, sub) {
+  const childKey = `${key}|${b.id}|${branch}`;
+  const kids = b[branch] || [];
+  const body = kids.length
+    ? kids.map(k => renderBlockRow(k, childKey)).join('')
+    : `<div class="detect-branch-empty">Drag blocks here</div>`;
+  return `
+    <div class="detect-branch detect-branch-${branch}">
+      <div class="detect-branch-label">${label} <span class="detect-branch-sub">${sub}</span></div>
+      <div id="creation-canvas-${childKey}" class="canvas-dropzone detect-dropzone"
+           ondragover="onCanvasDragOver(event, '${childKey}')"
+           ondragleave="onCanvasDragLeave(event, '${childKey}')"
+           ondrop="onCanvasDrop(event, '${childKey}')">${body}</div>
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// Detect block controls (header)
+// ---------------------------------------------------------------------------
+function detectBlock(id) {
+  const loc = findBlockLocation(id);
+  return loc && loc.block.type === 'detect' ? loc.block : null;
+}
+
+function renderDetectControls(b) {
+  const advBtn = `<button type="button" class="block-mod-btn ${b.advanced ? 'on' : ''}" onclick="toggleDetectAdvanced('${b.id}')" title="Multiple images, a search region, a match threshold, or a raw condition">Advanced</button>`;
+  if (!b.advanced) return `<div class="detect-controls">${renderDetectImagePick(b)}${advBtn}</div>`;
+  return `<div class="detect-controls">${advBtn}</div>${renderDetectAdvanced(b)}`;
+}
+
+function renderDetectImagePick(b) {
+  const label = b.image ? escapeHtml(b.image) : 'Pick image…';
+  return `<button type="button" class="blk-btn detect-pick ${b.image ? '' : 'unset'}" onclick="openDetectImagePicker('${b.id}')">
+    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <span>${label}</span></button>`;
+}
+
+const DETECT_MODES = [['single', 'One image'], ['multi', 'Many images'], ['expr', 'Condition']];
+
+function renderDetectAdvanced(b) {
+  const modeSeg = DETECT_MODES.map(([m, lbl]) =>
+    `<button type="button" class="seg-btn ${b.mode === m ? 'active' : ''}" onclick="setDetectMode('${b.id}', '${m}')">${lbl}</button>`).join('');
+  let cond = '';
+  if (b.mode === 'multi') cond = renderDetectMulti(b);
+  else if (b.mode === 'expr') cond = renderDetectExpr(b);
+  else cond = blkField('Image', renderDetectImagePick(b));
+  const region = b.region
+    ? `${b.region.x}, ${b.region.y} · ${b.region.w}×${b.region.h}`
+    : 'Whole screen';
+  const regionRow = blkField('Region', `<span class="detect-region-val">${region}</span>
+    <button type="button" class="blk-btn" onclick="openDetectRegionPicker('${b.id}')">Set</button>
+    ${b.region ? `<button type="button" class="blk-btn" onclick="clearDetectRegion('${b.id}')">Clear</button>` : ''}`);
+  const pct = Math.round((b.threshold == null ? 0.90 : b.threshold) * 100);
+  const thrRow = blkField('Threshold', `
+    <input type="range" min="50" max="100" value="${pct}" class="detect-thr-slider"
+           oninput="updateDetectThresholdLive('${b.id}', this.value)"
+           onchange="setDetectThreshold('${b.id}', this.value / 100)">
+    <span class="detect-thr-val" id="detect-thr-${b.id}">${b.threshold == null ? 'default' : pct + '%'}</span>
+    ${b.threshold == null ? '' : `<button type="button" class="blk-btn" onclick="clearDetectThreshold('${b.id}')">Default</button>`}`);
+  const showAll = `<label class="detect-check"><input type="checkbox" ${b.showAll ? 'checked' : ''} onchange="toggleDetectShowAll('${b.id}')"> Log every match location</label>`;
+  return `<div class="detect-advanced">
+    <div class="detect-adv-seg">${modeSeg}</div>
+    ${cond}${regionRow}${thrRow}
+    <div class="detect-adv-row">${showAll}</div>
+  </div>`;
+}
+
+function renderDetectMulti(b) {
+  const chips = (b.images || []).map((n, i) =>
+    `<span class="detect-img-chip">${escapeHtml(n)}<span class="chip-x" onclick="removeDetectImage('${b.id}', ${i})" title="Remove">&times;</span></span>`).join('');
+  const add = `<button type="button" class="blk-btn" onclick="openDetectImagePicker('${b.id}')">+ image</button>`;
+  const logic = ['and', 'or'].map(l =>
+    `<button type="button" class="seg-btn ${(b.logic || 'and') === l ? 'active' : ''}" onclick="setDetectLogic('${b.id}', '${l}')">${l.toUpperCase()}</button>`).join('');
+  return blkField('Images', `<div class="detect-img-list">${chips || '<span class="detect-hint">none yet</span>'}${add}</div>`)
+    + blkField('Match', `<div class="detect-adv-seg">${logic}</div><span class="detect-hint">${(b.logic || 'and') === 'and' ? 'all must be found' : 'any one found'}</span>`);
+}
+
+function renderDetectExpr(b) {
+  return blkField('Condition', `
+    <textarea class="block-input detect-expr" rows="2" placeholder="find('boss') and not find('shield')"
+              oninput="updateDetectExpr('${b.id}', this.value)">${escapeHtml(b.expr || '')}</textarea>
+    <span class="detect-hint">Use <code>find('name')</code> and <code>count('name')</code> with <code>and</code>, <code>or</code>, <code>not</code>, and comparisons.</span>`);
+}
+
+function toggleDetectAdvanced(id) {
+  const b = detectBlock(id); if (!b) return;
+  b.advanced = !b.advanced;
+  if (!b.advanced) b.mode = 'single';  // basic mode is always single-image
+  renderPhases();
+}
+function setDetectMode(id, mode) { const b = detectBlock(id); if (b) { b.mode = mode; renderPhases(); } }
+function setDetectLogic(id, logic) { const b = detectBlock(id); if (b) { b.logic = logic; renderPhases(); } }
+function toggleDetectShowAll(id) { const b = detectBlock(id); if (b) { b.showAll = !b.showAll; renderPhases(); } }
+function removeDetectImage(id, i) { const b = detectBlock(id); if (b) { (b.images || []).splice(i, 1); renderPhases(); } }
+function updateDetectExpr(id, val) { const b = detectBlock(id); if (b) b.expr = val; }  // no re-render -- keep textarea focus
+function clearDetectRegion(id) { const b = detectBlock(id); if (b) { b.region = null; renderPhases(); } }
+function clearDetectThreshold(id) { const b = detectBlock(id); if (b) { b.threshold = null; renderPhases(); } }
+function setDetectThreshold(id, val) {
+  const b = detectBlock(id); if (!b) return;
+  b.threshold = val == null ? null : Math.max(0.5, Math.min(1, Number(val)));
+  renderPhases();
+}
+function updateDetectThresholdLive(id, val) {  // slider drag: update label only, no re-render
+  const b = detectBlock(id); if (!b) return;
+  b.threshold = Math.max(0.5, Math.min(1, Number(val) / 100));
+  const lab = document.getElementById('detect-thr-' + id);
+  if (lab) lab.textContent = Math.round(Number(val)) + '%';
+}
+
+// Image + region pickers reuse the Image Manager's capture/crop canvas.
+let detectPickTarget = null;    // { blockId, multi } while picking an image
+let detectRegionTarget = null;  // blockId while picking a region
+
+function openDetectImagePicker(id) {
+  const b = detectBlock(id); if (!b) return;
+  detectPickTarget = { blockId: id, multi: b.mode === 'multi' };
+  detectRegionTarget = null;
+  imState.saveCategory = 'detect';  // new crops saved here land in Detection Images
+  openImageManager();
+}
+
+function useDetectImage(name) {
+  if (!detectPickTarget) return;
+  const b = detectBlock(detectPickTarget.blockId);
+  if (!b) { detectPickTarget = null; return; }
+  if (detectPickTarget.multi) {
+    b.images = b.images || [];
+    if (!b.images.includes(name)) b.images.push(name);
+    renderPhases();
+    refreshImageManagerData();  // stay open -- multi usually adds several
+  } else {
+    b.image = name;
+    detectPickTarget = null;
+    closeImageManager();
+    renderPhases();
+  }
+}
+
+function openDetectRegionPicker(id) {
+  const b = detectBlock(id); if (!b) return;
+  detectRegionTarget = id;
+  detectPickTarget = null;
+  imState.saveCategory = 'detect';
+  openImageManager();
+  addLog('[Detect] Capture the screen, drag a box around the search area, then click "Use as region".');
+}
+
+// Shows the "Use as region" button in the capture view only while a Detect
+// block is waiting for a region.
+function updateDetectRegionButton() {
+  const btn = document.getElementById('im-use-region-btn');
+  if (btn) btn.style.display = detectRegionTarget ? '' : 'none';
+}
+
+function useDetectRegion() {
+  if (!detectRegionTarget || !imState.sel || !imState.naturalW || !imState.naturalH) {
+    addLog('[Detect] Capture the screen and drag a box first, then click "Use as region".');
+    return;
+  }
+  const b = detectBlock(detectRegionTarget);
+  if (!b) { detectRegionTarget = null; return; }
+  // imState.sel is in capture-image pixels; vision regions are in the fixed
+  // 1152x756 client reference space (see core.vision region usage), so
+  // normalize before storing.
+  const sx = 1152 / imState.naturalW, sy = 756 / imState.naturalH;
+  const s = imState.sel;
+  b.region = {
+    x: Math.round(s.x * sx), y: Math.round(s.y * sy),
+    w: Math.round(s.w * sx), h: Math.round(s.h * sy),
+  };
+  detectRegionTarget = null;
+  closeImageManager();
+  renderPhases();
 }
 
 // ---------------------------------------------------------------------------
@@ -3864,7 +4153,7 @@ async function openPlaceUnitModal(blockId) {
   const reqId = ++puRequestId;
   const loc = findBlockLocation(blockId);
   if (!loc) return;
-  const b = creationPhases[loc.phase][loc.idx];
+  const b = loc.container[loc.idx];
   puState.blockId = blockId;
   puState.markX = b.params.x || null;
   puState.markY = b.params.y || null;
@@ -4185,7 +4474,7 @@ function applyPlaceUnitPosition() {
   if (!puState.blockId) return;
   const loc = findBlockLocation(puState.blockId);
   if (!loc) return;
-  const b = creationPhases[loc.phase][loc.idx];
+  const b = loc.container[loc.idx];
   b.params.x = puState.markX;
   b.params.y = puState.markY;
   document.getElementById('pu-pos-readout').textContent = `X ${puState.markX}, Y ${puState.markY}`;
@@ -4376,9 +4665,12 @@ function mapCardNames() {
 // UI, the folder the vast majority of searched images live in.
 function categoryForName(name) {
   const cats = imState.data || [];
-  const inUi = (cats.find(c => c.key === 'ui')?.names || []).some(n => n.name === name);
-  const inMaps = (cats.find(c => c.key === 'maps')?.names || []).some(n => n.name === name);
-  return (inMaps && !inUi) ? 'maps' : 'ui';
+  const inCat = (key) => (cats.find(c => c.key === key)?.names || []).some(n => n.name === name);
+  const inUi = inCat('ui');
+  // A detect-only name routes to detect; a name already in detect keeps going
+  // there. Otherwise fall back to the old ui/maps rule.
+  if (inCat('detect') && !inUi) return 'detect';
+  return (inCat('maps') && !inUi) ? 'maps' : 'ui';
 }
 
 // Hotkey entry point (Settings > Hotkeys > Image Manager, default F6,
@@ -4410,6 +4702,8 @@ function closeImageManager() {
   document.getElementById('im-modal').style.display = 'none';
   imState.image = null;
   imState.sel = null;
+  detectPickTarget = null;    // picking is only in effect while the manager is open
+  detectRegionTarget = null;
   restoreGameIfDashboard();  // closed while on the Dashboard (e.g. via the F6/F4 hotkeys) -- bring the game back
 }
 
@@ -4434,10 +4728,21 @@ function renderImageManagerTabs() {
   // (renderImageLibrary), each card badged with where it's used, so there's
   // no tab to pick wrong. This spot now just holds the badge legend.
   const el = document.getElementById('im-category-tabs');
+  // While a Detect block is picking, the legend turns into a clear "you're
+  // choosing an image/region" banner instead.
+  if (detectPickTarget) {
+    el.innerHTML = `<span class="im-pick-banner">Pick an image for the Detect block — click <b>Use</b> on a card${detectPickTarget.multi ? ' (add as many as you like)' : ''}, or capture a new one below.</span>`;
+    return;
+  }
+  if (detectRegionTarget) {
+    el.innerHTML = `<span class="im-pick-banner">Capturing a Detect search region — Capture Roblox, drag a box, then click <b>Use as region</b>.</span>`;
+    return;
+  }
   el.innerHTML =
     `<span class="im-legend">` +
     `<span class="im-badge im-badge-ui">UI</span>in-game buttons &amp; screens` +
     `<span class="im-badge im-badge-map">Map</span>map-select cards` +
+    `<span class="im-badge im-badge-detect">Detect</span>Detect block images` +
     `</span>`;
 }
 
@@ -4500,8 +4805,9 @@ function renderImageLibrary() {
     // (map-select carousel cards). This is the whole point of the combined
     // list: the same map name exists in both folders for different jobs.
     const badge = document.createElement('span');
-    badge.className = `im-badge im-badge-${catKey === 'maps' ? 'map' : 'ui'}`;
-    badge.textContent = catKey === 'maps' ? 'Map' : 'UI';
+    const badgeKind = catKey === 'maps' ? 'map' : catKey === 'detect' ? 'detect' : 'ui';
+    badge.className = `im-badge im-badge-${badgeKind}`;
+    badge.textContent = catKey === 'maps' ? 'Map' : catKey === 'detect' ? 'Detect' : 'UI';
     const label = document.createElement('span');
     label.className = 'im-card-name';
     label.textContent = n.name;
@@ -4519,6 +4825,17 @@ function renderImageLibrary() {
     head.appendChild(label);
     head.appendChild(count);
     head.appendChild(add);
+    // When a Detect block opened the manager to pick an image, every card
+    // gets a Use button that drops that name into the block.
+    if (detectPickTarget) {
+      const use = document.createElement('button');
+      use.type = 'button';
+      use.className = 'im-card-use';
+      use.textContent = 'Use';
+      use.title = `Use "${n.name}" in this Detect block`;
+      use.addEventListener('click', () => useDetectImage(n.name));
+      head.appendChild(use);
+    }
     card.appendChild(head);
 
     // One-line "what this is for" so nobody has to guess what nav_unitmanager
@@ -4681,6 +4998,7 @@ async function startImageCapture(prefillName, catKey) {
     document.getElementById('im-library').style.display = 'none';
     document.getElementById('im-capture-wrap').style.display = '';
     document.getElementById('im-crop-readout').textContent = 'No selection';
+    updateDetectRegionButton();  // reveal "Use as region" if a Detect block is picking one
     drawImageCanvas();
   };
   img.src = result.data_uri;
@@ -4947,6 +5265,8 @@ function renderPhases() {
     const blocks = creationPhases[phase];
     const emptyText = phase === 'prestart'
       ? 'Drag Place Unit, Setting, Auto Upgrade Unit, Click, or Wait blocks here -- only those are possible before the match starts.'
+      : (phase === 'loop_a' || phase === 'loop_b')
+      ? 'Drag blocks here -- this list repeats over and over during the match. Pair a Detect block with a Wait to "watch for an image, then act".'
       : 'Drag blocks here -- upgrades, sells, waits, clicks, anything goes mid-battle.';
     const emptyDiv = `<div class="text-xs text-center" style="color: var(--text-muted); padding: 16px 0;">${emptyText}</div>`;
     // Pre Start always holds at least the pinned Walk Path (see the
@@ -4967,7 +5287,7 @@ function renderPhases() {
             <polyline points="6 9 12 15 18 9"/>
           </svg>
           ${PHASE_LABELS[phase]}
-          <span class="rp-head-tag" style="--rp-tag: ${phase === 'prestart' ? 'var(--teal)' : 'var(--rose)'}; margin-left: 2px;">${PHASE_TAGS[phase]}</span>
+          <span class="rp-head-tag" style="--rp-tag: ${phase === 'prestart' ? 'var(--teal)' : (phase === 'loop_a' || phase === 'loop_b') ? 'var(--sky)' : 'var(--rose)'}; margin-left: 2px;">${PHASE_TAGS[phase]}</span>
           <span class="phase-count">${blockCount}</span>
         </div>
         <div id="creation-canvas-${phase}" class="canvas-dropzone p-2"
@@ -5018,7 +5338,10 @@ function onPlaceholderDrop(e) {
   const placeholder = blockDropPlaceholder;
   const zone = placeholder && placeholder.parentElement;
   if (!zone) { removeBlockDropPlaceholder(); return; }
-  const phase = zone.id === 'creation-canvas-prestart' ? 'prestart' : 'battle';
+  // The zone id is `creation-canvas-<containerKey>` -- recover the key so a
+  // drop on the placeholder inside a Detect branch lands in that branch.
+  const prefix = 'creation-canvas-';
+  const key = zone.id.startsWith(prefix) ? zone.id.slice(prefix.length) : 'battle';
   let toIdx = 0;
   for (const child of zone.children) {
     if (child === placeholder) break;
@@ -5027,9 +5350,9 @@ function onPlaceholderDrop(e) {
   removeBlockDropPlaceholder();
 
   const newType = e.dataTransfer.getData('block-type');
-  if (newType) { addBlock(newType, phase, toIdx); return; }
+  if (newType) { addBlock(newType, key, toIdx); return; }
   const draggedId = e.dataTransfer.getData('block-reorder');
-  if (draggedId) moveBlockToPhase(draggedId, phase, toIdx);
+  if (draggedId) moveBlockToContainer(draggedId, key, toIdx);
 }
 
 function openBlockDropPlaceholder() {
@@ -5066,9 +5389,10 @@ function onBlockRowDragOver(e, phase, targetId) {
   openBlockDropPlaceholder();
 }
 
-function onCanvasDragOver(e, phase) {
+function onCanvasDragOver(e, key) {
   e.preventDefault();
-  const zone = document.getElementById(`creation-canvas-${phase}`);
+  const zone = document.getElementById(`creation-canvas-${key}`);
+  if (!zone) return;
   zone.classList.add('drag-over');
   // Only claim the placeholder here when the cursor isn't over a specific
   // row -- each row's own dragover (onBlockRowDragOver) already places it
@@ -5080,67 +5404,80 @@ function onCanvasDragOver(e, phase) {
   }
 }
 
-function onCanvasDragLeave(e, phase) {
-  const zone = document.getElementById(`creation-canvas-${phase}`);
+function onCanvasDragLeave(e, key) {
+  const zone = document.getElementById(`creation-canvas-${key}`);
+  if (!zone) return;
   zone.classList.remove('drag-over');
   // relatedTarget is where the pointer moved TO -- still inside the zone
   // (e.g. onto a child row) isn't actually leaving it, just bubbling.
   if (!zone.contains(e.relatedTarget)) removeBlockDropPlaceholder();
 }
 
-function onCanvasDrop(e, phase) {
+function onCanvasDrop(e, key) {
   e.preventDefault();
-  document.getElementById(`creation-canvas-${phase}`).classList.remove('drag-over');
+  e.stopPropagation();  // a branch dropzone must not also trigger its parent's
+  const zone = document.getElementById(`creation-canvas-${key}`);
+  if (zone) zone.classList.remove('drag-over');
   removeBlockDropPlaceholder();
   const type = e.dataTransfer.getData('block-type');
-  if (type) { addBlock(type, phase); return; }
+  if (type) { addBlock(type, key); return; }
   const draggedId = e.dataTransfer.getData('block-reorder');
-  if (draggedId) moveBlockToPhase(draggedId, phase, null);
+  if (draggedId) moveBlockToContainer(draggedId, key, null);
 }
 
-// Moves an existing block (same-phase reorder OR a cross-phase drag, e.g.
-// a Setting block from Pre Start into Battle) -- destination still has to
-// allow the block's type, same rule addBlock enforces for palette drops.
-// toIdx is the destination index computed BEFORE the source is removed
-// (null = end of list).
-function moveBlockToPhase(id, phase, toIdx) {
+// Moves an existing block to another container (a phase reorder, a cross-phase
+// drag, or into/out of a Detect then/else branch). The destination must allow
+// the block's type (same rule addBlock enforces), and a Detect block can't be
+// dropped inside one of its own branches. toIdx is computed BEFORE the source
+// is removed (null = end of list).
+function moveBlockToContainer(id, key, toIdx) {
   const loc = findBlockLocation(id);
   if (!loc) return;
-  const b = creationPhases[loc.phase][loc.idx];
-  if (loc.phase !== phase && !PHASE_ALLOWED[phase].includes(b.type)) {
-    addLog(`[Macro Manager] "${BLOCK_TYPES[b.type].label}" can't go in ${PHASE_LABELS[phase]}.`);
+  const b = loc.block;
+  const phase = containerPhase(key);
+  if (!allowedInContainer(b.type, key)) {
+    addLog(`[Macro Manager] "${BLOCK_TYPES[b.type].label}" can't go in ${PHASE_LABELS[phase] || phase}.`);
     return;
   }
+  // Dropping a Detect into its own then/else (directly or nested) would make
+  // it contain itself -- the key carries every ancestor Detect's id, so this
+  // catches it at any depth.
+  if (b.type === 'detect' && key.split('|').includes(id)) return;
+  const dest = resolveContainer(key);
+  if (!dest) return;
   // Same-list reorder where the drop target sits AT OR AFTER the dragged
-  // block's own current spot: toIdx was computed against the list as it
-  // looked before the splice below removes the source, so once that
-  // removal shifts everything after it back by one, toIdx has to shift
-  // down by one too or the insert lands one slot too early -- in the
-  // worst case (dropping just below where the block already was) that
-  // puts it right back where it started, looking like the drop did
-  // nothing at all despite the placeholder showing it landing correctly.
-  if (loc.phase === phase && toIdx != null && toIdx > loc.idx) {
-    toIdx -= 1;
-  }
-  creationPhases[loc.phase].splice(loc.idx, 1);
-  const list = creationPhases[phase];
-  if (toIdx == null || toIdx === -1) list.push(b);
-  else list.splice(toIdx, 0, b);
+  // block's own current spot: toIdx was computed against the list before the
+  // splice below removes the source, so once that removal shifts everything
+  // after it back by one, toIdx has to shift down too or the insert lands one
+  // slot early -- worst case, right back where it started.
+  if (loc.container === dest && toIdx != null && toIdx > loc.idx) toIdx -= 1;
+  loc.container.splice(loc.idx, 1);
+  if (toIdx == null || toIdx === -1) dest.push(b);
+  else dest.splice(toIdx, 0, b);
   renderPhases();
 }
 
-function onBlockDrop(e, phase, targetId) {
+// Which block types a container accepts: a phase's own PHASE_ALLOWED for its
+// top-level list; a Detect branch takes anything its owning phase's Battle-
+// style set allows (everything except the pinned Walk Path).
+function allowedInContainer(type, key) {
+  if (key.indexOf('|') === -1) return PHASE_ALLOWED[key].includes(type);
+  return type !== 'walk_path';
+}
+
+function onBlockDrop(e, key, targetId) {
   e.preventDefault();
   e.stopPropagation();
   const dropAfter = e.currentTarget.dataset.dropAfter === '1';
   removeBlockDropPlaceholder();
 
-  const list = creationPhases[phase];
+  const list = resolveContainer(key);
+  if (!list) return;
   const newType = e.dataTransfer.getData('block-type');
   if (newType) {
     let toIdx = list.findIndex(b => b.id === targetId);
     if (toIdx !== -1 && dropAfter) toIdx += 1;
-    addBlock(newType, phase, toIdx === -1 ? null : toIdx);
+    addBlock(newType, key, toIdx === -1 ? null : toIdx);
     return;
   }
 
@@ -5148,7 +5485,7 @@ function onBlockDrop(e, phase, targetId) {
   if (!draggedId || draggedId === targetId) return;
   let toIdx = list.findIndex(b => b.id === targetId);
   if (toIdx !== -1 && dropAfter) toIdx += 1;
-  moveBlockToPhase(draggedId, phase, toIdx === -1 ? null : toIdx);
+  moveBlockToContainer(draggedId, key, toIdx === -1 ? null : toIdx);
 }
 
 // No more separate top-level "walk" config -- Walk Path is a real block
@@ -5156,14 +5493,31 @@ function onBlockDrop(e, phase, targetId) {
 // every other block's own fields.
 function currentCreationPayload() {
   const payload = { team: creationTeam, equipment: creationEquipment };
-  PHASES.forEach(phase => {
-    payload[phase] = creationPhases[phase].map(b => ({
-      type: b.type, params: b.params, once: b.once, kind: b.kind, value: b.value, hotkey: b.hotkey,
-      mode: b.mode, pathName: b.pathName, ignoreHighlight: b.ignoreHighlight, retryUntilPlaced: b.retryUntilPlaced,
-      sprint: b.sprint, key: b.key,
-    }));
-  });
+  PHASES.forEach(phase => { payload[phase] = creationPhases[phase].map(serializeBlock); });
   return payload;
+}
+
+// One block as it's saved to disk / shared. Detect blocks carry their extra
+// fields AND recurse into then/else so nested groups round-trip.
+function serializeBlock(b) {
+  const out = {
+    type: b.type, params: b.params, once: b.once, kind: b.kind, value: b.value, hotkey: b.hotkey,
+    mode: b.mode, pathName: b.pathName, ignoreHighlight: b.ignoreHighlight, retryUntilPlaced: b.retryUntilPlaced,
+    sprint: b.sprint, key: b.key,
+  };
+  if (b.type === 'detect') {
+    out.image = b.image || '';
+    out.advanced = !!b.advanced;
+    out.images = [...(b.images || [])];
+    out.logic = b.logic === 'or' ? 'or' : 'and';
+    out.expr = b.expr || '';
+    out.region = b.region ? { ...b.region } : null;
+    out.threshold = typeof b.threshold === 'number' ? b.threshold : null;
+    out.showAll = !!b.showAll;
+    out.then = (b.then || []).map(serializeBlock);
+    out.else = (b.else || []).map(serializeBlock);
+  }
+  return out;
 }
 
 // What the editor held the last time it was in sync with disk (saved, loaded
@@ -5206,7 +5560,7 @@ async function saveCurrentTemplate() {
 function newTemplate() {
   // The unique pinned Auto Walk Path block (see renderBlockRow's
   // isPinnedWalk) -- always there, Once always on, still reorderable.
-  creationPhases = { prestart: [{ id: newBlockId(), type: 'walk_path', params: {}, once: true, mode: 'auto', pathName: '' }], battle: [] };
+  creationPhases = { prestart: [{ id: newBlockId(), type: 'walk_path', params: {}, once: true, mode: 'auto', pathName: '' }], battle: [], loop_a: [], loop_b: [] };
   creationTeam = '';
   creationEquipment = 'include';
   document.getElementById('template-name').value = '';
@@ -5347,6 +5701,19 @@ function blockFromSaved(b) {
   }
   if (b.type === 'walk_path' || b.type === 'walk') block.sprint = !!b.sprint;
   if (b.type === 'send_key') block.key = b.key || '';
+  if (b.type === 'detect') {
+    block.image = b.image || '';
+    block.advanced = !!b.advanced;
+    block.mode = ['single', 'multi', 'expr'].includes(b.mode) ? b.mode : 'single';
+    block.images = Array.isArray(b.images) ? [...b.images] : [];
+    block.logic = b.logic === 'or' ? 'or' : 'and';
+    block.expr = b.expr || '';
+    block.region = (b.region && typeof b.region === 'object') ? { ...b.region } : null;
+    block.threshold = typeof b.threshold === 'number' ? b.threshold : null;
+    block.showAll = !!b.showAll;
+    block.then = (Array.isArray(b.then) ? b.then : []).map(blockFromSaved);
+    block.else = (Array.isArray(b.else) ? b.else : []).map(blockFromSaved);
+  }
   return block;
 }
 
@@ -5356,7 +5723,7 @@ async function loadSelectedTemplate() {
   try {
     const data = await pywebview.api.load_template(name);
     const payload = data.blocks || {};
-    creationPhases = { prestart: [], battle: [] };
+    creationPhases = { prestart: [], battle: [], loop_a: [], loop_b: [] };
     creationTeam = '';
     creationEquipment = 'include';
 
