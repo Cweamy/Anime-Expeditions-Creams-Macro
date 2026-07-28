@@ -149,34 +149,35 @@ class CraftingOps:
         if self._checkpoint(stop_event):
             return
 
-        # Open the crafting menu with E and wait for it to fully load. nav_play
-        # showing means the world's up, but give it a beat more before the
-        # keypress -- pressing E too early after the load lands on nothing.
+        # Open the crafting menu with E and wait for it to fully load. Move
+        # the cursor to the far right edge before pressing E so it doesn't hover
+        # over crafting panel items or trigger tooltips that interfere with OCR.
         time.sleep(CRAFT_LOAD_SETTLE)
+        self._mouse.move_to(*vision.ref_to_screen(hwnd, 1140, 378))
+        time.sleep(0.1)
         self._log("[Craft] Pressing E to open the crafting menu.")
         self._keyboard.tap(ord("E"))
         time.sleep(SETTLE_DELAY)
 
-        # Park the cursor in the top-left corner (reference 3,3) so it isn't
-        # sitting over the close button, then close the on-open UI overlay.
-        # Best-effort: if nav_closeui isn't found there's nothing to close, so
-        # just continue rather than aborting the pass.
-        self._mouse.move_to(*vision.ref_to_screen(hwnd, 3, 3))
-        time.sleep(0.1)
-        close_match = self._crafting_find(hwnd, "nav_closeui", CRAFT_ITEM_TIMEOUT, stop_event)
-        if close_match is not None:
-            self._log("[Craft] Closing the UI overlay (nav_closeui).")
-            vision.click_match(self._mouse, hwnd, close_match)
-            time.sleep(SETTLE_DELAY)
-        else:
-            self._log("[Craft] nav_closeui not found -- assuming nothing to close, continuing.")
-
         self._set_status(action="Opening the crafting menu...")
         if not self._crafting_wait_for(hwnd, "craft_menu", CRAFT_MENU_TIMEOUT, stop_event):
-            self._log("[Craft] Crafting menu didn't open -- recovering to the lobby.")
-            self._recover_to_lobby(hwnd, stop_event)
-            reset()
-            return
+            # Fallback: if craft_menu isn't visible, check for a blocking UI
+            # overlay (nav_closeui). If found, dismiss it and re-tap E.
+            self._mouse.move_to(*vision.ref_to_screen(hwnd, 3, 3))
+            time.sleep(0.1)
+            close_match = self._crafting_find(hwnd, "nav_closeui", 1.0, stop_event)
+            if close_match is not None:
+                self._log("[Craft] Closing blocking UI overlay (nav_closeui) and retrying E.")
+                vision.click_match(self._mouse, hwnd, close_match)
+                time.sleep(SETTLE_DELAY)
+                self._keyboard.tap(ord("E"))
+                time.sleep(SETTLE_DELAY)
+
+            if not self._crafting_wait_for(hwnd, "craft_menu", CRAFT_MENU_TIMEOUT, stop_event):
+                self._log("[Craft] Crafting menu didn't open -- recovering to the lobby.")
+                self._recover_to_lobby(hwnd, stop_event)
+                reset()
+                return
 
         # Craft each enabled sprite in priority (list) order.
         for item in items:
