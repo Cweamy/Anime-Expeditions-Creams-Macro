@@ -350,8 +350,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         if match is not None:
             self._log(f"[Macro] Stopping -- clicking Leave Stage (score {match['score']:.2f}) to quit to menu.")
             vision.click_match(self._mouse, self._current_hwnd, match)
-            time.sleep(0.5)
-            self._click_return_to_lobby_if_found(self._current_hwnd)
+            self._interruptible_sleep(0.5, stop_event)
+            self._click_return_to_lobby_if_found(self._current_hwnd, stop_event=stop_event)
 
     def _click_return_to_lobby_if_found(self, hwnd, stop_event: threading.Event = None) -> bool:
         # Leave Stage can bring up its own "Return to Lobby" confirmation
@@ -1668,7 +1668,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             # match that follows it.
             self._keyboard.tap(ord("H"))
             self._log("[Macro] Closed the Team Loadout panel.")
-            time.sleep(1.5)
+            self._interruptible_sleep(1.5, stop_event)
 
     def _apply_team_loadout_panel(self, hwnd, stop_event: threading.Event, team_match, team_num: int,
                                     equipment: str) -> bool:
@@ -1808,7 +1808,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             # to close the panel before this click has actually registered
             # in-game, so the equipment choice lands inconsistently or not
             # at all and can leave the panel stuck in a half-closed state.
-            time.sleep(0.5)
+            self._interruptible_sleep(0.5, stop_event)
         elif not stop_event.is_set():
             self._log(f'[Macro] "{equipment}" option never showed up -- Team Loadout '
                       f'{team_num} was not fully applied.')

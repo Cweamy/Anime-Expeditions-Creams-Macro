@@ -15,12 +15,21 @@ def _safe_name(name: str) -> str:
     return cleaned or "template"
 
 
+_stored_name_cache = {}
+
+
 def _stored_name(path: str, fallback: str) -> str:
     """The display name recorded inside a template file, or the filename if it
     has none (hand-dropped file) or won't parse."""
     try:
+        mtime = os.path.getmtime(path)
+        cache_key = (path, mtime)
+        if cache_key in _stored_name_cache:
+            return _stored_name_cache[cache_key]
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f).get("name") or fallback
+            val = json.load(f).get("name") or fallback
+            _stored_name_cache[cache_key] = val
+            return val
     except (OSError, json.JSONDecodeError):
         return fallback
 
