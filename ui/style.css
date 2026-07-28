@@ -1803,3 +1803,135 @@ body.compact-mode #compact-strip {
 .faq-answer p:last-child {
   margin-bottom: 0;
 }
+
+/* The one line every first-run user actually reads, so it is not set at
+   .text-xs like body copy elsewhere -- at 12px dimmed it was the hardest
+   thing in the dialog to read. Measure capped so the wider modal doesn't
+   turn it into one long line. */
+/* Single column on purpose. Two columns filled the window but halved the
+   reading width of every line, which is the opposite of the problem this
+   dialog has -- people were not reading it because it was too small. */
+.onb-grid { display: flex; flex-direction: column; gap: 16px; }
+
+.onb-intro {
+  font-size: 18px;
+  line-height: 1.65;
+  color: var(--text);
+  margin: 0 0 20px;
+  max-width: 78ch;
+}
+.onb-intro b { color: var(--teal); font-weight: 600; }
+
+/* ============ Setup checklists ============
+   Rendered by app.js renderIngameChecklist / renderMachineChecklist into
+   both the first-run welcome and Settings > Debug.
+
+   Two lists, two different kinds of mark: the Roblox one is ticked by the
+   player because nothing here can see into the game, the machine one shows
+   what Health Check actually measured. They are told apart by their header
+   and their marks, NOT by a coloured stripe down the side. */
+.onb-ingame {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+
+.onb-ingame-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text);
+}
+.onb-ingame-sub {
+  font-weight: 500; font-size: 13px;
+  letter-spacing: 0.02em; text-transform: none;
+  color: var(--text-dim);
+}
+.onb-ingame-count {
+  flex-shrink: 0;
+  font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 11px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-dim);
+}
+.onb-ingame-count.all { color: var(--teal); border-color: rgba(79, 209, 197, 0.45); }
+.onb-ingame-count.bad { color: var(--rose); border-color: rgba(242, 119, 122, 0.45); }
+
+.onb-ingame-list { list-style: none; margin: 0; padding: 0; }
+.onb-ingame-list li + li { border-top: 1px solid var(--border); }
+.onb-ingame-list label {
+  display: flex; align-items: flex-start; gap: 11px;
+  padding: 16px 18px; cursor: pointer;
+}
+.onb-ingame-list label:hover { background: rgba(255, 255, 255, 0.03); }
+.onb-ingame-list label:hover .onb-ingame-box { border-color: var(--teal); }
+
+/* The real input stays focusable for keyboard and screen readers; the
+   square below is what is actually drawn. */
+.onb-ingame-list input { position: absolute; opacity: 0; width: 0; height: 0; }
+.onb-ingame-box {
+  flex-shrink: 0; margin-top: 1px;
+  width: 19px; height: 19px; border-radius: 5px;
+  border: 1.5px solid var(--text-dim); background: rgba(0, 0, 0, 0.3);
+  position: relative; transition: background .12s, border-color .12s;
+}
+.onb-ingame-list input:focus-visible + .onb-ingame-box { outline: 2px solid var(--teal); outline-offset: 2px; }
+.onb-ingame-list li.checked .onb-ingame-box { background: var(--teal); border-color: var(--teal); }
+.onb-ingame-list li.checked .onb-ingame-box::after {
+  content: ''; position: absolute; left: 6px; top: 2px;
+  width: 5px; height: 10px;
+  border: solid #0b0e13; border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.onb-ingame-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.onb-ingame-name { color: var(--text); font-weight: 600; font-size: 16px; }
+/* The required value as a chip -- "Auto Sprint" and "On" must not read as
+   one run-on phrase; the value is the part people get wrong. */
+.onb-ingame-name b {
+  margin-left: 10px; padding: 2px 9px; border-radius: 5px;
+  font-size: 13.5px; font-weight: 700;
+  color: var(--teal); background: rgba(79, 209, 197, 0.12);
+  border: 1px solid rgba(79, 209, 197, 0.28);
+}
+/* Capped so a reason never runs the full width of the wider modal --
+   long measures are the thing that made this hard to read. */
+.onb-ingame-why { color: var(--text-dim); font-size: 14.5px; line-height: 1.6; }
+.onb-ingame-list li.checked .onb-ingame-name,
+.onb-ingame-list li.checked .onb-ingame-why { opacity: 0.5; }
+
+/* Verified-by-Health-Check list: a status mark instead of a checkbox. */
+.onb-machine .onb-ingame-list li {
+  display: flex; align-items: flex-start; gap: 13px; padding: 16px 18px;
+}
+.onb-machine-mark {
+  flex-shrink: 0; margin-top: 1px;
+  width: 19px; height: 19px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; line-height: 1;
+  border: 1.5px solid var(--border); color: var(--text-dim);
+}
+/* Nothing measured yet -- never a tick. */
+li.unknown .onb-machine-mark::after { content: '?'; }
+li.info .onb-machine-mark { border-style: dashed; }
+li.info .onb-machine-mark::after { content: 'i'; font-style: italic; }
+li.pass .onb-machine-mark { border-color: var(--teal); background: var(--teal); color: #0b0e13; }
+li.pass .onb-machine-mark::after { content: '\2713'; }
+li.fail .onb-machine-mark { border-color: var(--rose); background: var(--rose); color: #0b0e13; }
+li.fail .onb-machine-mark::after { content: '\2715'; }
+li.fail .onb-ingame-name { color: var(--rose); }
+.onb-machine-detail { color: var(--text-muted, var(--text-dim)); }
+
+/* The welcome grew, so on a short window Get Started could end up below the
+   fold inside .modal-body's scroll area. Pinned so the way out is always
+   visible -- a first-run dialog someone has to hunt through is the one
+   thing this must not be. Scoped so no other modal moves. */
+#onboarding-modal .onb-actions {
+  position: sticky; bottom: -16px;
+  margin: 0 -16px -16px; padding: 12px 16px;
+  background: var(--panel, #171b24);
+  border-top: 1px solid var(--border);
+}
