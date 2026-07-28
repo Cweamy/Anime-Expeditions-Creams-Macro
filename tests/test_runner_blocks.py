@@ -240,3 +240,39 @@ def test_place_unit_with_no_position_keeps_shift_when_the_chain_continues():
                                  index=1, macro_name="m", next_is_same_unit=True)
 
     assert runner._quick_place_shift_down is True
+
+
+def test_run_target_priority_tick():
+    from core.runner_blocks import BlockOps
+    from unittest.mock import MagicMock
+
+    class DummyRunner(BlockOps):
+        def __init__(self):
+            self._placed_unit_positions = {1: (100, 200)}
+            self._coords = {"unit_info_reset_x": 10, "unit_info_reset_y": 10}
+            self._mouse = MagicMock()
+            self._keyboard = MagicMock()
+            self.logs = []
+        def _log(self, msg):
+            self.logs.append(msg)
+        def _set_status(self, **kw):
+            pass
+        def _checkpoint(self, stop_event):
+            return False
+
+    runner = DummyRunner()
+    block = {"type": "target_priority", "params": {"index": 1, "priority": "Boss"}}
+    stop_event = MagicMock(is_set=lambda: False)
+
+    with MagicMock():
+        from core import runner_blocks
+        original_wm = runner_blocks.wm
+        runner_blocks.wm = MagicMock(get_window_rect_screen=lambda hwnd: (0, 0, 800, 600))
+        try:
+            done = runner._run_target_priority_tick(123, stop_event, block, 1)
+        finally:
+            runner_blocks.wm = original_wm
+
+    assert done is True
+    assert any("pressing R to set target priority to Boss" in log for log in runner.logs)
+    assert runner._keyboard.tap.called

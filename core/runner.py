@@ -1677,37 +1677,39 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         row1_x, row1_y = self._cxy("team_loadout")  # Loadout 1's row (Settings > Debug > Macro Coordinates)
+        row_x = row1_x + TEAM_LOADOUT_BUTTON_CENTER_X_OFFSET
         if team_num > 3:
-            # A click-drag on the list itself, not a wheel scroll -- 7/8
-            # need a bigger drag that re-anchors the list differently
-            # (their own fixed row positions below), while 4-6's smaller
-            # drag just shifts the list enough to put them at the same row
-            # positions the 1-3 formula already computes.
-            scroll_amount = TEAM_LOADOUT_SCROLL_LARGE if team_num >= 7 else TEAM_LOADOUT_SCROLL_SMALL
-            anchor_x = left + TEAM_LOADOUT_SCROLL_ANCHOR[0]
-            anchor_y = top + TEAM_LOADOUT_SCROLL_ANCHOR[1]
-            self._log(f"[Macro] Scrolling the Loadout list to reach {team_num}...")
-            self._mouse.drag(anchor_x, anchor_y, anchor_x, anchor_y + scroll_amount)
+            # Dragging from the old (895, 285) point was unreliable for two
+            # separate reasons confirmed against the live Windows UI: that
+            # point is on the Load Team button, not the scrollbar, and the
+            # 300px drag for slots 7/8 leaves the panel before mouse-up. Move
+            # over the real scrollbar and send ordinary wheel notches
+            # instead. Each notch shifts the rows by a stable 100px.
+            scroll_steps = min(team_num, TEAM_LOADOUT_WHEEL_MAX_STEPS)
+            hover_x = left + TEAM_LOADOUT_SCROLLBAR_HOVER[0]
+            hover_y = top + TEAM_LOADOUT_SCROLLBAR_HOVER[1]
+            self._mouse.move_to(hover_x, hover_y)
+            time.sleep(TEAM_LOADOUT_SCROLL_HOVER_SETTLE)
+            self._mouse.nudge()
+            for _ in range(scroll_steps):
+                self._mouse.scroll(TEAM_LOADOUT_WHEEL_DELTA)
+                time.sleep(TEAM_LOADOUT_WHEEL_INTERVAL)
             time.sleep(TEAM_LOADOUT_SCROLL_SETTLE)
             if self._checkpoint(stop_event):
                 return False
-
-        if team_num == 7:
-            row_y = TEAM_LOADOUT_SLOT_7_Y
-        elif team_num == 8:
-            row_y = TEAM_LOADOUT_SLOT_8_Y
-        elif team_num > 3:
-            # 4-6 scrolled into the SAME row slots 1-3 sit in pre-scroll (see
-            # the drag comment above) -- team_num must be rebased against
-            # row 1 the way 1-3 already are (team_num - 1), not counted as
-            # if the list never moved. Using (team_num - 1) unscrolled here
-            # undercounted the shift by exactly the 3 rows the drag just
-            # revealed, landing the click 3 * TEAM_LOADOUT_ROW_HEIGHT (378px)
-            # below the real row -- past the panel and onto the game view
-            # behind it, which is what turned into "the click/scroll goes
-            # way too far, outside Roblox" for teams 5-6 (4 was off too, by
-            # the same bug, just closer to a row that still did something).
-            row_y = row1_y + (team_num - 4) * int(self._coords["team_loadout_row_height"])
+            # Current rows are 137px apart. Account for the 100px movement
+            # from each wheel notch to click the requested row where it
+            # actually landed. Slot 8 bottoms out with only the top of its
+            # green button visible, so cap the click at the verified visible
+            # part of that button.
+            row_y = (
+                row1_y
+                + (team_num - 1) * TEAM_LOADOUT_CURRENT_ROW_HEIGHT
+                - scroll_steps * TEAM_LOADOUT_WHEEL_ROW_SHIFT
+            )
+            row_y = min(row_y, TEAM_LOADOUT_VISIBLE_BOTTOM_Y)
+            self._log(f"[Macro] Scrolled {scroll_steps} notch(es); Loadout {team_num} "
+                      f"is at ({row_x}, {row_y}).")
         else:
             row_y = row1_y + (team_num - 1) * int(self._coords["team_loadout_row_height"])
 
@@ -1726,7 +1728,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             if attempt > 1:
                 self._log(f'[Macro] "confirm" didn\'t show up -- retrying Loadout {team_num} '
                            f'(attempt {attempt}/{TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS}).')
-            self._mouse.click(left + row1_x, top + row_y)
+            self._mouse.click(left + row_x, top + row_y)
             self._log(f"[Macro] Clicked Loadout {team_num}.")
             # Let the Confirm button finish sliding up before locating it --
             # otherwise it's found mid-animation and the click lands where it

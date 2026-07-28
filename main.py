@@ -11,7 +11,7 @@ import json
 import queue
 import subprocess
 import threading
-from datetime import date
+from datetime import datetime, timezone
 
 from core import window as wm
 from core import config
@@ -194,13 +194,23 @@ RUN_HISTORY_LIMIT = 50  # oldest entries drop off past this -- a running log, no
 # keyed by MAP (which macro to run for it, how many times it's been played
 # today) while the 3 slots are just simple on/off toggles for "attempt
 # whatever's in this slot". CHALLENGE_STORY_MAPS matches TASK_DATA.story's
-# maps in ui/app.js. The exact in-game reset schedule isn't confirmed yet
-# (see get_challenge_settings' daily-rollover comment) -- CHALLENGE_
-# DAILY_CAP and the reset mechanism are a first-pass approximation, not
-# verified against the real game yet.
+# maps in ui/app.js. Daily counts use the game's shared 00:00 UTC rollover;
+# the independent stage-availability clock still rotates every :00/:30.
 CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest"]
 CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
 CHALLENGE_DAILY_CAP = 10  # fixed, not user-editable -- see get_challenge_settings
+CHALLENGE_RESET_SCHEDULE = "utc_midnight_v1"
+
+
+def _current_challenge_reset_period(now: float = None) -> str:
+    """Identifier for the game day containing *now*.
+
+    Anime Expeditions rolls its daily state over at 00:00 UTC.  Deriving the
+    period from UTC makes every player cross the boundary at the same instant,
+    regardless of their computer's timezone or daylight-saving setting.
+    """
+    now = time.time() if now is None else now
+    return datetime.fromtimestamp(now, timezone.utc).date().isoformat()
 
 
 def _format_ago(epoch) -> str:
@@ -790,19 +800,17 @@ class Api:
             # rotates through slots.
             "stages": {slot: {"enabled": True, "count": 0, "last_played_at": 0} for slot in CHALLENGE_STAGE_SLOTS},
             "maps": {m: {"macro": ""} for m in CHALLENGE_STORY_MAPS},
-            "last_reset_date": date.today().isoformat(),
+            "last_reset_date": _current_challenge_reset_period(),
+            "reset_schedule": CHALLENGE_RESET_SCHEDULE,
         }
 
     def get_challenge_settings(self) -> dict:
-        # Regular Challenge's daily play count resets once a calendar day --
-        # checked/applied here (not on a timer) so it's caught the moment
-        # anything asks for the settings, whether that's the Challenge
-        # screen loading or the runner checking availability before a run.
-        # Uses the LOCAL calendar day as the reset boundary, which is a
-        # first-pass approximation -- swap for the real in-game reset time
-        # once it's confirmed (see CHALLENGE_STORY_MAPS' comment). This does
-        # NOT touch last_played_at -- that's checked against the current
-        # :00/:30 window instead, independent of the daily count reset.
+        # Regular Challenge's daily play count resets at 00:00 UTC. This is
+        # checked whenever status/settings are polled, so a macro left running
+        # crosses the boundary without restarting or interrupting its task. If
+        # the app was closed at reset time, the first check after launch catches
+        # up. This does NOT touch last_played_at -- that's checked against the
+        # current :00/:30 window independently of the daily count reset.
         data = cfg.load()
         saved = data.get("challenge") or {}
         defaults = self._default_challenge_settings()
@@ -840,11 +848,19 @@ class Api:
             merged_maps[m] = {"macro": saved_map.get("macro") or ""}
         merged["maps"] = merged_maps
 
-        today = date.today().isoformat()
-        if merged.get("last_reset_date") != today:
+        reset_period = _current_challenge_reset_period()
+        if saved.get("reset_schedule") != CHALLENGE_RESET_SCHEDULE:
+            # Older versions stored the computer's local date. That value
+            # cannot be compared safely with a UTC game-day identifier,
+            # especially east of UTC. Adopt the current period without
+            # clearing counts; the next real UTC boundary will reset them.
+            merged["last_reset_date"] = reset_period
+            merged["reset_schedule"] = CHALLENGE_RESET_SCHEDULE
+            cfg.update({"challenge": merged})
+        elif merged.get("last_reset_date") != reset_period:
             for s in merged["stages"].values():
                 s["count"] = 0
-            merged["last_reset_date"] = today
+            merged["last_reset_date"] = reset_period
             cfg.update({"challenge": merged})
             self.push_log("[Challenge] Daily play counts reset.")
         return merged
@@ -934,7 +950,8 @@ class Api:
         for s in challenge["stages"].values():
             s["count"] = 0
             s["last_played_at"] = 0  # also clears cooldown -- every slot becomes available immediately
-        challenge["last_reset_date"] = date.today().isoformat()
+        challenge["last_reset_date"] = _current_challenge_reset_period()
+        challenge["reset_schedule"] = CHALLENGE_RESET_SCHEDULE
         cfg.update({"challenge": challenge})
         self.push_log("[Challenge] Play counts and cooldowns reset manually.")
         return {"ok": True}

@@ -929,3 +929,17 @@ def test_list_placed_units_numbers_across_detect_branches(tmp_path):
     # then before else, prestart before battle -- matches core.detect.flatten
     assert out == [{'n': 1, 'name': 'A'}, {'n': 2, 'name': 'B'},
                    {'n': 3, 'name': 'C'}, {'n': 4, 'name': 'D'}]
+
+
+def test_target_priority_block_type_registered(tmp_path):
+    body = """
+    console.log(JSON.stringify({
+        hasBlockType: src.includes("target_priority:"),
+        inPrestartAllowed: src.includes("'target_priority'"),
+        hasTargetPriorities: src.includes("TARGET_PRIORITIES")
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out["hasBlockType"] is True
+    assert out["inPrestartAllowed"] is True
+    assert out["hasTargetPriorities"] is True
