@@ -1685,6 +1685,71 @@ body.compact-mode #compact-strip {
 .cs-pause.on { color: var(--amber); border-color: var(--amber); }
 .cs-expand { color: var(--brand); }
 
+/* ===========================================================================
+   UI Micro-Interactions (Hardware Accelerated & Theme Safe)
+   ---------------------------------------------------------------------------
+   Super-lightweight visual enhancements for buttons, cards, badges, and modals.
+   Optimized with GPU-promoted properties (transform & opacity) to maintain 60fps
+   without CPU overhead. Automatically disabled via prefers-reduced-motion. */
+
+/* 1. Button Micro-Interactions */
+.ui-btn-glow {
+  transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1),
+              box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1),
+              background-color 0.15s ease,
+              border-color 0.15s ease;
+  will-change: transform;
+}
+.ui-btn-glow:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.25), 0 0 8px -2px var(--brand);
+}
+.ui-btn-glow:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 1px 4px -1px rgba(0, 0, 0, 0.2);
+}
+
+/* Pulsing glow for active running state */
+.ui-running-glow {
+  animation: ui-active-glow 2s ease-in-out infinite alternate;
+}
+@keyframes ui-active-glow {
+  0% { box-shadow: 0 0 4px -1px var(--teal); }
+  100% { box-shadow: 0 0 12px 2px var(--teal); }
+}
+
+/* 2. Interactive Card Micro-Interactions */
+.ui-card-hover {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.2s ease,
+              box-shadow 0.2s ease;
+  will-change: transform;
+}
+.ui-card-hover:hover {
+  transform: translateY(-2px);
+  border-color: var(--brand) !important;
+  box-shadow: 0 6px 16px -4px rgba(0, 0, 0, 0.3);
+}
+
+/* 3. Status Badges & Breathing Indicators */
+.ui-badge-pulse {
+  animation: ui-soft-pulse 2.2s ease-in-out infinite;
+}
+@keyframes ui-soft-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.75; transform: scale(0.98); }
+}
+
+/* 4. Modal & Tooltip Animations */
+.ui-modal-animate {
+  animation: ui-modal-pop 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+@keyframes ui-modal-pop {
+  0% { opacity: 0; transform: scale(0.95) translateY(4px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
 /* ============ FAQ Modal Accordion Styles ============ */
 .faq-item {
   background: var(--bg-surface);
@@ -1738,4 +1803,3 @@ body.compact-mode #compact-strip {
 .faq-answer p:last-child {
   margin-bottom: 0;
 }
-
