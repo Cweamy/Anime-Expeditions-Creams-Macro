@@ -283,13 +283,20 @@ team.png
   After pressing H, the runner waits for this to confirm the team-select
   panel actually opened, then clicks it before picking a Loadout row.
 
+team_loadout_open.png
+  The "Unit Teams" title shown only after the Teams button successfully
+  opens the Load Team list. The runner waits for this and retries Teams
+  before it is allowed to scroll or click a loadout row.
+
 confirm.png
   Used by Team Loadout application, right after clicking a Loadout row --
-  confirms the choice before moving on to the equipment pick.
+  confirms the choice before moving on to the equipment pick. Variants in
+  this folder cover both the older and current Confirm button rendering.
 
 include.png / exclude.png
   Used by Team Loadout application to pick Include or Exclude for
-  equipment (whichever the task's template has set) after Confirm.
+  equipment (whichever the task's template has set) after Confirm. Variants
+  cover both the older buttons and the current Include Equipment dialog.
 
 reconnect/
   Optional. Roblox's own "Reconnect"/"Retry" prompt, shown when it actually
