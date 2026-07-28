@@ -25,6 +25,7 @@ from . import keys
 from . import ocr_windows
 from . import stage_select
 from . import vision
+from . import wave as wave_module
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- see runner_constants' docstring
 from .runner_blocks import BlockOps
@@ -721,6 +722,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                     task_failed = True
                     break
                 duration = self._format_duration(time.time() - battle_started)
+                left_for_wave_limit = result == "wave_limit"
 
                 # Consecutive-loss fail-safe: a genuine unbroken loss streak
                 # on THIS map (not just losses somewhere in the run) usually
@@ -752,9 +754,12 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 # task cleanly steps out of its own stage before Challenge's
                 # navigation (which starts from the lobby) runs.
                 challenge_wants_in = (not is_last_repeat) and self._challenge_has_ready_stage()
-                if not self._handle_match_result(hwnd, stop_event, task, result, duration, webhook,
-                                                  repeat=(not is_last_repeat) and not challenge_wants_in
-                                                  and not restart_needed):
+                # The bounded-Infinite path already left from the live match,
+                # so there is no Victory/Defeat screen to process here.
+                if not left_for_wave_limit and not self._handle_match_result(
+                        hwnd, stop_event, task, result, duration, webhook,
+                        repeat=(not is_last_repeat) and not challenge_wants_in
+                        and not restart_needed):
                     if stop_event.is_set():
                         return False
                     task_failed = True
@@ -840,12 +845,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                     continue
 
                 if not is_last_repeat:
-                    if task.get("play_mode") == "matchmaking":
+                    if left_for_wave_limit or task.get("play_mode") == "matchmaking":
                         # Leave Stage (see _handle_match_result -- matchmaking
-                        # always leaves, never Repeat Stage) puts us back on
-                        # the lobby, not mid-match -- the next repeat needs
-                        # the FULL lobby -> map -> stage -> Enter Matchmaking
-                        # sequence again, not just a teleport-in wait.
+                        # always leaves, never Repeat Stage), or the Infinite
+                        # wave-limit exit, puts us back in the lobby rather
+                        # than a repeat teleport -- re-enter from scratch.
                         if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords,
                                                       scroll_power, scroll_nudges, webhook):
                             if stop_event.is_set():
@@ -1122,6 +1126,90 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                                              task.get("mode"), watch_close_popup, webhook, task)
 
 
+    @staticmethod
+    def _infinite_wave_limit(task: dict):
+        """Configured completed-wave target for a Story > Infinite task."""
+        task = task or {}
+        if task.get("mode") != "story" or task.get("stage") != "Infinite":
+            return None
+        try:
+            return max(1, int(task.get("infinite_wave_limit") or DEFAULT_INFINITE_WAVE_LIMIT))
+        except (TypeError, ValueError):
+            return DEFAULT_INFINITE_WAVE_LIMIT
+
+    def _leave_infinite_at_wave_limit(self, hwnd, stop_event: threading.Event, limit: int) -> bool:
+        """Leave a live Infinite match after ``limit`` has fully completed."""
+        self._release_quick_place_shift()
+        self._set_status(action=f"Wave {limit} complete -- leaving stage...")
+        self._log(
+            f"[Macro] Infinite wave {limit} completed and wave {limit + 1} began -- "
+            "clicking Leave Stage."
+        )
+        if not self._click_and_verify_gone(
+                hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT, success_name="return"):
+            self._log('[Macro] "Leave Stage" not found after reaching the Infinite wave limit.')
+            return False
+        self._click_return_to_lobby_if_found(hwnd, stop_event)
+        return not self._checkpoint(stop_event)
+
+    def _check_infinite_wave_limit(self, hwnd, stop_event: threading.Event, limit: int, state: dict):
+        """Poll/confirm the unlimited-wave HUD and leave at ``limit + 1``.
+
+        Returns ``"wave_limit"`` after a successful exit, ``"failed"`` if
+        the exit UI could not be used, and ``None`` while the match continues.
+        """
+        now = time.time()
+        if now < state.get("next_check", 0.0):
+            return None
+        state["next_check"] = now + WAIT_WAVE_POLL_INTERVAL
+
+        try:
+            image = vision.capture_window_region_bgr(hwnd, WAVE_REGION)
+            if image is None:
+                raise RuntimeError("window capture returned no image")
+            current, maximum = wave_module.read_wave(image)
+        except Exception as exc:
+            state.pop("confirmations", None)
+            if not state.get("read_error_logged"):
+                self._log(
+                    f"[Macro] Couldn't read the Infinite wave counter ({exc}) -- "
+                    f"retrying every {WAIT_WAVE_POLL_INTERVAL:.0f}s."
+                )
+                state["read_error_logged"] = True
+            return None
+
+        if current is None or maximum is not None:
+            state.pop("confirmations", None)
+            return None
+        state.pop("read_error_logged", None)
+        self._set_status(action=f"Infinite wave {current} -- leaving after wave {limit}...")
+
+        exit_wave = limit + 1
+        if current != exit_wave:
+            state.pop("confirmations", None)
+            state.pop("confirmation_wave", None)
+            return None
+
+        confirmations = (
+            state.get("confirmations", 0) + 1
+            if state.get("confirmation_wave") == current
+            else 1
+        )
+        state["confirmation_wave"] = current
+        state["confirmations"] = confirmations
+        if confirmations < INFINITE_WAVE_LIMIT_CONFIRMATIONS:
+            self._log(
+                f"[Macro] Infinite wave {current} reached the exit point -- "
+                "confirming on the next read."
+            )
+            return None
+        return (
+            "wave_limit"
+            if self._leave_infinite_at_wave_limit(hwnd, stop_event, limit)
+            else "failed"
+        )
+
+
 
     def _wait_for_match_result(self, hwnd, stop_event: threading.Event, battle_blocks: list = None,
                                  first_repeat: bool = True, macro_name: str = None, mode: str = None,
@@ -1129,8 +1217,19 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._log("[Macro] Battle in progress -- watching for Victory/Defeat...")
         self._set_status(action="Battle in progress...")
         battle_blocks = battle_blocks or []
-        deadline = time.time() + MATCH_RESULT_TIMEOUT
-        while time.time() < deadline:
+        infinite_wave_limit = self._infinite_wave_limit(task)
+        infinite_wave_state = {}
+        if infinite_wave_limit is not None:
+            # A configured Infinite run can legitimately take longer than
+            # the finite-stage 30-minute safety timeout.
+            deadline = None
+            self._log(
+                f"[Macro] Infinite wave limit: finish wave {infinite_wave_limit}, "
+                f"then leave when wave {infinite_wave_limit + 1} begins."
+            )
+        else:
+            deadline = time.time() + MATCH_RESULT_TIMEOUT
+        while deadline is None or time.time() < deadline:
             if self._checkpoint(stop_event):
                 return None
             if battle_blocks:
@@ -1161,6 +1260,14 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
 
             if watch_close_popup:
                 self._click_close_popup_if_found(hwnd)
+
+            if infinite_wave_limit is not None:
+                limit_result = self._check_infinite_wave_limit(
+                    hwnd, stop_event, infinite_wave_limit, infinite_wave_state)
+                if limit_result == "wave_limit":
+                    return "wave_limit"
+                if limit_result == "failed":
+                    return None
 
             if mode == "expedition":
                 result = self._check_expedition_wave_result(hwnd, stop_event)

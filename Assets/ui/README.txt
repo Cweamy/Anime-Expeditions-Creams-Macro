@@ -273,7 +273,9 @@ unit_exist.png
 leave_stage.png
   Used in three places: quitting to menu on Stop/F2, the first step of
   mid-task recovery, and the normal end-of-run flow when no repeats are
-  left (verified/retried click that backs out to the lobby).
+  left (verified/retried click that backs out to the lobby). The live
+  variant is the top-left door icon beside the cogwheel, which is present
+  during an active stage and opens Exit Confirmation.
 
 repeat_stage.png
   End-of-match flow when the task has repeats left (and isn't
@@ -284,7 +286,8 @@ return.png
   Optional. Leave Stage can bring up its own "Return to Lobby"
   confirmation instead of backing out on its own; polled briefly (not a
   one-shot check -- the popup can take a moment to animate in) right after
-  every Leave Stage click and clicked if found.
+  every Leave Stage click and clicked if found. The live variant covers
+  the larger red button shown by the active-stage Exit Confirmation.
 
 team.png
   Used by Team Loadout application (core.runner._apply_team_loadout).

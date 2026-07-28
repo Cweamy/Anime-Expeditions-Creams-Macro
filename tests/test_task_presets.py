@@ -31,12 +31,13 @@ def test_save_and_load_round_trip():
 
 def test_every_task_field_survives():
     """A task carries mode/map/stage/difficulty/macro/repeat/team/equipment/
-    play_mode/extract_after plus the Event Act 4 fields -- the preset is
+    play_mode/extract_after/infinite_wave_limit plus the Event Act 4 fields -- the preset is
     useless if any of them is dropped or coerced."""
     task = {
         "id": "t_abc", "mode": "story", "map": "King's Tomb", "stage": "Infinite",
         "difficulty": "Hard", "extract_after": "3", "repeat": 25, "team": "Team B",
         "equipment": "exclude", "play_mode": "matchmaking", "macro": "Rose Farm",
+        "infinite_wave_limit": 50,
         "act4_on_drop": True, "act4_mode": "until_locked", "act4_macro": "Act4 Routine",
     }
     tp.save_preset("Full", [task])

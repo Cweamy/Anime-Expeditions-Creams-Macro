@@ -55,6 +55,34 @@ def run_js(body, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Infinite task wave limit
+# ---------------------------------------------------------------------------
+
+def test_new_tasks_have_a_bounded_infinite_wave_default(tmp_path):
+    out = run_js("""
+        const TASK_DATA = { story: { maps: ['Map'] } };
+        const DEFAULT_INFINITE_WAVE_LIMIT = 20;
+        function newTaskId() { return 't1'; }
+        eval(extract('defaultTask'));
+        console.log(JSON.stringify(defaultTask()));
+    """, tmp_path)
+    assert out["infinite_wave_limit"] == 20
+
+
+def test_infinite_task_summary_shows_its_exit_wave(tmp_path):
+    out = run_js("""
+        const TASK_DATA = { story: { label: 'Story' } };
+        const DEFAULT_INFINITE_WAVE_LIMIT = 20;
+        eval(extract('taskSummary'));
+        console.log(JSON.stringify(taskSummary({
+          mode: 'story', map: 'Map', stage: 'Infinite', difficulty: 'Normal',
+          repeat: 1, play_mode: 'solo', macro: '', infinite_wave_limit: 50
+        })));
+    """, tmp_path)
+    assert "Stop after wave 50" in out["meta"]
+
+
+# ---------------------------------------------------------------------------
 # removeBlock: the deferred splice must not use a stale index
 # ---------------------------------------------------------------------------
 # The row stays in the DOM for the whole exit animation, so its X is still
