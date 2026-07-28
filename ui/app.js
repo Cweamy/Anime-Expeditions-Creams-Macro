@@ -2107,6 +2107,7 @@ let selectedTaskId = null;
 let enteringTaskIds = new Set();
 let taskTemplates = [];  // Macro Manager template names, for the Macro Operation picker
 let taskSaveTimer = null;
+const DEFAULT_INFINITE_WAVE_LIMIT = 20;
 
 function newTaskId() {
   return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -2116,6 +2117,7 @@ function defaultTask() {
   return {
     id: newTaskId(), mode: 'story',
     map: TASK_DATA.story.maps[0], stage: '1', difficulty: 'Normal',
+    infinite_wave_limit: DEFAULT_INFINITE_WAVE_LIMIT,
     extract_after: '1',
     repeat: 1, team: '', equipment: 'include', play_mode: 'solo', macro: '',
     // Event-only: auto-clear Villian Invasion Act 4 when a Crow Relic drops.
@@ -2529,6 +2531,9 @@ function setTaskProp(id, key, value) {
     if (d.difficulties) t.difficulty = d.difficulties[0];
     if (d.extractAfter) t.extract_after = '1';
   }
+  if (key === 'stage' && value === 'Infinite' && !Number.isInteger(Number(t.infinite_wave_limit))) {
+    t.infinite_wave_limit = DEFAULT_INFINITE_WAVE_LIMIT;
+  }
   updateQueueRowInPlace(t);
   if (structural.includes(key)) renderTaskBuilder();
   saveTaskQueue();
@@ -2559,6 +2564,8 @@ function taskSummary(t) {
   const meta = [
     `×${t.repeat}`,
     diff,
+    t.mode === 'story' && t.stage === 'Infinite'
+      ? `Stop after wave ${t.infinite_wave_limit || DEFAULT_INFINITE_WAVE_LIMIT}` : '',
     t.play_mode === 'matchmaking' ? 'Matchmaking' : 'Solo',
     t.macro ? `▸ ${t.macro}` : '',
     (t.mode === 'event' && t.stage !== '4' && t.act4_on_drop)
@@ -2652,6 +2659,13 @@ function renderTaskBuilder() {
     fields.push(field('Difficulty', `<span class="task-chip" style="align-self: flex-start;">Hard &middot; locked</span>`, 'Difficulty locked to Hard for this mode'));
   }
 
+  if (t.mode === 'story' && t.stage === 'Infinite') {
+    fields.push(field('Stop After Wave', `<input type="number" class="block-input" min="1"
+      value="${Math.max(1, parseInt(t.infinite_wave_limit, 10) || DEFAULT_INFINITE_WAVE_LIMIT)}"
+      oninput="setTaskProp('${t.id}', 'infinite_wave_limit', Math.max(1, parseInt(this.value, 10) || 1))">`,
+      'The macro lets this wave finish, then leaves when the next wave begins'));
+  }
+
   if (t.mode === 'expedition') {
     fields.push(field('Extract After', `<input type="number" class="block-input" min="0" value="${t.extract_after}"
       oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`, 'Number of extraction prompts to decline before extracting'));
@@ -2713,11 +2727,14 @@ function renderTaskBuilder() {
 
   const extractHint = t.mode === 'expedition'
     ? `<div class="wh-hint">"Extract After" is how many extract prompts to skip before actually taking one -- 0 extracts at the first node, higher goes deeper (and takes longer) per run.</div>` : '';
+  const infiniteHint = (t.mode === 'story' && t.stage === 'Infinite')
+    ? `<div class="wh-hint"><b>Stop After Wave</b> completes the wave you enter, waits for the counter to advance once, then uses Leave Stage and returns to the lobby. For example, 20 leaves when wave 21 begins.</div>` : '';
   const act4Hint = (t.mode === 'event' && t.stage !== '4' && t.act4_on_drop)
     ? `<div class="wh-hint">When a Crow Relic drops on a win, the run leaves this stage, clears Act 4 (Crow - Dawn) with its own Macro Operation above, then comes back. <b>Once</b> spends one relic; <b>Until locked</b> spends every banked relic. Give Act 4 its own Macro Operation ${'&#8212;'} it plays nothing like Acts 1-3.</div>` : '';
   el.innerHTML = `
     <div class="task-builder-grid">${fields.join('')}</div>
     ${extractHint}
+    ${infiniteHint}
     ${act4Hint}
     <div class="wh-hint" style="margin-top: 8px;">The macro's Team Loadout comes from its template (Macro Manager tab).</div>
     <div class="flex items-center gap-2" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
