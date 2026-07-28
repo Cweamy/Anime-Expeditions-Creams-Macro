@@ -1097,13 +1097,23 @@ def wait_for_image_any(hwnd: int, names: tuple, region: tuple = None, threshold:
     return None, None
 
 
-def click_match(mouse, hwnd: int, match: dict) -> None:
+def click_match(mouse, hwnd: int, match: dict, shuffle: bool = False) -> None:
     """Clicks a match's center -- match coords are reference-space (what
     find_image/wait_for_image return, since captures are normalized to
     reference dimensions), converted to a real screen point through
     ref_to_screen so the click lands proportionally whatever the window's
-    actual on-screen size is."""
-    mouse.click(*ref_to_screen(hwnd, match["cx"], match["cy"]))
+    actual on-screen size is.
+
+    shuffle=True hovers into the target with a few real relative moves first
+    (Mouse.shuffle_click) instead of a single jump + nudge -- for buttons
+    that only register a click after genuine hover-in movement (reported for
+    the lobby's Event button, where the cursor lands under it but the click
+    doesn't take)."""
+    sx, sy = ref_to_screen(hwnd, match["cx"], match["cy"])
+    if shuffle:
+        mouse.shuffle_click(sx, sy)
+    else:
+        mouse.click(sx, sy)
 
 
 def double_click_match(mouse, hwnd: int, match: dict) -> None:

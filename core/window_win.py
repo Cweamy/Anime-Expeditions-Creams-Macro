@@ -688,4 +688,37 @@ def restore_borders(hwnd: int) -> None:
     user32.SetWindowLongW(hwnd, GWL_STYLE, style)
     user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
 
+
+# ── Keep the machine awake while a run is going (see core.runner) ──
+# SetThreadExecutionState flags. ES_CONTINUOUS makes the state stick for the
+# calling thread until it's reset (or the thread exits); the other two tell
+# Windows the system and display are "in use" so neither idle-sleeps.
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+_ES_DISPLAY_REQUIRED = 0x00000002
+
+# EXECUTION_STATE is a DWORD (unsigned) -- declare it so the combined flag
+# (0x80000003, past signed-int max) doesn't trip ctypes' default c_int arg
+# conversion. Same explicit-signature care as the handle-returning calls above.
+kernel32.SetThreadExecutionState.restype = ctypes.c_uint
+kernel32.SetThreadExecutionState.argtypes = [ctypes.c_uint]
+
+
+def prevent_sleep() -> None:
+    """Hold off system + display sleep. On Windows real input already resets
+    the idle timer, so SendInput-driven runs never slept -- but this also
+    covers unattended long runs where nothing physical is touching the
+    machine, and keeps the call site identical to macOS (where synthetic
+    events do NOT reset the timer -- see window_mac.prevent_sleep). Must be
+    called from the same thread that runs for the length of the run
+    (core.runner's session thread): the CONTINUOUS state is per-thread."""
+    kernel32.SetThreadExecutionState(_ES_CONTINUOUS | _ES_SYSTEM_REQUIRED | _ES_DISPLAY_REQUIRED)
+
+
+def allow_sleep() -> None:
+    """Clear the run's keep-awake request -- ES_CONTINUOUS alone drops the
+    system/display-required flags and lets normal idle sleep resume."""
+    kernel32.SetThreadExecutionState(_ES_CONTINUOUS)
+
+
 WindowManager = WindowsWindowManager

@@ -528,3 +528,40 @@ MATCH_RESULT_TIMEOUT = 1800.0
 MATCH_RESULT_POLL_INTERVAL = 1.0
 
 
+# ── Auto Crafting (interleaved, see core.runner_crafting) ──
+# The sprites the crafter knows how to make, in the default priority order the
+# UI shows them in. Each string is BOTH the settings key AND an image name --
+# the sprite's icon in the crafting menu, matched from Assets/ui/<name>/ (the
+# user supplies these; an unmatched icon is simply skipped at run time). Add a
+# sprite here and it flows through the whole feature (defaults, UI, runner)
+# with no other change but its image.
+CRAFT_SPRITES = ["sprite_rainbow", "sprite_red", "sprite_yellow", "sprite_green",
+                 "sprite_blue", "sprite_purple", "sprite_pink"]
+CRAFT_SPRITE_LABELS = {
+    "sprite_rainbow": "Rainbow", "sprite_red": "Red", "sprite_yellow": "Yellow",
+    "sprite_green": "Green", "sprite_blue": "Blue", "sprite_purple": "Purple",
+    "sprite_pink": "Pink",
+}
+CRAFT_DEFAULT_EVERY = 20  # trigger a crafting pass after this many qualifying wins by default
+
+# The sprite icons all live in one scrollable panel in the crafting menu --
+# restrict the per-sprite icon search to that panel (reference-space
+# x, y, w, h) so a sprite is only matched where it actually appears, not
+# anywhere else on screen. Only the sprite-icon lookup uses this; the menu
+# anchor / Max / input / Craft / insufficient searches stay full-screen.
+CRAFT_SPRITE_REGION = (246, 241, 221, 340)
+CRAFT_EVERY_MIN = 1
+CRAFT_EVERY_MAX = 999
+CRAFT_AMOUNT_MAX = 9999  # cap a per-item typed quantity at something sane
+
+# Timeouts for each crafting step (seconds).
+CRAFT_AREA_TIMEOUT = 10.0          # the Area menu / Crafting button showing up
+CRAFT_LOAD_TIMEOUT = 60.0          # the crafting area world finishing loading (nav_play back on screen)
+CRAFT_LOAD_SETTLE = 1.5            # extra wait AFTER nav_play reappears (area loaded) before pressing E --
+                                   # nav_play showing means the world's up, but the character/controls need
+                                   # a beat more to actually accept the E keypress
+CRAFT_MENU_TIMEOUT = 15.0          # the E menu fully opening (craft_menu anchor)
+CRAFT_ITEM_TIMEOUT = 4.0           # a sprite icon / Max / input / Craft button appearing
+CRAFT_INSUFFICIENT_TIMEOUT = 2.0   # how long to watch for the insufficient-items warning after clicking Craft
+
+

@@ -109,7 +109,9 @@ GUI_HEIGHT_COMPACT_FIT = TITLEBAR_H + config.FIXED_WIN_H + COMPACT_STRIP_H
 # screen, and the panel's size is whatever the game doesn't need -- which is a
 # different number on every Mac, hence computed at runtime from the visible
 # frame rather than baked in as a constant.
-MAC_GAP = 12  # visual breathing room between the panel and the game window
+MAC_GAP = 20  # breathing room BETWEEN the panel and the game -- also grabbable space to drag either
+MAC_MARGIN = 24  # inset both windows from the top/left screen edges so their title bars aren't jammed
+                 # against the menu bar / edge, which makes them fiddly to drag (reported)
 MAC_PANEL_MIN_W = PANEL_WIDTH  # narrower than the Windows panel column and it stops being usable
 MAC_PANEL_MAX_W = 560  # past this the single-column dashboard just looks stretched
 UI_INDEX = os.path.join(constants.UI_DIR, "index.html")
@@ -316,6 +318,19 @@ def _mac_panel_layout() -> dict:
     the game simply overflows the right edge; the startup check in _launch_ui
     already warns about that case rather than silently arranging off-screen."""
     x, y, width, height = window_mac.get_visible_frame()
+    # Inset both windows from the top/left screen edges so there's grabbable
+    # empty space to drag them -- parked flush against the menu bar and edge
+    # they're fiddly to move on macOS (reported). Applied only when the
+    # display still has room for the panel + game + gap afterward, so a tight
+    # screen keeps a working (edge-to-edge) layout instead of shoving the game
+    # off-screen; the arithmetic keeps the game's right/bottom edges exactly
+    # where they were, so the inset only ever eats slack, never the game.
+    if (width >= MAC_PANEL_MIN_W + config.FIXED_WIN_W + MAC_GAP + MAC_MARGIN
+            and height >= config.FIXED_WIN_H + MAC_MARGIN):
+        x += MAC_MARGIN
+        y += MAC_MARGIN
+        width -= MAC_MARGIN
+        height -= MAC_MARGIN
     panel_w = max(MAC_PANEL_MIN_W, min(MAC_PANEL_MAX_W, width - config.FIXED_WIN_W - MAC_GAP))
     return {
         "x": x, "y": y,
@@ -452,7 +467,8 @@ class Api:
         self._update_progress = {}
         self.runner = MacroRunner(
             self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result,
-            self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot)
+            self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot,
+            self.get_crafting_settings, self.set_crafting_count)
 
     def _run_stats_snapshot(self) -> dict:
         # Fed to the runner's match-result webhook so it can report the same
@@ -955,6 +971,160 @@ class Api:
         cfg.update({"challenge": challenge})
         self.push_log("[Challenge] Play counts and cooldowns reset manually.")
         return {"ok": True}
+
+    # ── Auto Crafting (see core/runner_crafting.py) ──
+
+    def _default_crafting_settings(self) -> dict:
+        from core.runner_constants import CRAFT_SPRITES, CRAFT_DEFAULT_EVERY
+        return {
+            "enabled": False,
+            "every": CRAFT_DEFAULT_EVERY,   # craft after this many qualifying wins
+            "count": 0,                     # running win counter toward the next pass
+            # One row per sprite, in PRIORITY order (the runner crafts top-down).
+            # amount is "max" or a positive int.
+            "items": [{"key": k, "enabled": False, "amount": "max"} for k in CRAFT_SPRITES],
+        }
+
+    def get_crafting_settings(self) -> dict:
+        # Merges saved settings over the defaults and normalizes them, same
+        # shape/ownership as get_challenge_settings. The item list is rebuilt
+        # preserving the user's saved priority ORDER, with any newly-added
+        # sprite appended at the end and any removed one dropped -- so the
+        # roster can grow (see CRAFT_SPRITES) without stranding old configs.
+        from core.runner_constants import (CRAFT_SPRITES, CRAFT_DEFAULT_EVERY, CRAFT_EVERY_MIN,
+                                           CRAFT_EVERY_MAX, CRAFT_AMOUNT_MAX)
+        data = cfg.load()
+        saved = data.get("crafting") or {}
+        merged = {**self._default_crafting_settings(), **saved}
+        merged["enabled"] = bool(merged.get("enabled"))
+        try:
+            merged["every"] = min(CRAFT_EVERY_MAX, max(CRAFT_EVERY_MIN, int(merged.get("every", CRAFT_DEFAULT_EVERY))))
+        except (TypeError, ValueError):
+            merged["every"] = CRAFT_DEFAULT_EVERY
+        try:
+            merged["count"] = max(0, int(merged.get("count", 0)))
+        except (TypeError, ValueError):
+            merged["count"] = 0
+
+        valid = set(CRAFT_SPRITES)
+        ordered, seen = [], set()
+
+        def _norm(entry: dict) -> dict:
+            amount = entry.get("amount", "max")
+            if str(amount).lower() == "max":
+                amount = "max"  # canonical lowercase
+            else:
+                try:
+                    amount = min(CRAFT_AMOUNT_MAX, max(1, int(amount)))
+                except (TypeError, ValueError):
+                    amount = "max"
+            return {"key": entry["key"], "enabled": bool(entry.get("enabled", False)), "amount": amount}
+
+        for entry in (saved.get("items") or []):
+            if isinstance(entry, dict) and entry.get("key") in valid and entry["key"] not in seen:
+                ordered.append(_norm(entry))
+                seen.add(entry["key"])
+        for k in CRAFT_SPRITES:  # append sprites not in the saved order (new roster additions)
+            if k not in seen:
+                ordered.append({"key": k, "enabled": False, "amount": "max"})
+        merged["items"] = ordered
+        return merged
+
+    def set_crafting_count(self, count) -> dict:
+        # The runner's callback (bump on a qualifying win / reset to 0 after a
+        # pass); also usable by hand. Persists just the counter.
+        try:
+            count = max(0, int(count))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_count"}
+        crafting = self.get_crafting_settings()
+        crafting["count"] = count
+        cfg.update({"crafting": crafting})
+        return {"ok": True}
+
+    def set_crafting_enabled(self, enabled: bool) -> dict:
+        crafting = self.get_crafting_settings()
+        crafting["enabled"] = bool(enabled)
+        cfg.update({"crafting": crafting})
+        return {"ok": True}
+
+    def set_crafting_every(self, every) -> dict:
+        from core.runner_constants import CRAFT_EVERY_MIN, CRAFT_EVERY_MAX
+        try:
+            every = min(CRAFT_EVERY_MAX, max(CRAFT_EVERY_MIN, int(every)))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_every"}
+        crafting = self.get_crafting_settings()
+        crafting["every"] = every
+        cfg.update({"crafting": crafting})
+        return {"ok": True}
+
+    def set_crafting_item_enabled(self, key: str, enabled: bool) -> dict:
+        crafting = self.get_crafting_settings()
+        found = False
+        for it in crafting["items"]:
+            if it["key"] == key:
+                it["enabled"] = bool(enabled)
+                found = True
+                break
+        if not found:
+            return {"ok": False, "reason": "bad_key"}
+        cfg.update({"crafting": crafting})
+        return {"ok": True}
+
+    def set_crafting_item_amount(self, key: str, amount) -> dict:
+        # amount is the string "max" or a positive integer (typed into the
+        # quantity box at craft time).
+        from core.runner_constants import CRAFT_AMOUNT_MAX
+        if str(amount).lower() == "max":
+            amount = "max"
+        else:
+            try:
+                amount = min(CRAFT_AMOUNT_MAX, max(1, int(amount)))
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "bad_amount"}
+        crafting = self.get_crafting_settings()
+        found = False
+        for it in crafting["items"]:
+            if it["key"] == key:
+                it["amount"] = amount
+                found = True
+                break
+        if not found:
+            return {"ok": False, "reason": "bad_key"}
+        cfg.update({"crafting": crafting})
+        return {"ok": True}
+
+    def set_crafting_order(self, order: list) -> dict:
+        # Reorder the item list to the given list of keys (the UI's drag/
+        # up-down priority control). Unknown keys are ignored; any item not
+        # named in `order` keeps its relative place at the end.
+        if not isinstance(order, list):
+            return {"ok": False, "reason": "bad_order"}
+        crafting = self.get_crafting_settings()
+        by_key = {it["key"]: it for it in crafting["items"]}
+        new_items, seen = [], set()
+        for k in order:
+            if k in by_key and k not in seen:
+                new_items.append(by_key[k])
+                seen.add(k)
+        for it in crafting["items"]:
+            if it["key"] not in seen:
+                new_items.append(it)
+        crafting["items"] = new_items
+        cfg.update({"crafting": crafting})
+        return {"ok": True}
+
+    def reset_crafting_count(self) -> dict:
+        return self.set_crafting_count(0)
+
+    def test_crafting(self) -> dict:
+        # Auto Crafting screen's "Run now" -- one crafting pass immediately
+        # against the current game window, ignoring the win threshold and the
+        # enabled toggle (see runner_crafting.start_crafting_test / force).
+        data = cfg.load()
+        coords = {k: data.get(k, v) for k, v in MACRO_COORD_DEFAULTS.items()}
+        return self.runner.start_crafting_test(lambda: self.game_hwnd, coords)
 
     def start_macro(self) -> dict:
         data = cfg.load()
@@ -3001,7 +3171,7 @@ def _launch_ui():
         # (e.g. a 13" panel left at its default 1280x800 scaled resolution) don't have that much
         # logical width even though the physical panel is plenty big -- Roblox ends up parked
         # partly or fully off-screen with no error, which just looks like "the game is too big".
-        needed_w = GUI_WIDTH_COMPACT + 12 + config.FIXED_WIN_W
+        needed_w = GUI_WIDTH_COMPACT + MAC_GAP + config.FIXED_WIN_W
         if screen_w < needed_w or screen_h < config.FIXED_WIN_H:
             api.push_log(
                 f"[Macro] Your display's logical resolution ({screen_w}x{screen_h}pt) is smaller than "

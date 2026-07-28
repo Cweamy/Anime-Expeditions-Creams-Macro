@@ -415,7 +415,7 @@ function launchRoblox() {
 // other screens get the full window instead of Roblox showing through.
 let currentScreen = 'dashboard';
 let lastNonDashboardScreen = 'creation';
-const SCREENS = ['dashboard', 'task', 'creation', 'challenge', 'settings'];
+const SCREENS = ['dashboard', 'task', 'creation', 'resource', 'settings'];
 
 // Only macOS cares: there the game sits BESIDE this window instead of inside
 // it, which changes both the Dashboard's layout and how much screen this
@@ -522,7 +522,7 @@ function switchScreen(name) {
 
   if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); }
   if (name === 'task') refreshTaskQueue();
-  if (name === 'challenge') refreshChallengeScreen();
+  if (name === 'resource') { refreshCraftingScreen(); refreshChallengeScreen(); }
   if (name === 'settings') { refreshSavedPaths(); loadMacroCoords(); loadRewardTestMaps(); }
 
   // The Process Log only exists on the Dashboard, and a display:none element
@@ -2976,6 +2976,160 @@ async function resetChallengeCounts() {
   try { await pywebview.api.reset_challenge_counts(); } catch (e) {}
   addLog('[Challenge] Play counts reset.');
   await refreshChallengeScreen();
+}
+
+// ---------------------------------------------------------------------------
+// Auto Crafting screen (see core/runner_crafting.py). Interleaved like
+// Challenge: after every N qualifying wins it runs one crafting pass. The
+// label map mirrors CRAFT_SPRITE_LABELS in core/runner_constants.py -- same
+// JS-side duplication as CHALLENGE_STAGE_SLOTS above.
+// ---------------------------------------------------------------------------
+const CRAFT_SPRITE_LABELS = {
+  sprite_rainbow: 'Rainbow', sprite_red: 'Red', sprite_yellow: 'Yellow',
+  sprite_green: 'Green', sprite_blue: 'Blue', sprite_purple: 'Purple', sprite_pink: 'Pink',
+};
+let craftingState = null;
+
+async function refreshCraftingScreen() {
+  try {
+    craftingState = await pywebview.api.get_crafting_settings();
+  } catch (e) {
+    craftingState = null;
+  }
+  renderCraftingScreen();
+}
+
+function renderCraftingScreen() {
+  const s = craftingState;
+  const enabledBtn = document.getElementById('toggle-crafting-enabled');
+  if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
+  const everyInput = document.getElementById('crafting-every');
+  if (everyInput && s) everyInput.value = s.every;
+  const prog = document.getElementById('crafting-progress');
+  if (prog && s) prog.textContent = `${s.count} / ${s.every}`;
+
+  const list = document.getElementById('crafting-item-list');
+  if (!list) return;
+  if (!s) { list.innerHTML = '<div class="rh-empty">Couldn\'t load crafting settings.</div>'; return; }
+  const items = s.items || [];
+  list.innerHTML = items.map((it, i) => {
+    const label = CRAFT_SPRITE_LABELS[it.key] || it.key;
+    const isMax = String(it.amount).toLowerCase() === 'max';
+    const num = isMax ? '' : it.amount;
+    const upDis = i === 0 ? 'disabled' : '';
+    const downDis = i === items.length - 1 ? 'disabled' : '';
+    return `
+      <div class="task-card" style="--tqc: var(--teal); cursor: default;">
+        <div class="tq-text" style="min-width: 0;">
+          <div class="challenge-map-row">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <button class="task-toolbar-btn" ${upDis} style="padding: 0 6px; line-height: 1.2;" onclick="moveCraftingItem('${it.key}', -1)" title="Higher priority">&#9650;</button>
+              <button class="task-toolbar-btn" ${downDis} style="padding: 0 6px; line-height: 1.2;" onclick="moveCraftingItem('${it.key}', 1)" title="Lower priority">&#9660;</button>
+            </div>
+            <button class="toggle-switch ${it.enabled ? 'on' : ''}" onclick="toggleCraftingItem('${it.key}', this)"></button>
+            <span class="tq-title" style="flex: 1;">${escapeHtml(label)}</span>
+            <div class="seg-toggle" style="width: auto;">
+              <button type="button" class="seg-btn ${isMax ? 'active' : ''}" onclick="setCraftingItemMax('${it.key}')">Max</button>
+              <button type="button" class="seg-btn ${isMax ? '' : 'active'}" onclick="setCraftingItemNumberMode('${it.key}')">Number</button>
+            </div>
+            <input type="number" class="block-input" min="1" max="9999" style="width: 64px; ${isMax ? 'visibility: hidden;' : ''}"
+                   value="${num}" placeholder="Qty" onchange="setCraftingItemAmount('${it.key}', this.value)">
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function toggleCraftingEnabled(btn) {
+  const isOn = !btn.classList.contains('on');
+  btn.classList.toggle('on', isOn);
+  bounceToggle(btn);
+  try { await pywebview.api.set_crafting_enabled(isOn); } catch (e) {}
+}
+
+async function setCraftingEvery(value) {
+  const n = Math.max(1, Math.min(999, parseInt(value, 10) || 1));
+  try { await pywebview.api.set_crafting_every(n); } catch (e) {}
+  await refreshCraftingScreen();
+}
+
+async function toggleCraftingItem(key, btn) {
+  const isOn = !btn.classList.contains('on');
+  btn.classList.toggle('on', isOn);
+  bounceToggle(btn);
+  try { await pywebview.api.set_crafting_item_enabled(key, isOn); } catch (e) {}
+}
+
+async function setCraftingItemMax(key) {
+  try { await pywebview.api.set_crafting_item_amount(key, 'max'); } catch (e) {}
+  await refreshCraftingScreen();
+}
+
+async function setCraftingItemNumberMode(key) {
+  // Switching Max -> Number seeds a real quantity (1) so there's something to
+  // craft; keeps the existing number if it already had one.
+  const it = ((craftingState && craftingState.items) || []).find(x => x.key === key);
+  const amt = it && String(it.amount).toLowerCase() !== 'max' ? it.amount : 1;
+  try { await pywebview.api.set_crafting_item_amount(key, amt); } catch (e) {}
+  await refreshCraftingScreen();
+}
+
+async function setCraftingItemAmount(key, value) {
+  const n = Math.max(1, Math.min(9999, parseInt(value, 10) || 1));
+  try { await pywebview.api.set_crafting_item_amount(key, n); } catch (e) {}
+  await refreshCraftingScreen();
+}
+
+async function moveCraftingItem(key, dir) {
+  const items = (craftingState && craftingState.items) || [];
+  const order = items.map(x => x.key);
+  const i = order.indexOf(key);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= order.length) return;
+  order.splice(i, 1);
+  order.splice(j, 0, key);
+  try { await pywebview.api.set_crafting_order(order); } catch (e) {}
+  await refreshCraftingScreen();
+}
+
+async function resetCraftingCount() {
+  try { await pywebview.api.reset_crafting_count(); } catch (e) {}
+  await refreshCraftingScreen();
+}
+
+function openCraftingSprites() {
+  const m = document.getElementById('crafting-sprites-modal');
+  if (m) m.style.display = 'flex';
+  renderCraftingScreen();  // populate the list (also refreshes the toggle/progress on the screen)
+}
+
+function closeCraftingSprites() {
+  const m = document.getElementById('crafting-sprites-modal');
+  if (m) m.style.display = 'none';
+}
+
+function openChallengeMaps() {
+  const m = document.getElementById('challenge-maps-modal');
+  if (m) m.style.display = 'flex';
+  refreshChallengeScreen();  // (re)populate the per-map Macro Operation dropdowns
+}
+
+function closeChallengeMaps() {
+  const m = document.getElementById('challenge-maps-modal');
+  if (m) m.style.display = 'none';
+}
+
+async function testCrafting() {
+  let res = null;
+  try { res = await pywebview.api.test_crafting(); } catch (e) {}
+  if (res && res.ok) {
+    addLog('[Craft] Running a test crafting pass now -- watch the log.');
+    switchScreen('dashboard');  // so the docked game + Process Log are visible while it runs
+  } else if (res && res.reason === 'already_running') {
+    addLog('[Craft] Can\'t test -- the macro is already running. Stop it first (F8).');
+  } else {
+    addLog('[Craft] Couldn\'t start the crafting test (is Roblox docked?).');
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -30,6 +30,10 @@ to need a first-run fix. debug.log will show any AX/Quartz exception
 with a [window_mac] prefix.
 """
 
+import atexit
+import subprocess
+
+import objc
 import Quartz
 from AppKit import NSRunningApplication, NSApplicationActivateIgnoringOtherApps
 try:
@@ -263,28 +267,40 @@ def capture_window_rgb(window_id: int):
     size, or None -- callers already resize captures to reference
     dimensions (see core.vision), so the 2x density is absorbed there."""
     try:
-        image = Quartz.CGWindowListCreateImage(
-            Quartz.CGRectNull, Quartz.kCGWindowListOptionIncludingWindow, window_id,
-            Quartz.kCGWindowImageBoundsIgnoreFraming)
-        if image is None:
-            return None
-        w = Quartz.CGImageGetWidth(image)
-        h = Quartz.CGImageGetHeight(image)
-        if w <= 0 or h <= 0:
-            return None
-        bpr = Quartz.CGImageGetBytesPerRow(image)
-        data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(image))
-        raw = bytes(data)
-        rgb = bytearray(w * h * 3)
-        # BGRA rows padded to bytesPerRow -- walk rows explicitly.
-        for row in range(h):
-            src = row * bpr
-            dst = row * w * 3
-            line = raw[src:src + w * 4]
-            rgb[dst + 0::3] = line[2::4]
-            rgb[dst + 1::3] = line[1::4]
-            rgb[dst + 2::3] = line[0::4]
-        return bytes(rgb), w, h
+        # PER-CALL AUTORELEASE POOL -- do not remove. This runs on the
+        # macro's background capture/polling thread (core.runner, core.wave),
+        # which has no autorelease pool of its own the way the main run-loop
+        # thread does. CGWindowListCreateImage and the CoreGraphics
+        # temporaries around it autorelease into the current thread's pool;
+        # with no pool draining, every captured frame -- a full Retina image,
+        # tens of MB each -- is retained forever. At the runner's capture
+        # cadence that walks the process straight out of memory in minutes
+        # (observed 60+ GB per instance). Wrapping each call in its own pool
+        # drains those temporaries every frame; the returned value is plain
+        # Python bytes/ints, so nothing that escapes the pool is affected.
+        with objc.autorelease_pool():
+            image = Quartz.CGWindowListCreateImage(
+                Quartz.CGRectNull, Quartz.kCGWindowListOptionIncludingWindow, window_id,
+                Quartz.kCGWindowImageBoundsIgnoreFraming)
+            if image is None:
+                return None
+            w = Quartz.CGImageGetWidth(image)
+            h = Quartz.CGImageGetHeight(image)
+            if w <= 0 or h <= 0:
+                return None
+            bpr = Quartz.CGImageGetBytesPerRow(image)
+            data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(image))
+            raw = bytes(data)
+            rgb = bytearray(w * h * 3)
+            # BGRA rows padded to bytesPerRow -- walk rows explicitly.
+            for row in range(h):
+                src = row * bpr
+                dst = row * w * 3
+                line = raw[src:src + w * 4]
+                rgb[dst + 0::3] = line[2::4]
+                rgb[dst + 1::3] = line[1::4]
+                rgb[dst + 2::3] = line[0::4]
+            return bytes(rgb), w, h
     except Exception as exc:
         _log(f"capture raised: {exc} -- is Screen Recording permission granted?")
         return None
@@ -313,6 +329,45 @@ def get_display_scale_percent() -> int:
     # Windows-specific "display scale breaks fixed coordinates" warning
     # never applies (Retina density is normalized at capture time instead).
     return 100
+
+
+# ── Keep the Mac awake while a run is going (see core.runner) ──
+# THE macOS-SPECIFIC PART: synthetic CGEvents (see core._input_mac) do NOT
+# reset the system idle timer the way real HID input does, so the display
+# and system idle-sleep timers keep counting even while the macro is
+# visibly moving the mouse and clicking -- the Mac sleeps mid-run and the
+# user is forced to set the display to "never" by hand. `caffeinate` is
+# Apple's own tool for holding that off; run it as a child for the length
+# of the run (-d = no display sleep, -i = no system idle sleep). Scoped to
+# the run rather than the whole app so an idle, not-running macro still
+# lets the Mac sleep normally.
+_caffeinate_proc = None
+
+
+def prevent_sleep() -> None:
+    global _caffeinate_proc
+    if _caffeinate_proc is not None and _caffeinate_proc.poll() is None:
+        return  # already holding sleep off
+    try:
+        _caffeinate_proc = subprocess.Popen(["caffeinate", "-d", "-i"])
+        # Backstop: if the app exits without allow_sleep() running (crash,
+        # hard stop), don't leave caffeinate holding the Mac awake forever.
+        atexit.register(allow_sleep)
+    except Exception as exc:
+        _log(f"prevent_sleep (caffeinate) failed: {exc}")
+        _caffeinate_proc = None
+
+
+def allow_sleep() -> None:
+    global _caffeinate_proc
+    if _caffeinate_proc is None:
+        return
+    try:
+        if _caffeinate_proc.poll() is None:
+            _caffeinate_proc.terminate()
+    except Exception:
+        pass
+    _caffeinate_proc = None
 
 
 def get_screen_size():

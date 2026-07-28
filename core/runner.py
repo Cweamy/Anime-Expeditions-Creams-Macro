@@ -29,6 +29,7 @@ from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- see runner_constants' docstring
 from .runner_blocks import BlockOps
 from .runner_challenge import ChallengeOps
+from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
 
 
@@ -70,13 +71,14 @@ def _find_team_load_button(frame, expected_y):
     return cx, cy
 
 
-class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
+class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
     active at a time (one physical game window, one macro)."""
 
     def __init__(self, mouse, keyboard, log, set_status=None, record_result=None,
-                 get_challenge_settings=None, mark_challenge_stage_played=None, get_run_stats=None):
+                 get_challenge_settings=None, mark_challenge_stage_played=None, get_run_stats=None,
+                 get_crafting_settings=None, set_crafting_count=None):
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
@@ -127,6 +129,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # None (tests/CLI) just yields an empty snapshot, so those fields are
         # quietly omitted rather than the webhook failing.
         self._get_run_stats = get_run_stats or (lambda: {})
+        # Auto Crafting tab settings + its persisted win counter, same
+        # callback pattern as Challenge above (settings.json is owned by
+        # main.Api). None (tests/CLI) makes every crafting path a no-op.
+        self._get_crafting_settings = get_crafting_settings
+        self._set_crafting_count = set_crafting_count or (lambda *a, **kw: None)
         self._thread = None
         self._stop_event = None
         self._pause_event = threading.Event()
@@ -269,6 +276,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # anything about a real match in progress.
         task = {"macro": macro_name, "mode": "story", "map": "-", "difficulty": "-"}
         try:
+            wm.prevent_sleep()  # same keep-awake as a real run (see _run_session)
             if mode == "prestart":
                 self._log(f'[Debug] Testing Pre Start blocks from "{macro_name}"...')
                 self._run_prestart_blocks(hwnd, stop_event, task, first_repeat=True)
@@ -294,6 +302,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                                                        macro_name=macro_name)
                         time.sleep(MATCH_RESULT_POLL_INTERVAL)
         finally:
+            wm.allow_sleep()
             # Release this thread's screen-capture handle (see core.mss_manager)
             # when the debug test ends -- same cleanup a real run does below.
             vision.close_mss()
@@ -498,8 +507,16 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         the run ends -- however it ends -- without threading a try/finally
         through _run's whole early-returning body."""
         try:
+            # Keep the machine awake for the whole run. On macOS this is
+            # essential: synthetic input doesn't reset the idle timer, so the
+            # Mac sleeps mid-run despite the macro clicking (see
+            # window_mac.prevent_sleep). Called here, on the session thread
+            # that lives for the length of the run, because the Windows
+            # backing (SetThreadExecutionState) is per-thread.
+            wm.prevent_sleep()
             self._run(*args)
         finally:
+            wm.allow_sleep()
             vision.close_mss()
 
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
@@ -573,6 +590,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             return
         if not self._skip_first_task_setup:
             self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
+            if self._crafting_wants_in():
+                self._run_crafting(hwnd, stop_event)
         if self._checkpoint(stop_event):
             return
 
@@ -620,6 +639,20 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                                         scroll_nudges, default_walk_paths, webhook):
                     self._set_status(action="Idle")
                     return
+
+                # Auto Crafting after each finished task (we're back at the
+                # lobby here). This is what catches the cases the between-
+                # repeats hook inside _run_task can't: a single-repeat task, or
+                # the win threshold being reached on a task's LAST repeat (the
+                # in-task hook is gated by `not is_last_repeat`). Without this,
+                # a reached threshold just sat until the next Start -- the exact
+                # "task finished, came back to lobby, no craft" report.
+                if self._crafting_wants_in():
+                    self._run_crafting(hwnd, stop_event)
+                    if self._current_hwnd and wm.is_window(self._current_hwnd):
+                        hwnd = self._current_hwnd
+                    if self._checkpoint(stop_event):
+                        return
 
             # The queue always loops back to task 1 once it finishes rather
             # than going Idle -- Stop (F2) is the only way to actually end
@@ -752,9 +785,17 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                 # task cleanly steps out of its own stage before Challenge's
                 # navigation (which starts from the lobby) runs.
                 challenge_wants_in = (not is_last_repeat) and self._challenge_has_ready_stage()
+                # Same interleave shape for Auto Crafting: if the win counter
+                # has hit its threshold, force a real Leave Stage this repeat so
+                # the crafting navigation (which starts from the lobby) can run.
+                # Checked BEFORE _handle_match_result, which is where THIS win
+                # gets counted -- so a pass fires on the repeat after the count
+                # reaches N, not the same one (a one-repeat lag, negligible on a
+                # farm and worth keeping the clean Leave-Stage-first ordering).
+                crafting_wants_in = (not is_last_repeat) and self._crafting_wants_in()
                 if not self._handle_match_result(hwnd, stop_event, task, result, duration, webhook,
                                                   repeat=(not is_last_repeat) and not challenge_wants_in
-                                                  and not restart_needed):
+                                                  and not crafting_wants_in and not restart_needed):
                     if stop_event.is_set():
                         return False
                     task_failed = True
@@ -830,6 +871,25 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                     # this repeat re-enters the task from scratch exactly
                     # like the very first one did, not a quick Repeat Stage
                     # requeue -- there's no stage left to requeue INTO.
+                    if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords,
+                                                  scroll_power, scroll_nudges, webhook):
+                        if stop_event.is_set():
+                            return False
+                        task_failed = True
+                        break
+                    fresh_entry = True
+                    continue
+
+                if crafting_wants_in:
+                    self._log(f'[Macro] Crafting due -- pausing "{map_name}" to run a crafting pass '
+                               f'before continuing.')
+                    self._run_crafting(hwnd, stop_event)
+                    if self._checkpoint(stop_event):
+                        return False
+                    self._log(f'[Macro] Crafting pass finished -- resuming "{map_name}".')
+                    # Same as the Challenge interleave above: the stage was left
+                    # entirely (repeat=False), so re-enter from scratch, not a
+                    # Repeat Stage requeue -- there's no stage left to requeue into.
                     if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords,
                                                   scroll_power, scroll_nudges, webhook):
                         if stop_event.is_set():
@@ -1255,6 +1315,12 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
     def _handle_match_result(self, hwnd, stop_event: threading.Event, task: dict, result: str, duration: str,
                               webhook: dict, repeat: bool) -> bool:
         label = "Victory" if result == "win" else "Defeat"
+
+        # Count a qualifying win (Mastery Story / Challenge) toward the next
+        # Auto Crafting pass. This is the single choke point both farms' wins
+        # pass through; the call itself no-ops unless crafting is enabled and
+        # the win qualifies (see runner_crafting._note_win_for_crafting).
+        self._note_win_for_crafting(task, result)
 
         # A Battle-phase quick-place chain (see _run_place_unit_block) could
         # still be holding Shift down right up to the moment Victory/Defeat
@@ -2174,10 +2240,15 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                    f'attempts -- never teleported in-game, stopping.')
         return False
 
-    def _click_found_image(self, hwnd, name: str, timeout: float, stop_event: threading.Event = None) -> dict:
+    def _click_found_image(self, hwnd, name: str, timeout: float, stop_event: threading.Event = None,
+                            shuffle: bool = False) -> dict:
         """Shared wait-for-it-then-click for a plain nav button (nav_settings,
         nav_search, ...) -- no per-button quirks like Story/Play have, so one
         helper covers all of them instead of a bespoke method each.
+
+        shuffle=True hovers into the button with real relative moves before
+        clicking (see vision.click_match) -- for buttons that need genuine
+        hover-in movement to register the click (the lobby Event button).
 
         Returns the match dict (truthy) on success or None (falsy) on
         failure -- existing `if not self._click_found_image(...)` call sites
@@ -2198,7 +2269,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         debug_path = self._debug_save(hwnd, name, match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
         self._log(f'[Macro] Found "{name}" (score {match["score"]:.2f}) -- clicking it.{suffix}')
-        vision.click_match(self._mouse, hwnd, match)
+        vision.click_match(self._mouse, hwnd, match, shuffle=shuffle)
         return match
 
     def _click_and_verify_gone(self, hwnd, stop_event: threading.Event, name: str, timeout: float,
@@ -2907,7 +2978,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         time.sleep(SETTLE_DELAY)
 
         self._set_status(action="Clicking Event gamemode...")
-        if self._click_found_image(hwnd, "event_gamemode", EVENT_SCREEN_TIMEOUT, stop_event) is None:
+        # shuffle=True: this card sometimes doesn't register a plain click --
+        # the cursor lands on it but the game needs real hover-in movement
+        # first (reported), so approach it with a wiggle (see click_match).
+        if self._click_found_image(hwnd, "event_gamemode", EVENT_SCREEN_TIMEOUT, stop_event,
+                                   shuffle=True) is None:
             self._spam_back_until_gone(hwnd, stop_event)
             return False
         if self._checkpoint(stop_event):
