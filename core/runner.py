@@ -18,8 +18,11 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import cv2
+
 from . import camera
 from . import keys
+from . import ocr_windows
 from . import stage_select
 from . import vision
 from . import window as wm
@@ -27,6 +30,46 @@ from .runner_constants import *  # noqa: F401,F403 -- see runner_constants' docs
 from .runner_blocks import BlockOps
 from .runner_challenge import ChallengeOps
 from .runner_expedition import ExpeditionOps
+
+
+def _find_team_load_button(frame, expected_y):
+    """Return the visible green Load Team button nearest ``expected_y``.
+
+    The list can be rendered in a larger, undocked Roblox window, and slot
+    8 is only partly visible at the bottom after scrolling. Work in the
+    normalized 1152x756 capture and accept that clipped button, then let
+    vision.ref_to_screen scale its center back to the real window.
+    """
+    if frame is None or frame.size == 0:
+        return None
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, (35, 100, 100), (95, 255, 255))
+
+    # Load Team buttons live only in the right side of this panel. Keeping
+    # the mask inside that band prevents green unit art/world scenery from
+    # becoming a click target.
+    restricted = green.copy()
+    restricted[:160, :] = 0
+    restricted[700:, :] = 0
+    restricted[:, :680] = 0
+    restricted[:, 980:] = 0
+
+    candidates = []
+    count, _, stats, centroids = cv2.connectedComponentsWithStats(restricted)
+    for index in range(1, count):
+        x, y, width, height, area = stats[index]
+        # Full buttons are about 108x47 in reference space. Slot 8 can be
+        # clipped to roughly half-height but remains a wide solid rectangle.
+        if width < 70 or height < 14 or area < 1000:
+            continue
+        cx, cy = centroids[index]
+        candidates.append((abs(cy - expected_y), int(round(cx)), int(round(cy))))
+    if not candidates:
+        return None
+    _, cx, cy = min(candidates)
+    return cx, cy
+
+
 class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
@@ -1694,6 +1737,18 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             except vision.TemplateNotFound as exc:
                 self._log(f"[Macro] Can't verify the Load Team list: {exc}")
                 return False
+            if loadout_open is None and not stop_event.is_set() and ocr_windows.is_available():
+                # The current game has rendered this title at two subtly
+                # different widths even after both captures were normalized
+                # to 1152x756. Keep the strict image threshold, but do not
+                # claim the list is closed when Windows OCR can read its
+                # exact title. This is confirmation only -- no OCR-derived
+                # coordinate is clicked.
+                frame = vision.capture_game_bgr(hwnd)
+                text = ocr_windows.ocr_image(frame) if frame is not None else ""
+                normalized = "".join((text or "").lower().split())
+                if "unitteams" in normalized:
+                    loadout_open = {"detector": "windows_ocr", "text": "Unit Teams"}
             if loadout_open is not None:
                 break
             if stop_event.is_set():
@@ -1703,7 +1758,10 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
                       f'{TEAM_LOADOUT_OPEN_RETRY_ATTEMPTS} Teams clicks.')
             self._save_debug_screenshot_unconditional(hwnd, "team_loadout_open_failed")
             return False
-        self._log(f'[Macro] Load Team list open (score {loadout_open["score"]:.2f}).')
+        if loadout_open.get("detector") == "windows_ocr":
+            self._log('[Macro] Load Team list open (confirmed by Windows OCR: "Unit Teams").')
+        else:
+            self._log(f'[Macro] Load Team list open (score {loadout_open["score"]:.2f}).')
         # The title arrives before the row animation has completely settled.
         time.sleep(TEAM_LOADOUT_OPEN_SETTLE)
         if self._checkpoint(stop_event):
@@ -1747,6 +1805,17 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         else:
             row_y = row1_y + (team_num - 1) * int(self._coords["team_loadout_row_height"])
 
+        click_x, click_y = row_x, row_y
+        frame = vision.capture_game_bgr(hwnd)
+        detected_button = _find_team_load_button(frame, row_y)
+        if detected_button is not None:
+            click_x, click_y = detected_button
+            self._log(
+                f"[Macro] Detected Loadout {team_num} button at "
+                f"({click_x}, {click_y}); coordinate estimate was ({row_x}, {row_y})."
+            )
+        click_screen_x, click_screen_y = vision.ref_to_screen(hwnd, click_x, click_y)
+
         # Clicking the Loadout row is what actually equips the team --
         # Confirm not showing up afterward used to just skip the rest of
         # this sequence, which silently entered the match with the
@@ -1762,7 +1831,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             if attempt > 1:
                 self._log(f'[Macro] "confirm" didn\'t show up -- retrying Loadout {team_num} '
                            f'(attempt {attempt}/{TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS}).')
-            self._mouse.click(left + row_x, top + row_y)
+            self._mouse.click(click_screen_x, click_screen_y)
             self._log(f"[Macro] Clicked Loadout {team_num}.")
             # Let the Confirm button finish sliding up before locating it --
             # otherwise it's found mid-animation and the click lands where it
