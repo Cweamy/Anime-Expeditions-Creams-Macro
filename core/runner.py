@@ -2548,6 +2548,11 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # but a regular numbered stage started instead).
         time.sleep(SETTLE_DELAY)
 
+        visual_name = STORY_STAGE_VISUAL_IMAGES.get(stage) if mode == "story" else None
+        if visual_name:
+            return self._select_story_stage_visually(
+                hwnd, stop_event, stage, visual_name)
+
         idx = order.index(stage)
         x = base[0]
         y = base[1] + idx * row_height
@@ -2566,6 +2571,108 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         self._mouse.double_click(left + x, top + y)
         time.sleep(DIFFICULTY_CLICK_DELAY)
         return True
+
+    @staticmethod
+    def _stage_row_looks_selected(image) -> bool:
+        """Whether a small stage-row sample has the selected blue fill."""
+        if image is None or image.size == 0:
+            return False
+        # BGR. Selected rows are a saturated cyan/blue gradient; unselected
+        # rows are flat neutral gray. The glyph itself occupies little of
+        # this 49x49 sample, so require a substantial blue fraction instead
+        # of trusting one colored edge/glow pixel.
+        blue = image[:, :, 0].astype("int16")
+        green = image[:, :, 1].astype("int16")
+        red = image[:, :, 2].astype("int16")
+        selected = (
+            (blue > 100)
+            & (green > 55)
+            & (blue > red + 45)
+            & (green > red + 25)
+        )
+        return float(selected.mean()) >= STORY_STAGE_SELECTED_BLUE_MIN_FRACTION
+
+    def _story_stage_match_is_selected(self, hwnd, match: dict) -> bool:
+        half = STORY_STAGE_SELECTED_SAMPLE_HALF_SIZE
+        region = (
+            int(match["cx"]) - half,
+            int(match["cy"]) - half,
+            half * 2 + 1,
+            half * 2 + 1,
+        )
+        image = vision.capture_window_region_bgr(hwnd, region)
+        return self._stage_row_looks_selected(image)
+
+    def _select_story_stage_visually(
+            self, hwnd, stop_event: threading.Event, stage: str, image_name: str) -> bool:
+        """Find a named Story row visually and prove its selected state."""
+        try:
+            match = vision.wait_for_image(
+                hwnd, image_name, region=STORY_STAGE_SEARCH_REGION,
+                threshold=STORY_STAGE_MATCH_THRESHOLD,
+                timeout=STAGE_SCREEN_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't visually locate Story stage {stage}: {exc}")
+            return False
+        if match is None:
+            if not stop_event.is_set():
+                self._log(
+                    f'[Macro] "{image_name}" did not match inside the stage list -- '
+                    f'cannot safely select {stage}.'
+                )
+                self._save_debug_screenshot_unconditional(
+                    hwnd, f"stage_{stage.lower()}_not_found")
+            return False
+
+        self._log(
+            f'[Macro] Found stage "{stage}" visually (score {match["score"]:.2f}) '
+            f'at ({match["cx"]}, {match["cy"]}).'
+        )
+        if self._story_stage_match_is_selected(hwnd, match):
+            self._log(f'[Macro] Stage "{stage}" is already selected.')
+            time.sleep(DIFFICULTY_CLICK_DELAY)
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        for attempt in range(1, STORY_STAGE_CLICK_ATTEMPTS + 1):
+            if self._checkpoint(stop_event):
+                return False
+            self._set_status(action=f'Clicking stage "{stage}"...')
+            if not wm.activate_window(hwnd):
+                self._log(
+                    f'[Macro] Could not confirm focus before selecting stage "{stage}" '
+                    "-- click may not register."
+                )
+            self._log(
+                f'[Macro] Double-clicking stage "{stage}" at '
+                f'({match["cx"]}, {match["cy"]}) '
+                f'(attempt {attempt}/{STORY_STAGE_CLICK_ATTEMPTS}).'
+            )
+            self._mouse.double_click(left + match["cx"], top + match["cy"])
+
+            deadline = time.time() + STORY_STAGE_SELECTED_VERIFY_TIMEOUT
+            while time.time() < deadline:
+                if self._checkpoint(stop_event):
+                    return False
+                if self._story_stage_match_is_selected(hwnd, match):
+                    self._log(
+                        f'[Macro] Confirmed stage "{stage}" is selected.'
+                    )
+                    time.sleep(DIFFICULTY_CLICK_DELAY)
+                    return True
+                time.sleep(STORY_STAGE_SELECTED_VERIFY_POLL)
+            if attempt < STORY_STAGE_CLICK_ATTEMPTS:
+                self._log(
+                    f'[Macro] Stage "{stage}" did not turn selected -- retrying its row.'
+                )
+
+        self._log(
+            f'[Macro] Stage "{stage}" never showed its selected state after '
+            f'{STORY_STAGE_CLICK_ATTEMPTS} attempts -- stopping before the wrong stage starts.'
+        )
+        self._save_debug_screenshot_unconditional(
+            hwnd, f"stage_{stage.lower()}_selection_failed")
+        return False
 
     def _ensure_lobby(self, hwnd, stop_event: threading.Event) -> bool:
         # "On the lobby" is inferred from the Play button actually being
