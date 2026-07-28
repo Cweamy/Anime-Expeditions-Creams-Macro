@@ -2920,7 +2920,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # been added yet this is just silently skipped rather than failing
         # the whole run over a nice-to-have check.
         try:
-            disband_match, disband_name = vision.find_image_any(hwnd, NAV_DISBAND_IMAGE_NAMES)
+            disband_match, disband_name = vision.find_image_any(hwnd, NAV_DISBAND_IMAGE_NAMES, region=(250, 0, 902, 756))
         except vision.TemplateNotFound:
             disband_match, disband_name = None, None
         if disband_match is not None:
