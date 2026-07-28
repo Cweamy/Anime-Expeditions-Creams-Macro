@@ -250,15 +250,38 @@ function dismissScaleWarning() {
 }
 
 async function manualCheckForUpdate() {
+  const badgeText = document.getElementById('ver-badge-text');
+  const badgeIcon = document.querySelector('#ver-badge .ver-badge-icon');
+  const settingsBtn = document.getElementById('btn-check-updates');
+
   const badge = document.getElementById('ver-badge');
-  const original = badge.textContent;
-  badge.textContent = 'Checking...';
+  const original = badgeText ? badgeText.textContent : (badge ? badge.textContent : '');
+
+  if (badgeText) badgeText.textContent = 'Checking...';
+  else if (badge) badge.textContent = 'Checking...';
+
+  if (badgeIcon) badgeIcon.classList.add('spinning');
+  if (settingsBtn) {
+    settingsBtn.disabled = true;
+    settingsBtn.textContent = 'Checking...';
+  }
+
+  const resetState = () => {
+    if (badgeText) badgeText.textContent = original;
+    else if (badge) badge.textContent = original;
+    if (badgeIcon) badgeIcon.classList.remove('spinning');
+    if (settingsBtn) {
+      settingsBtn.disabled = false;
+      settingsBtn.innerHTML = `<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg> Check for Updates`;
+    }
+  };
+
   try {
     await pywebview.api.check_for_updates();
     // check_for_updates fires the background check and returns immediately
     // -- give it a moment to actually land before asking for the result.
     setTimeout(async () => {
-      badge.textContent = original;
+      resetState();
       const info = await pywebview.api.get_update_info();
       if (info && info.available) {
         showUpdateAvailable();
@@ -267,7 +290,7 @@ async function manualCheckForUpdate() {
       }
     }, 2500);
   } catch (e) {
-    badge.textContent = original;
+    resetState();
   }
 }
 
@@ -5219,7 +5242,13 @@ window.addEventListener('pywebviewready', async () => {
 
   try {
     const version = await pywebview.api.get_version();
-    document.getElementById('ver-badge').textContent = `v${version}`;
+    const badgeText = document.getElementById('ver-badge-text');
+    if (badgeText) {
+      badgeText.textContent = `v${version}`;
+    } else {
+      const badge = document.getElementById('ver-badge');
+      if (badge) badge.textContent = `v${version}`;
+    }
     const loadingVer = document.getElementById('ver-badge-loading');
     if (loadingVer) loadingVer.textContent = `v${version}`;
   } catch (e) {}
