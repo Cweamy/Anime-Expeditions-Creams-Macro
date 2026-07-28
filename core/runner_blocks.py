@@ -100,6 +100,9 @@ class BlockOps:
             elif btype == "sell_unit":
                 done = self._run_sell_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
                 self._battle_block_state = {}
+            elif btype == "target_priority":
+                done = self._run_target_priority_tick(hwnd, stop_event, block, self._battle_block_index + 1)
+                self._battle_block_state = {}
             elif btype == "auto_upgrade_unit":
                 done = self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
                 self._battle_block_state = {}
@@ -331,6 +334,33 @@ class BlockOps:
 
         self._log(f'{label}: clicked unit at {pos} -- pressing X to sell.')
         self._keyboard.tap(ord("X"))
+        return True
+
+    def _run_target_priority_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int,
+                                   phase_label: str = "Battle") -> bool:
+        """One-shot: click the unit, open unit info panel, tap R to set/cycle target priority.
+        Always returns True when completed."""
+        label = f'{phase_label} block #{block_num} (Target Priority)'
+        pos = self._placed_unit_click_point(block, label)
+        if pos is None:
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
+        time.sleep(0.1)
+
+        priority = str(block.get("params", {}).get("priority") or "Boss")
+        self._set_status(action=f"Setting target priority ({priority})...")
+        self._mouse.click(left + pos[0], top + pos[1])
+        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+        if self._checkpoint(stop_event):
+            return True
+
+        self._log(f'{label}: clicked unit at {pos} -- pressing R to set target priority to {priority}.')
+        self._keyboard.tap(ord("R"))
+        time.sleep(BATTLE_BLOCK_CLICK_SETTLE)
+
+        self._reset_unit_info_panel(hwnd)
         return True
 
     def _run_wait_ms_tick(self, stop_event: threading.Event, block: dict, block_num: int,
@@ -619,6 +649,8 @@ class BlockOps:
                     self._run_wait_ms_tick(stop_event, block, i, phase_label="Pre Start")
                 elif btype == "send_key":
                     self._run_send_key_tick(block, i, phase_label="Pre Start")
+                elif btype == "target_priority":
+                    self._run_target_priority_tick(hwnd, stop_event, block, i, phase_label="Pre Start")
                 else:
                     self._log(f'[Macro] Skipping block #{i} ("{btype}") -- not runnable in Pre Start yet.')
                 time.sleep(0.2)  # brief gap between blocks so the game UI can settle

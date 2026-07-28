@@ -2989,6 +2989,7 @@ const BLOCK_TYPES = {
   upgrade_unit:       { label: 'Upgrade Unit',      group: 'Units',  color: 'var(--brand)', params: [] },
   sell_unit:          { label: 'Sell Unit',         group: 'Units',  color: 'var(--rose)',  params: [] },
   auto_upgrade_unit:  { label: 'Auto Upgrade Unit', group: 'Units',  color: 'var(--amber)', params: [] },
+  target_priority:    { label: 'Target Priority',   group: 'Units',  color: 'var(--brand)', params: [] },
   // Which walk this routine uses to get to its spot before Pre Start's other
   // blocks run -- Auto (the map's own default) or a recorded Custom path.
   // Used to be a permanent pinned row instead of a real reorderable block,
@@ -3035,7 +3036,7 @@ const PHASE_ALLOWED = {
   // path) is a normal addable block, allowed in BOTH phases -- you can drop
   // several into Pre Start to walk between multiple starter-placement spots
   // before the match begins.
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'walk', 'click', 'wait_ms', 'send_key'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'click', 'wait_ms', 'send_key'],
   battle: Object.keys(BLOCK_TYPES).filter(t => t !== 'walk_path'),
 };
 
@@ -3097,6 +3098,7 @@ function addBlock(type, phase, atIndex) {
   if (type === 'upgrade_unit') { block.params.index = ''; block.params.times = 1; }
   if (type === 'auto_upgrade_unit') { block.params.index = ''; block.params.priority = 1; }
   if (type === 'sell_unit') { block.params.index = ''; }
+  if (type === 'target_priority') { block.params.index = ''; block.params.priority = 'Boss'; }
   const list = creationPhases[phase];
   if (atIndex == null) list.push(block);
   else list.splice(atIndex, 0, block);
@@ -3732,6 +3734,17 @@ function renderAutoUpgradeControls(b) {
     + blkField('Priority', `<select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'priority', this.value)">${options}</select>`);
 }
 
+// Target Priority: which placed unit (#index) + target priority mode (First, Last, Strongest, Boss, Weakest, Shielded, Fastest, None).
+const TARGET_PRIORITIES = ['First', 'Last', 'Strongest', 'Boss', 'Weakest', 'Shielded', 'Fastest', 'None'];
+
+function renderTargetPriorityControls(b) {
+  const current = String(b.params.priority ?? 'Boss');
+  const options = TARGET_PRIORITIES.map(p =>
+    `<option value="${p}" ${p === current ? 'selected' : ''}>${p}</option>`).join('');
+  return blkField('Unit', renderUnitIndexSelect(b, 'index'))
+    + blkField('Target', `<select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'priority', this.value)">${options}</select>`);
+}
+
 function renderBlockRow(b, phase) {
   const def = BLOCK_TYPES[b.type];
   // place_unit and click render ALL their fields bespoke (labeled X/Y +
@@ -3747,7 +3760,8 @@ function renderBlockRow(b, phase) {
     : b.type === 'walk_path' ? renderWalkPathControls(b)
     : b.type === 'upgrade_unit' ? renderUpgradeControls(b)
     : b.type === 'auto_upgrade_unit' ? renderAutoUpgradeControls(b)
-    : b.type === 'sell_unit' ? renderSellUnitControls(b) : '';
+    : b.type === 'sell_unit' ? renderSellUnitControls(b)
+    : b.type === 'target_priority' ? renderTargetPriorityControls(b) : '';
   const entering = enteringBlockIds.has(b.id) ? ' entering' : '';
   // Walk Path is the one unique pinned block: the sole Pre Start copy
   // (legacy templates can still carry extras, which render as normal

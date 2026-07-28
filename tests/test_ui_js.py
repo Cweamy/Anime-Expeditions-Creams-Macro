@@ -864,3 +864,17 @@ def test_both_dock_and_skip_release_it():
         body = src[src.index(f"function {fn}("):]
         body = body[:body.index("\n}\n") + 2]
         assert "runPendingFirstRun()" in body, f"{fn} never releases a queued first-run dialog"
+
+
+def test_target_priority_block_type_registered(tmp_path):
+    body = """
+    console.log(JSON.stringify({
+        hasBlockType: src.includes("target_priority:"),
+        inPrestartAllowed: src.includes("'target_priority'"),
+        hasTargetPriorities: src.includes("TARGET_PRIORITIES")
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out["hasBlockType"] is True
+    assert out["inPrestartAllowed"] is True
+    assert out["hasTargetPriorities"] is True
