@@ -90,9 +90,18 @@ nav_back.png
 
 nav_disband.png
   Optional. Checked right before clicking the gamemode card (Story/Raid/
-  Expedition) for a "Disband Party" prompt that can block the click --
-  found and clicked, this clears the way first. Missing template just
-  skips the check.
+  Challenge/Expedition) for a party prompt that can block the click.
+  Folder variants cover both "Disband Party" and incoming-invite
+  "Decline" buttons. The prompt is dismissed and verified before the
+  gamemode click; a missing template just skips the optional check.
+
+invite_players_open.png / invite_players_close.png
+  Optional. The outgoing "Invite Players" browser can also block a
+  gamemode click after an accidental click on a player portrait or invite
+  control. Its unique title must be detected before the generic-looking
+  Close button is accepted; the same zero-hold, park, and verify recovery
+  used for Disband/Decline then clears it. If the intended gamemode click
+  itself opened this browser, that exact gamemode is retried once.
 
 story/
   The Story gamemode card. Searched first (its folder holds two crops of

@@ -53,6 +53,11 @@ LOBBY_CHECK_TIMEOUT = 15.0   # how long to wait for the Play button to appear be
 STORY_SCREEN_TIMEOUT = 10.0  # Play's menu (Story/Raid) animates in, not instant
 BACK_CONFIRM_TIMEOUT = 8.0   # how long to wait for nav_back after clicking Story, to confirm it landed
 GAMEMODE_CLICK_TIMEOUT = 8.0  # how long to search for the Raid card once the menu's open
+# A gamemode click can be misdirected onto a nearby player/invite control.
+# Check immediately afterward and, if that opened a party overlay, dismiss
+# it and retry the exact intended card instead of claiming navigation worked.
+GAMEMODE_OVERLAY_CHECK_DELAY = 0.5
+GAMEMODE_OVERLAY_RETRY_ATTEMPTS = 2
 # A perfectly-matched Play click that never opens the gamemode menu is
 # exactly the "click didn't register" focus flakiness _click_play's own
 # activate_window() reassertion was already added for (see its comment) --
@@ -310,6 +315,7 @@ RAID_IMAGE_NAMES = ("raid",)
 STORY_IMAGE_NAMES = ("story",)
 NAV_START_IMAGE_NAMES = ("nav_start",)
 NAV_DISBAND_IMAGE_NAMES = ("nav_disband",)
+PARTY_OVERLAY_IMAGE_NAMES = NAV_DISBAND_IMAGE_NAMES + ("invite_players_open",)
 # 10 visual variants on file, all inside Assets/ui/priority_upgrade/ --
 # every one tried per search, same folder-variant mechanism as above.
 PRIORITY_UPGRADE_IMAGE_NAMES = ("priority_upgrade",)
