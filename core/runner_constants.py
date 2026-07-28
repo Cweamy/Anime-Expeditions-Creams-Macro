@@ -238,6 +238,8 @@ EXPEDITION_DIFFICULTY_CLICK_DELAY = 0.1  # lets each increment register before t
 DIFFICULTY_CLICK_DELAY = 1.0
 
 RETURN_TO_LOBBY_CHECK_TIMEOUT = 2.5  # how long to poll for the "Return to Lobby" confirmation after Leave Stage
+RETURN_TO_LOBBY_CLICK_RETRY_ATTEMPTS = 3
+RETURN_TO_LOBBY_VERIFY_SETTLE = 1.0
 
 # The stage-detail panel's Normal/Hard toggle and the Enter Matchmaking
 # search region default in DEFAULT_COORDS (defined below, after the last
