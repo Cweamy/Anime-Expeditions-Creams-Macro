@@ -2764,12 +2764,18 @@ class Api:
                 if os.path.isfile(log_path):
                     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                         tail = f.readlines()[-600:]
-                    bundle.writestr("log_tail.txt", "".join(tail))
+                    from core.diagnostics import redact_sensitive_info
+                    sanitized_tail = redact_sensitive_info("".join(tail))
+                    bundle.writestr("log_tail.txt", sanitized_tail)
 
                 data = cfg.load()
                 if data.get("webhook_url"):
                     data["webhook_url"] = "<redacted>"
-                bundle.writestr("settings.json", json.dumps(data, indent=2))
+                
+                from core.diagnostics import redact_sensitive_info
+                settings_json = json.dumps(data, indent=2)
+                sanitized_settings = redact_sensitive_info(settings_json)
+                bundle.writestr("settings.json", sanitized_settings)
 
                 bundle.writestr("info.json", json.dumps({
                     "version": updater.get_current_version(),
