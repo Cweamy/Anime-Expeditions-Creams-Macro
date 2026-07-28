@@ -153,3 +153,27 @@ def test_wait_for_wave_supports_current_only_unlimited_counter(monkeypatch):
         "/None" not in logged.args[0]
         for logged in runner._log.call_args_list
     )
+
+
+def test_wait_for_wave_rejects_inconsistent_impossible_unlimited_reads(monkeypatch):
+    runner = MacroRunner(MagicMock(), MagicMock(), MagicMock())
+    runner._battle_block_state = {}
+    block = {"params": {"wave": 45}}
+    readings = iter([(1414, None), (46, None), (46, None)])
+
+    monkeypatch.setattr(runner_blocks.time, "time", lambda: 100.0)
+    monkeypatch.setattr(
+        runner_blocks.wm,
+        "get_window_rect_screen",
+        lambda _hwnd: (0, 0, 1152, 756),
+    )
+    monkeypatch.setattr("core.ocr.capture_region", lambda *_args: np.zeros((61, 104, 3)))
+    monkeypatch.setattr("core.wave.read_wave", lambda _image: next(readings))
+
+    # The impossible first read cannot combine with the real wave 46.
+    assert runner._run_wait_wave_tick(123, block, 1) is False
+    runner._battle_block_state["next_check"] = 0.0
+    assert runner._run_wait_wave_tick(123, block, 1) is False
+    runner._battle_block_state["next_check"] = 0.0
+    # Only the second identical 46 reading satisfies the confirmation.
+    assert runner._run_wait_wave_tick(123, block, 1) is True

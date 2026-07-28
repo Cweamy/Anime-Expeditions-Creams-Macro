@@ -538,10 +538,18 @@ class BlockOps:
             # while this second reading also protects against a plausible
             # one-frame misread such as 4/15 -> 14/15.
             confirmation = state.get("wave_target_confirmation")
-            if confirmation and confirmation["maximum"] == maximum:
+            if (
+                confirmation
+                and confirmation["current"] == current
+                and confirmation["maximum"] == maximum
+            ):
                 confirmation["count"] += 1
             else:
-                confirmation = {"maximum": maximum, "count": 1}
+                confirmation = {
+                    "current": current,
+                    "maximum": maximum,
+                    "count": 1,
+                }
                 state["wave_target_confirmation"] = confirmation
             if confirmation["count"] < 2:
                 self._log(
