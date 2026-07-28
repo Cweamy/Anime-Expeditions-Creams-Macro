@@ -402,6 +402,13 @@ AUTO_UPGRADE_PRIORITY_X_OFFSET_MULT = 2.4     # icon center right to a row's cli
 # SETTLE (0.3s, tuned for Upgrade/Sell Unit's single info-panel open) was
 # firing the next click before the second transition had actually
 # rendered, reported as the whole block just "too fast" to work reliably.
+# The priority control cycles on each left click and clears on a press-hold
+# -- it is not a menu (see _run_auto_upgrade_unit_tick). Six is the highest
+# priority the game offers, so asking for more can only over-cycle.
+AUTO_UPGRADE_MAX_PRIORITY = 6
+AUTO_UPGRADE_STEP_DELAY = 0.18   # between cycling clicks, so each registers
+AUTO_UPGRADE_CLEAR_HOLD = 1.0    # press-and-hold that clears it back to off
+
 AUTO_UPGRADE_CLICK_SETTLE = 0.6
 
 # Team Loadout application (see _apply_team_loadout) -- H opens the panel,

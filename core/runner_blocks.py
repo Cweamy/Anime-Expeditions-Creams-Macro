@@ -437,37 +437,44 @@ class BlockOps:
 
         debug_path = self._debug_save(hwnd, priority_name, priority_match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
-        self._log(f'{label}: found "{priority_name}" (score {priority_match["score"]:.2f}) -- '
-                   f'right-clicking it.{suffix}')
-        vision.right_click_match(self._mouse, hwnd, priority_match)
-        time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
-        if self._checkpoint(stop_event):
-            return True
 
+        # This control is a CYCLING BUTTON, not a context menu.
+        #
+        # It used to be driven as a menu: right-click the icon, then click a
+        # row at priority_upgrade's height x a multiplier below it. No menu
+        # ever opens, so that second click landed on empty space -- observed
+        # live as "priority 6 didn't apply, it missed and didn't activate".
+        # It also only ever clicked ONCE regardless of the priority asked
+        # for, so even the intent was wrong.
+        #
+        # What it actually is: each left click advances the priority by one,
+        # so priority N is N clicks on the icon itself, and one click past
+        # the last priority wraps it back to off.
         priority = str(block.get("params", {}).get("priority") or "None")
+        cx = left + priority_match["cx"]
+        cy = top + priority_match["cy"]
+
         if priority == "None":
-            # The Disable row sits one row-height below Priority 6 -- the
-            # last of the 6 priority rows, not a 7th priority.
-            row_index = 6
-            self._log(f'{label}: disabling auto-upgrade for this unit.')
+            clicks = AUTO_UPGRADE_MAX_PRIORITY + 1
+            self._log(f'{label}: found "{priority_name}" (score {priority_match["score"]:.2f}) -- '
+                       f'clicking it {clicks}x to cycle back to off.{suffix}')
         else:
             try:
-                row_index = int(priority) - 1
+                clicks = max(1, min(AUTO_UPGRADE_MAX_PRIORITY, int(priority)))
             except ValueError:
-                row_index = 0
-            self._log(f'{label}: setting priority {priority}.')
-        # Row positions computed off priority_upgrade's OWN matched w/h
-        # (see the constants' own comment) instead of a second set of fixed
-        # coordinates -- self-scaling if the icon itself ever renders at a
-        # different size.
-        row_height = priority_match["h"] * AUTO_UPGRADE_PRIORITY_ROW_HEIGHT_MULT
-        row_x = priority_match["cx"] + priority_match["w"] * AUTO_UPGRADE_PRIORITY_X_OFFSET_MULT
-        first_row_y = priority_match["cy"] + priority_match["h"] * AUTO_UPGRADE_PRIORITY_FIRST_ROW_MULT
-        row_y = first_row_y + row_index * row_height
-        self._mouse.click(left + int(row_x), top + int(row_y))
+                clicks = 1
+            self._log(f'{label}: found "{priority_name}" (score {priority_match["score"]:.2f}) -- '
+                       f'clicking it {clicks}x for priority {clicks}.{suffix}')
+
+        for n in range(clicks):
+            self._mouse.click(cx, cy)
+            # Between clicks, not after the last one -- the control has to
+            # register each step separately or several land as one.
+            if n < clicks - 1:
+                time.sleep(AUTO_UPGRADE_STEP_DELAY)
+            if self._checkpoint(stop_event):
+                return True
         time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
-        if self._checkpoint(stop_event):
-            return True
 
         self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
         return True
