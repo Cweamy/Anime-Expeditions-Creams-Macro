@@ -264,7 +264,7 @@ def test_run_target_priority_tick():
     block = {"type": "target_priority", "params": {"index": 1, "priority": "Boss"}}
     stop_event = MagicMock(is_set=lambda: False)
 
-    with MagicMock() as mock_wm:
+    with MagicMock():
         from core import runner_blocks
         original_wm = runner_blocks.wm
         runner_blocks.wm = MagicMock(get_window_rect_screen=lambda hwnd: (0, 0, 800, 600))
