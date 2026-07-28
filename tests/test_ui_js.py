@@ -637,3 +637,18 @@ def test_unsaved_changes_tracking(tmp_path):
     assert out["afterEdit"] is True
     assert out["afterUndo"] is False, "edit-then-undo must not leave a false warning"
     assert out["afterRename"] is True, "renaming is an unsaved change too"
+
+
+def test_target_priority_block_type_registered(tmp_path):
+    body = """
+    console.log(JSON.stringify({
+        hasBlockType: src.includes("target_priority:"),
+        inPrestartAllowed: src.includes("'target_priority'"),
+        hasTargetPriorities: src.includes("TARGET_PRIORITIES")
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out["hasBlockType"] is True
+    assert out["inPrestartAllowed"] is True
+    assert out["hasTargetPriorities"] is True
+
