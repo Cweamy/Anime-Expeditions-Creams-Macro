@@ -3335,6 +3335,46 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             time.sleep(BACK_SPAM_DELAY)
         self._log(f"[Macro] Stopped backing out after {BACK_SPAM_MAX_CLICKS} clicks (Back button still found).")
 
+    def _dismiss_party_overlay(self, hwnd, stop_event: threading.Event) -> bool:
+        """Clear an optional Disband/Decline prompt before gamemode clicks.
+
+        These prompts disappear quickly enough that a normal held click can
+        release over the newly exposed card underneath. Use an immediate
+        down/up and park away from the menu before checking that it cleared.
+        """
+        try:
+            match, name = vision.find_image_any(hwnd, NAV_DISBAND_IMAGE_NAMES)
+        except vision.TemplateNotFound:
+            return True
+        if match is None:
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        park_x, park_y = self._cxy("unit_info_reset")
+        for attempt in range(1, 3):
+            debug_path = self._debug_save(hwnd, name, match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f"[Macro] Found party overlay (score {match['score']:.2f}) -- "
+                       f"dismissing it (attempt {attempt}/2).{suffix}")
+            if not wm.activate_window(hwnd):
+                self._log("[Macro] Couldn't confirm focus before dismissing the party overlay.")
+            click_x, click_y = vision.ref_to_screen(hwnd, match["cx"], match["cy"])
+            self._mouse.click(click_x, click_y, hold=0.0)
+            self._mouse.move_to(left + park_x, top + park_y)
+            if stop_event.is_set():
+                return False
+            time.sleep(0.3)
+            try:
+                remaining, name = vision.find_image_any(hwnd, NAV_DISBAND_IMAGE_NAMES)
+            except vision.TemplateNotFound:
+                return True
+            if remaining is None:
+                return True
+            match = remaining
+
+        self._log("[Macro] Party overlay still showing after 2 dismissal attempts -- stopping.")
+        return False
+
     def _click_gamemode(self, hwnd, stop_event: threading.Event, mode: str, wait_for_menu: bool = True) -> bool:
         # Story's card position doesn't move once the menu is open, so it's
         # just a fixed coordinate (see STORY_CLICK's comment). Raid's isn't
@@ -3377,25 +3417,8 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                     self._save_debug_screenshot_unconditional(hwnd, "gamemode_menu_timeout")
                 return False
 
-        # A "Disband Party" prompt can sit in front of the menu at this
-        # point -- if it's up, Story can't be clicked (or clicks through to
-        # the wrong thing) until it's dismissed. Optional/one-shot: no long
-        # wait, since most runs never see it, and if nav_disband.png hasn't
-        # been added yet this is just silently skipped rather than failing
-        # the whole run over a nice-to-have check.
-        try:
-            disband_match, disband_name = vision.find_image_any(hwnd, NAV_DISBAND_IMAGE_NAMES)
-        except vision.TemplateNotFound:
-            disband_match, disband_name = None, None
-        if disband_match is not None:
-            debug_path = self._debug_save(hwnd, disband_name, disband_match)
-            suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found Disband Party prompt (score {disband_match['score']:.2f}) -- "
-                       f"clicking it before Story.{suffix}")
-            vision.click_match(self._mouse, hwnd, disband_match)
-            if stop_event.is_set():
-                return False
-            time.sleep(0.3)  # let the prompt actually close before clicking the gamemode card
+        if not self._dismiss_party_overlay(hwnd, stop_event):
+            return False
 
         if mode == "expedition":
             self._log("[Macro] Menu open -- searching for Expedition...")

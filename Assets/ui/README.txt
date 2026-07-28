@@ -90,9 +90,10 @@ nav_back.png
 
 nav_disband.png
   Optional. Checked right before clicking the gamemode card (Story/Raid/
-  Expedition) for a "Disband Party" prompt that can block the click --
-  found and clicked, this clears the way first. Missing template just
-  skips the check.
+  Challenge/Expedition) for a party prompt that can block the click.
+  Folder variants cover both "Disband Party" and incoming-invite
+  "Decline" buttons. The prompt is dismissed and verified before the
+  gamemode click; a missing template just skips the optional check.
 
 story/
   The Story gamemode card. Searched first (its folder holds two crops of
