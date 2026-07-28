@@ -1,6 +1,8 @@
 import threading
 from unittest.mock import MagicMock, call
 
+import pytest
+
 from core import runner as runner_module
 from core.runner import MacroRunner
 
@@ -44,7 +46,7 @@ def test_retries_teams_click_until_loadout_list_is_visually_open(monkeypatch):
 
     assert runner._apply_team_loadout_panel(123, stop, team_match, 1, "include") is True
     assert clicked_matches == [team_match, team_match, confirm_match, include_match]
-    runner._mouse.click.assert_called_once_with(800, 324)
+    runner._mouse.click.assert_called_once_with(850, 324)
     assert any(
         "retrying the Teams button" in logged.args[0]
         for logged in runner._log.call_args_list
@@ -96,6 +98,7 @@ def test_never_scrolls_or_clicks_a_row_when_loadout_list_did_not_open(monkeypatc
     assert runner._apply_team_loadout_panel(123, stop, team_match, 6, "include") is False
     assert team_clicks == [team_match] * runner_module.TEAM_LOADOUT_OPEN_RETRY_ATTEMPTS
     runner._mouse.drag.assert_not_called()
+    runner._mouse.scroll.assert_not_called()
     runner._mouse.click.assert_not_called()
     assert saved == ["team_loadout_open_failed"]
 
@@ -128,3 +131,40 @@ def test_equipment_failure_saves_screen_and_fails_instead_of_silently_continuing
 
     assert runner._apply_team_loadout_panel(123, stop, team_match, 1, "exclude") is False
     assert saved == ["team_loadout_exclude_failed"]
+
+
+@pytest.mark.parametrize(
+    ("team_num", "scroll_steps", "expected_y"),
+    [(4, 4, 335), (5, 5, 372), (6, 6, 409), (7, 7, 446), (8, 7, 579)],
+)
+def test_scrolled_loadouts_use_wheel_over_scrollbar_and_click_visible_button_center(
+        monkeypatch, team_num, scroll_steps, expected_y):
+    runner = _runner()
+    stop = threading.Event()
+    team_match = {"cx": 100, "cy": 100, "score": 0.95}
+    open_match = {"cx": 275, "cy": 185, "score": 0.91}
+    confirm_match = {"cx": 483, "cy": 416, "score": 0.98}
+    include_match = {"cx": 456, "cy": 436, "score": 0.99}
+
+    def wait_for_image(_hwnd, name, **_kwargs):
+        return {
+            "team_loadout_open": open_match,
+            "confirm": confirm_match,
+            "include": include_match,
+        }[name]
+
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
+    monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
+
+    assert runner._apply_team_loadout_panel(
+        123, stop, team_match, team_num, "include") is True
+
+    runner._mouse.move_to.assert_called_once_with(927, 400)
+    runner._mouse.nudge.assert_called_once_with()
+    assert runner._mouse.scroll.call_args_list == [
+        call(runner_module.TEAM_LOADOUT_WHEEL_DELTA)
+    ] * scroll_steps
+    runner._mouse.drag.assert_not_called()
+    runner._mouse.click.assert_called_once_with(850, expected_y)

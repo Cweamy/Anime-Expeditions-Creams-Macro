@@ -451,18 +451,23 @@ TEAM_LOADOUT_CONFIRM_SETTLE = 2.0
 TEAM_LOADOUT_CLICK_1 = (800, 324)  # Loadout 1's row
 TEAM_LOADOUT_ROW_HEIGHT = 126
 TEAM_LOADOUT_MAX_SUPPORTED = 8
-# Loadouts 4-8 need the list scrolled first -- a click-drag on the list
-# itself (not a wheel scroll), same anchor point for both scroll sizes.
-# The smaller drag (~1 row height) reveals 4-6 at the SAME row positions
-# the 1-3 formula above already computes (the list just shifts to put
-# them there); the larger drag re-anchors the list differently, landing 7
-# and 8 at their own fixed positions instead of following that formula.
-TEAM_LOADOUT_SCROLL_ANCHOR = (895, 285)
-TEAM_LOADOUT_SCROLL_SMALL = 124  # reaches Loadout 4-6
-TEAM_LOADOUT_SCROLL_LARGE = 300  # reaches Loadout 7-8
-TEAM_LOADOUT_SLOT_7_Y = 410
-TEAM_LOADOUT_SLOT_8_Y = 536
-TEAM_LOADOUT_SCROLL_SETTLE = 0.3  # lets the drag's scroll animation finish before clicking a row
+# The configured X is the old button-edge coordinate. The current green
+# Load Team button spans roughly x=792..911; move 50px inward so the click
+# lands at its center instead of on a bevel that intermittently ignores it.
+TEAM_LOADOUT_BUTTON_CENTER_X_OFFSET = 50
+# Loadouts 4-8: hover the actual scrollbar (not a row button) and wheel down.
+# Live 1152x756 measurements: each notch shifts the list by 100px and current
+# rows are 137px apart. Seven notches reaches the bottom; the last slot's
+# button is clipped by the panel but remains clickable at y=579.
+TEAM_LOADOUT_SCROLLBAR_HOVER = (927, 400)
+TEAM_LOADOUT_WHEEL_DELTA = -120
+TEAM_LOADOUT_WHEEL_MAX_STEPS = 7
+TEAM_LOADOUT_WHEEL_ROW_SHIFT = 100
+TEAM_LOADOUT_CURRENT_ROW_HEIGHT = 137
+TEAM_LOADOUT_VISIBLE_BOTTOM_Y = 579
+TEAM_LOADOUT_SCROLL_HOVER_SETTLE = 0.08
+TEAM_LOADOUT_WHEEL_INTERVAL = 0.15
+TEAM_LOADOUT_SCROLL_SETTLE = 0.5
 
 # Wait for Wave (see _run_wait_wave_tick) -- the "<current> / <max> wave"
 # HUD badge, in the docked game window's own client coordinates.
