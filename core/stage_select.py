@@ -74,6 +74,8 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
         if stop_event is not None and stop_event.is_set():
             return False
         log(f'[Macro] Looking for map "{map_name}" (pass {attempt}/{MAX_PASSES}, up to {scroll_nudges} scrolls)...')
+        mouse.move_to(*to_screen(SCROLL_CENTER))
+        _hover_wiggle(mouse)
         for nudge in range(scroll_nudges + 1):
             if stop_event is not None and stop_event.is_set():
                 return False
@@ -96,8 +98,6 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
                 vision.click_match(mouse, hwnd, match)
                 return True
             if nudge < scroll_nudges:
-                mouse.move_to(*to_screen(SCROLL_CENTER))
-                _hover_wiggle(mouse)
                 mouse.scroll(scroll_step)
                 time.sleep(SETTLE_DELAY)
         log("[Macro] Not found in this pass -- scrolling back to the start.")
