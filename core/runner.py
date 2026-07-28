@@ -26,6 +26,7 @@ from . import ocr_windows
 from . import stage_select
 from . import vision
 from . import wave as wave_module
+from .diagnostics import FailureCategory, RecoveryAction, FailureReport, create_failure_report, save_failure_snapshot
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- see runner_constants' docstring
 from .runner_blocks import BlockOps
@@ -1016,6 +1017,29 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         if self._checkpoint(stop_event):
             return False
         return self._ensure_lobby(hwnd, stop_event)
+
+    def _handle_structured_failure(self, report: FailureReport, hwnd=None) -> bool:
+        """Handles structured failure reports to enforce bounded recovery logic."""
+        self._log(f"[Diagnostics] [{report.category.name}] {report.user_message} (Action: {report.user_action})")
+        save_failure_snapshot(report)
+
+        if report.recovery_action in (RecoveryAction.RETRY_STEP, RecoveryAction.RETRY_PHASE):
+            return True
+        elif report.recovery_action == RecoveryAction.RETURN_TO_LOBBY:
+            if not hwnd:
+                hwnd = self._current_hwnd
+            if report.code in ("ROBLOX_DISCONNECTED", "ROBLOX_CRASHED"):
+                self._attempt_rejoin(hwnd, self._stop_event)
+            else:
+                self._recover_to_lobby(hwnd, self._stop_event)
+            return False
+        elif report.recovery_action in (RecoveryAction.STOP_TASK, RecoveryAction.STOP_RUNNER):
+            self._set_status(action="Stopped due to failure")
+            if report.recovery_action == RecoveryAction.STOP_RUNNER:
+                if self._stop_event is not None:
+                    self._stop_event.set()
+            return False
+        return False
 
     def _run_task_setup(self, hwnd, stop_event: threading.Event, task: dict, mode: str, map_name: str,
                           coords: dict, scroll_power: int, scroll_nudges: int, webhook: dict = None) -> bool:
