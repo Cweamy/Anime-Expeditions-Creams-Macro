@@ -22,12 +22,18 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 function openFaqModal() {
   const el = document.getElementById('faq-modal');
-  if (el) el.style.display = 'flex';
+  if (el) {
+    el.style.display = 'flex';
+    try { window.pywebview && pywebview.api.hide_game(); } catch (e) {}
+  }
 }
 
 function closeFaqModal() {
   const el = document.getElementById('faq-modal');
-  if (el) el.style.display = 'none';
+  if (el) {
+    el.style.display = 'none';
+    restoreGameIfDashboard();
+  }
 }
 
 function toggleFaqModal() {
@@ -182,7 +188,7 @@ function isBlockingOverlayOpen() {
     const el = document.getElementById(id);
     return el && el.style.display !== 'none' && el.style.display !== '';
   };
-  if (['update-modal', 'scale-warning-modal', 'onboarding-modal', 'subscribe-modal'].some(isOpen)) return true;
+  if (['update-modal', 'scale-warning-modal', 'onboarding-modal', 'subscribe-modal', 'faq-modal', 'share-code-modal'].some(isOpen)) return true;
   if (!captureDanceActive && ['im-modal', 'pu-modal', 'path-name-modal'].some(isOpen)) return true;
   return false;
 }
@@ -5276,6 +5282,7 @@ async function openShareCodeModal(initialTab = 'export') {
   const modal = document.getElementById('share-code-modal');
   if (!modal) return;
   modal.style.display = 'flex';
+  try { window.pywebview && pywebview.api.hide_game(); } catch (e) {}
   switchShareTab(initialTab || 'export');
   if (initialTab === 'export') {
     updateExportCode();
@@ -5291,6 +5298,7 @@ function closeShareCodeModal() {
   if (previewBox) previewBox.style.display = 'none';
   const inputEl = document.getElementById('share-import-input');
   if (inputEl) inputEl.value = '';
+  restoreGameIfDashboard();
 }
 
 function switchShareTab(tab) {
@@ -5368,7 +5376,7 @@ async function updateImportPreview() {
       if (itemsEl) {
         itemsEl.innerHTML = res.items.map(item =>
           `<div style="display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px dashed var(--border);">` +
-            `<span>📄 <b>${item.name}</b></span>` +
+            `<span><b>${item.name}</b></span>` +
             `<span style="color: var(--text-muted);">${item.blocks_count} block(s)</span>` +
           `</div>`
         ).join('');
@@ -5411,7 +5419,7 @@ async function onExportScopeChange() {
           itemsContainer.innerHTML = names.map(name =>
             `<label style="font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 2px 0;">` +
               `<input type="checkbox" class="share-export-check" value="${name}" checked onchange="updateExportCode()">` +
-              `<span>📄 ${name}</span>` +
+              `<span>${name}</span>` +
             `</label>`
           ).join('');
         }
