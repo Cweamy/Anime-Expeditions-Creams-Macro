@@ -353,7 +353,7 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             time.sleep(0.5)
             self._click_return_to_lobby_if_found(self._current_hwnd)
 
-    def _click_return_to_lobby_if_found(self, hwnd, stop_event: threading.Event = None) -> None:
+    def _click_return_to_lobby_if_found(self, hwnd, stop_event: threading.Event = None) -> bool:
         # Leave Stage can bring up its own "Return to Lobby" confirmation
         # (return.png) rather than backing out on its own -- optional/
         # best-effort like nav_disband and friends, so a real miss (it never
@@ -368,13 +368,36 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             match = vision.wait_for_image(
                 hwnd, "return", timeout=RETURN_TO_LOBBY_CHECK_TIMEOUT, stop_event=stop_event)
         except vision.TemplateNotFound:
-            return
+            return False
         if match is None:
-            return
-        debug_path = self._debug_save(hwnd, "return", match)
-        suffix = f" Debug: {debug_path}" if debug_path else ""
-        self._log(f"[Macro] Found \"Return to Lobby\" (score {match['score']:.2f}) -- clicking it.{suffix}")
-        vision.click_match(self._mouse, hwnd, match)
+            return False
+
+        for attempt in range(1, RETURN_TO_LOBBY_CLICK_RETRY_ATTEMPTS + 1):
+            debug_path = self._debug_save(hwnd, "return", match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            retry = (f" (attempt {attempt}/{RETURN_TO_LOBBY_CLICK_RETRY_ATTEMPTS})"
+                     if attempt > 1 else "")
+            self._log(f"[Macro] Found \"Return to Lobby\" (score {match['score']:.2f})"
+                      f"{retry} -- clicking it.{suffix}")
+            if not wm.activate_window(hwnd):
+                self._log("[Macro] Couldn't confirm focus before clicking \"Return to Lobby\" "
+                          "-- click may not register.")
+            vision.click_match(self._mouse, hwnd, match)
+            self._interruptible_sleep(RETURN_TO_LOBBY_VERIFY_SETTLE, stop_event)
+            if stop_event is not None and stop_event.is_set():
+                return True
+
+            try:
+                still_there = vision.find_image(hwnd, "return")
+            except vision.TemplateNotFound:
+                still_there = None
+            if still_there is None:
+                return True
+            match = still_there
+
+        self._log(f'[Macro] "Return to Lobby" still showing after '
+                  f'{RETURN_TO_LOBBY_CLICK_RETRY_ATTEMPTS} clicks -- continuing anyway.')
+        return True
 
     def _click_close_popup_if_found(self, hwnd) -> None:
         # Spirit City Act 3 (Raid) can throw up a "Click anywhere to close"
@@ -1307,7 +1330,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         # just leave the run sitting on the result screen forever with
         # nothing else ever noticing or retrying.
         self._set_status(action=f"{label} -- clicking Leave Stage...")
-        if not self._click_and_verify_gone(hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT):
+        if not self._click_and_verify_gone(
+                hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT, success_name="return"):
             self._log('[Macro] "Leave Stage" not found -- stopping.')
             return False
         self._click_return_to_lobby_if_found(hwnd, stop_event)
@@ -2109,7 +2133,8 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         return match
 
     def _click_and_verify_gone(self, hwnd, stop_event: threading.Event, name: str, timeout: float,
-                                 retry_attempts: int = 3, verify_settle: float = 1.0) -> bool:
+                                 retry_attempts: int = 3, verify_settle: float = 1.0,
+                                 success_name: str = None) -> bool:
         """Like _click_found_image, but re-checks the button actually
         disappeared afterward and re-clicks (with a focus reassert) if it's
         still there, up to retry_attempts times -- same "click found it but
@@ -2117,10 +2142,15 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
         this same treatment for. Used for Leave Stage/Repeat Stage: a
         dropped click here leaves the whole run just sitting on the result
         screen indefinitely, since nothing else would ever notice or retry
-        on its own. Returns whether the button was found at all -- not
-        whether it definitely disappeared, since after retry_attempts a
-        stuck button falls through to the caller's own recovery path rather
-        than being treated as "never found in the first place"."""
+        on its own. ``success_name`` handles transitions where the original
+        image remains visible behind the next modal: Leave Stage is still
+        visible when Return to Lobby appears, so seeing ``return`` is also
+        proof that the click registered.
+
+        Returns whether the button was found at all -- not whether it
+        definitely disappeared, since after retry_attempts a stuck button
+        falls through to the caller's own recovery path rather than being
+        treated as "never found in the first place"."""
         match = None
         for attempt in range(1, retry_attempts + 1):
             try:
@@ -2143,6 +2173,14 @@ class MacroRunner(ChallengeOps, ExpeditionOps, BlockOps):
             time.sleep(verify_settle)
             if self._checkpoint(stop_event):
                 return True
+
+            if success_name is not None:
+                try:
+                    transitioned = vision.find_image(hwnd, success_name)
+                except vision.TemplateNotFound:
+                    transitioned = None
+                if transitioned is not None:
+                    return True
 
             try:
                 still_there = vision.find_image(hwnd, name)

@@ -143,7 +143,8 @@ class ChallengeOps:
                 # handling, ...) that's built for recovering from states
                 # Leave Stage doesn't even apply to. Only falls through to
                 # that heavier recovery if Leave Stage genuinely isn't there.
-                if not self._click_and_verify_gone(hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT):
+                if not self._click_and_verify_gone(
+                        hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT, success_name="return"):
                     if not self._recover_to_lobby(hwnd, stop_event):
                         return
                 else:
