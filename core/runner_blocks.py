@@ -521,15 +521,48 @@ class BlockOps:
             return False
 
         if current is None:
+            state.pop("wave_target_confirmation", None)
             self._log(f"{label}: couldn't read the wave counter -- retrying in {WAIT_WAVE_POLL_INTERVAL:.0f}s.")
             state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
             return False
 
+        wave_text = (
+            f"{current}/{maximum}"
+            if maximum is not None
+            else f"{current} (unlimited)"
+        )
         if current >= target:
-            self._log(f'{label}: wave {current}/{maximum} -- reached (or already past) target {target}.')
+            # Never let one OCR frame unlock later blocks such as Sell Unit.
+            # The HUD's blue wave icon has been reported as an extra leading
+            # digit (4/15 -> 24/15); read_wave rejects that impossible pair,
+            # while this second reading also protects against a plausible
+            # one-frame misread such as 4/15 -> 14/15.
+            confirmation = state.get("wave_target_confirmation")
+            if (
+                confirmation
+                and confirmation["current"] == current
+                and confirmation["maximum"] == maximum
+            ):
+                confirmation["count"] += 1
+            else:
+                confirmation = {
+                    "current": current,
+                    "maximum": maximum,
+                    "count": 1,
+                }
+                state["wave_target_confirmation"] = confirmation
+            if confirmation["count"] < 2:
+                self._log(
+                    f"{label}: wave {wave_text} reached target {target} -- "
+                    f"confirming on the next read."
+                )
+                state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
+                return False
+            self._log(f'{label}: wave {wave_text} -- reached (or already past) target {target}.')
             return True
 
-        self._log(f'{label}: wave {current}/{maximum}, waiting for {target}.')
+        state.pop("wave_target_confirmation", None)
+        self._log(f'{label}: wave {wave_text}, waiting for {target}.')
         self._set_status(action=f"Waiting for wave {target} (currently {current})...")
         state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
         return False

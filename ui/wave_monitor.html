@@ -52,12 +52,12 @@
           return;
         }
         if (r.crop) cropEl.src = r.crop;
-        if (r.current != null && r.max != null) {
-          lastGood = `${r.current} / ${r.max}`;
+        if (r.current != null) {
+          lastGood = r.max != null ? `${r.current} / ${r.max}` : `${r.current}`;
           lastGoodAt = Date.now();
           waveEl.textContent = lastGood;
           waveEl.classList.remove('stale');
-          foot.textContent = 'live';
+          foot.textContent = r.max != null ? 'live' : 'live · unlimited';
         } else {
           // no clean read this tick -- keep showing the last good one, dimmed
           waveEl.classList.add('stale');
