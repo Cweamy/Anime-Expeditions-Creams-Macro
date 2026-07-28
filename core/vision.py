@@ -23,6 +23,7 @@ import time
 from collections import OrderedDict
 
 import cv2
+import mss
 import numpy as np
 
 from . import config
@@ -650,30 +651,47 @@ def find_color_run(hwnd: int, region: tuple, mask_fn, min_run: int, min_height: 
     mask = mask_fn(arr[:, :, 0], arr[:, :, 1], arr[:, :, 2])
     if not mask.any():
         return None
+
+    # ── Widest horizontal run (vectorized, no per-row np.split) ──
+    # Pad each row with False on both sides so every True run produces
+    # a clean pair of 1 (start) / -1 (end) transitions in diff.
+    padded = np.pad(mask, ((0, 0), (1, 1)), constant_values=False)
+    diffs = np.diff(padded.astype(np.int8))
     best = None  # (width, y, x0, x1)
     for y in range(mask.shape[0]):
-        xs = np.flatnonzero(mask[y])
-        if xs.size < 2:
+        starts = np.flatnonzero(diffs[y] == 1)
+        ends = np.flatnonzero(diffs[y] == -1)
+        if len(starts) == 0:
             continue
-        for run in np.split(xs, np.where(np.diff(xs) > 3)[0] + 1):
-            width = int(run[-1] - run[0])
-            if best is None or width > best[0]:
-                best = (width, y, int(run[0]), int(run[-1]))
+        widths = ends - starts
+        max_i = np.argmax(widths)
+        width = int(widths[max_i])
+        if best is None or width > best[0]:
+            best = (width, y, int(starts[max_i]), int(ends[max_i] - 1))
     if best is None or best[0] < min_run:
         return None
+
     width, y, x0, x1 = best
     cx = (x0 + x1) // 2
-    ys = np.flatnonzero(mask[:, cx])
-    band = None
-    for run in np.split(ys, np.where(np.diff(ys) > 3)[0] + 1):
-        if run[0] <= y <= run[-1]:
-            band = run
-            break
-    height = int(band[-1] - band[0]) + 1 if band is not None else 1
-    if height < min_height:
+
+    # ── Vertical band through the best run's center column ──
+    col = mask[:, cx]
+    vpadded = np.pad(col, (1, 1), constant_values=False)
+    vdiff = np.diff(vpadded.astype(np.int8))
+    vstarts = np.flatnonzero(vdiff == 1)
+    vends = np.flatnonzero(vdiff == -1)
+    if len(vstarts) == 0:
         return None
-    cy = int((band[0] + band[-1]) // 2) if band is not None else y
-    return {"cx": cx + int(region[0]), "cy": cy + int(region[1]), "w": width, "h": height}
+    # Find which vertical run contains y (the best horizontal run's row)
+    for s, e in zip(vstarts, vends):
+        if s <= y < e:
+            y0, y1 = int(s), int(e - 1)
+            height = y1 - y0 + 1
+            if height < min_height:
+                return None
+            cy = (y0 + y1) // 2
+            return {"cx": cx + int(region[0]), "cy": cy + int(region[1]), "w": width, "h": height}
+    return None
 
 
 def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold: float = DEFAULT_THRESHOLD,
@@ -770,7 +788,6 @@ def save_match_debug(hwnd: int, name: str, match: dict) -> str:
     either one with a similar score; the drawn box makes that immediately
     obvious. match must be in full-window coords (what find_image/
     wait_for_image return -- already offset if a region was used)."""
-    import mss
     os.makedirs(DEBUG_DIR, exist_ok=True)
     left, top, right, bottom = wm.get_window_rect_screen(hwnd)
     with mss.MSS() as sct:

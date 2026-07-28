@@ -28,6 +28,7 @@ from core.keyboard import Keyboard
 from core.logger import Logger
 from core.runner import MacroRunner
 from core import updater
+from core.runner_constants import DEFAULT_COORDS, CHALLENGE_STORY_MAPS, CHALLENGE_STAGE_SLOTS
 
 # Imported at module scope (not inside the darwin branches that use it) so the
 # macOS-only geometry helpers below can be plain module functions. window_mac
@@ -158,27 +159,11 @@ HOTKEY_DEFAULTS = {
 # nav_select_stage confirm earlier screens. All exposed as settings (not
 # hardcoded) since a game update could shift any of these -- see
 # get_macro_coords/reset_macro_coords and Settings > Debug > Macro Coordinates.
-MACRO_COORD_DEFAULTS = {
-    "difficulty_normal_x": 311, "difficulty_normal_y": 315,
-    "difficulty_hard_x": 364, "difficulty_hard_y": 315,
-    "matchmaking_region_x": 277, "matchmaking_region_y": 543,
-    "matchmaking_region_w": 437, "matchmaking_region_h": 45,
-    # Every other fixed click point the runner uses, same override story --
-    # mirrors core.runner's DEFAULT_COORDS (which documents what each one
-    # is); all in the docked window's 1152x756 client space, each pickable
-    # from a captured Roblox screenshot via the Pick buttons in Settings >
-    # Debug > Macro Coordinates.
-    "story_click_x": 666, "story_click_y": 147,
-    "stage_row_x": 246, "stage_row_y": 230, "stage_row_height": 56,
-    "act_row_x": 250, "act_row_y": 267, "act_row_height": 129,
-    "challenge_stage_1_x": 460, "challenge_stage_1_y": 277,
-    "challenge_stage_2_x": 460, "challenge_stage_2_y": 400,
-    "challenge_stage_3_x": 460, "challenge_stage_3_y": 533,
-    "expedition_difficulty_x": 441, "expedition_difficulty_y": 524,
-    "team_loadout_x": 800, "team_loadout_y": 324, "team_loadout_row_height": 126,
-    "screen_middle_x": 576, "screen_middle_y": 378,
-    "unit_info_reset_x": 3, "unit_info_reset_y": 3,
-}
+# Single source of truth: DEFAULT_COORDS in core.runner_constants -- NEVER
+# duplicated here. All in the docked window's 1152x756 client space, each
+# pickable from a captured Roblox screenshot via the Pick buttons in
+# Settings > Debug > Macro Coordinates.
+MACRO_COORD_DEFAULTS = DEFAULT_COORDS
 
 # Settings > Debug > "Reward Reader"/"Game Stats": OCR capture regions for
 # the Victory screen. Same "expose + reset" treatment as MACRO_COORD_DEFAULTS
@@ -194,12 +179,14 @@ RUN_HISTORY_LIMIT = 50  # oldest entries drop off past this -- a running log, no
 # keyed by MAP (which macro to run for it, how many times it's been played
 # today) while the 3 slots are just simple on/off toggles for "attempt
 # whatever's in this slot". CHALLENGE_STORY_MAPS matches TASK_DATA.story's
-# maps in ui/app.js. Daily counts use the game's shared 00:00 UTC rollover;
-# the independent stage-availability clock still rotates every :00/:30.
-CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest"]
-CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
+# maps in ui/app.js (rare source: runner_constants, imported above).
+# Daily counts use the game's shared 00:00 UTC rollover; the independent
+# stage-availability clock still rotates every :00/:30.
 CHALLENGE_DAILY_CAP = 10  # fixed, not user-editable -- see get_challenge_settings
 CHALLENGE_RESET_SCHEDULE = "utc_midnight_v1"
+
+# CHALLENGE_STORY_MAPS and CHALLENGE_STAGE_SLOTS imported from
+# runner_constants -- single source of truth lives there.
 
 
 def _current_challenge_reset_period(now: float = None) -> str:

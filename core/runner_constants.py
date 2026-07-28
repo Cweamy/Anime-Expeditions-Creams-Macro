@@ -493,9 +493,10 @@ WAVE_REGION = (467, 21, 104, 61)
 WAIT_WAVE_POLL_INTERVAL = 2.0
 
 # EVERY fixed click point/row layout the runner uses, as overridable
-# settings (Settings > Debug > Macro Coordinates -- mirrors main.py's
-# MACRO_COORD_DEFAULTS): a game update shifting any of these needs a number
-# changed (or re-picked from a screenshot) in Settings, not a code change.
+# settings (Settings > Debug > Macro Coordinates -- THE single source of
+# truth, imported by main.py as MACRO_COORD_DEFAULTS): a game update
+# shifting any of these needs a number changed (or re-picked from a
+# screenshot) in Settings, not a code change.
 # Values come from the tuple constants above where one exists -- those stay
 # the documented single source of each default; this dict is the runtime
 # override surface (merged with the user's saved values in _run, read via

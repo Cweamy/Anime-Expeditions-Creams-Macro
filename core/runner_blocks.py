@@ -13,9 +13,12 @@ import time
 from . import detect
 from . import keys
 from . import paths as walk_paths
+from . import templates as tpl
 from . import vision
+from . import wave as wave_module
 from . import window as wm
 from .config import FIXED_WIN_H, FIXED_WIN_W  # the 1152x756 reference client area
+from .ocr import capture_region
 from .runner_constants import *  # noqa: F401,F403 -- the shared constants namespace
 
 
@@ -24,7 +27,6 @@ class BlockOps:
         macro_name = task.get("macro")
         if not macro_name:
             return []
-        from . import templates as tpl
         data = tpl.load_template(macro_name)
         blocks = data.get("blocks") or {}
         if isinstance(blocks, list):
@@ -78,7 +80,6 @@ class BlockOps:
         macro_name = task.get("macro")
         if not macro_name:
             return empty
-        from . import templates as tpl
         data = tpl.load_template(macro_name)
         blocks = data.get("blocks") or {}
         if not isinstance(blocks, dict):
@@ -511,8 +512,6 @@ class BlockOps:
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         try:
-            from core.ocr import capture_region
-            from core import wave as wave_module
             image = capture_region(left + WAVE_REGION[0], top + WAVE_REGION[1], WAVE_REGION[2], WAVE_REGION[3])
             current, maximum = wave_module.read_wave(image)
         except Exception as exc:
@@ -664,7 +663,6 @@ class BlockOps:
                                         auto_walk_block, first_repeat)
             return
 
-        from . import templates as tpl
         data = tpl.load_template(macro_name)
         blocks = data.get("blocks") or {}
         if isinstance(blocks, list):
