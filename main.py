@@ -467,6 +467,7 @@ class Api:
             "version": updater.get_current_version(),
             "time_until_challenge": time_until_challenge,
             "results": [h.get("result") == "win" for h in reversed(history)],
+            "runs_per_hour": self._calculate_runs_per_hour(history),  # Runs per hour rate over rolling window
         }
 
     def _set_run_status(self, **kwargs) -> None:

@@ -75,7 +75,7 @@ def _activity_grid(img, x, y, results, max_cells=20, cols=10):
 
 def render_status_card_bgr(*, is_win, action, last_run_duration, last_run_win,
                             time_until_challenge, session_wins, session_losses,
-                            all_time_wins, all_time_losses, results=None):
+                            all_time_wins, all_time_losses, runs_per_hour="-", results=None):
     try:
         sw, sl = int(session_wins or 0), int(session_losses or 0)
         aw, al = int(all_time_wins or 0), int(all_time_losses or 0)
@@ -83,6 +83,7 @@ def render_status_card_bgr(*, is_win, action, last_run_duration, last_run_win,
         s_rate = round(sw / s_total * 100) if s_total else 0
         a_rate = round(aw / a_total * 100) if a_total else 0
         tuc = str(time_until_challenge or "-")
+        rph = str(runs_per_hour or "-")
 
         pad, gap = 28, 20
         h = 434
@@ -105,14 +106,17 @@ def render_status_card_bgr(*, is_win, action, last_run_duration, last_run_win,
         _status_tile(img, ch_x, row_y, tw3, row_h, _PURPLE, "Time Until Challenge", tuc,
                      value_scale=0.85 if len(tuc) <= 10 else 0.6)
 
-        # ── WIN / LOSS ──────────────────────────────────────────────────
+        # ── WIN / LOSS & SESSION STATS ──────────────────────────────────
         wl_y = 164
         _text(img, "WIN / LOSS", (pad, wl_y), 0.62, _MUTED, 1)
         ty, th = wl_y + 12, 130
-        _stat_tile(img, pad, ty, tw3, th, _GREEN, "Wins", sw, "All Time", aw)
-        _stat_tile(img, pad + (tw3 + gap), ty, tw3, th, _RED, "Losses", sl, "All Time", al)
-        _stat_tile(img, pad + (tw3 + gap) * 2, ty, tw3, th, _PURPLE, "Win %", f"{s_rate}%",
+        tw4 = (CARD_W - pad * 2 - gap * 3) // 4
+        _stat_tile(img, pad, ty, tw4, th, _GREEN, "Wins", sw, "All Time", aw)
+        _stat_tile(img, pad + (tw4 + gap), ty, tw4, th, _RED, "Losses", sl, "All Time", al)
+        _stat_tile(img, pad + (tw4 + gap) * 2, ty, tw4, th, _PURPLE, "Win %", f"{s_rate}%",
                    "All Time", f"{a_rate}%  ({aw}/{a_total})" if a_total else "-")
+        _stat_tile(img, pad + (tw4 + gap) * 3, ty, tw4, th, _GOLD, "Runs / h", rph,
+                   "Session", f"{s_total} total" if s_total else "-")
 
         # ── SESSION ACTIVITY (GitHub-style grid) ────────────────────────
         ga_y = ty + th + 26
