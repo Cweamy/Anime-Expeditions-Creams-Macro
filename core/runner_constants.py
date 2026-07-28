@@ -491,6 +491,11 @@ WAVE_REGION = (467, 21, 104, 61)
 # Battle-tick poll, so a long wait for a distant wave doesn't spend most of
 # its time re-running OCR against a number that hasn't changed yet.
 WAIT_WAVE_POLL_INTERVAL = 2.0
+# New Infinite tasks default to a bounded run instead of silently running
+# forever. The Task builder exposes this value per task.
+DEFAULT_INFINITE_WAVE_LIMIT = 20
+# Never let one OCR frame end an Infinite run.
+INFINITE_WAVE_LIMIT_CONFIRMATIONS = 2
 
 # EVERY fixed click point/row layout the runner uses, as overridable
 # settings (Settings > Debug > Macro Coordinates -- mirrors main.py's

@@ -194,14 +194,16 @@ King's Tomb.png / Flower Forest.png
 challenge.png
   Regular Challenge's gamemode card, same idea as raid.png/expedition.png
   (core.runner._click_gamemode) -- found by image search on the Play
-  menu, no fixed coordinate like Story's.
+  menu, no fixed coordinate like Story's. Folder variants cover both
+  observed card/text scales.
 
 challenge_loaded.png
   Confirms the Challenge screen has actually finished opening
   (core.runner._enter_challenge_stage) before clicking a stage slot at
   one of its 3 fixed positions (CHALLENGE_STAGE_CLICK) -- a load-
   confirmation banner, not a button, so it's only waited on, never
-  clicked itself.
+  clicked itself. Folder variants cover the older layouts plus the
+  larger current Daily Challenge panel.
 
 chal_enter.png
   Challenge's own "Enter Matchmaking" button, Matchmaking play mode only
@@ -271,7 +273,9 @@ unit_exist.png
 leave_stage.png
   Used in three places: quitting to menu on Stop/F2, the first step of
   mid-task recovery, and the normal end-of-run flow when no repeats are
-  left (verified/retried click that backs out to the lobby).
+  left (verified/retried click that backs out to the lobby). The live
+  variant is the top-left door icon beside the cogwheel, which is present
+  during an active stage and opens Exit Confirmation.
 
 repeat_stage.png
   End-of-match flow when the task has repeats left (and isn't
@@ -282,7 +286,8 @@ return.png
   Optional. Leave Stage can bring up its own "Return to Lobby"
   confirmation instead of backing out on its own; polled briefly (not a
   one-shot check -- the popup can take a moment to animate in) right after
-  every Leave Stage click and clicked if found.
+  every Leave Stage click and clicked if found. The live variant covers
+  the larger red button shown by the active-stage Exit Confirmation.
 
 team.png
   Used by Team Loadout application (core.runner._apply_team_loadout).
