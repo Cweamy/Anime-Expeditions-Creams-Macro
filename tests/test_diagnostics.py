@@ -23,7 +23,7 @@ def test_failure_report_instantiation():
         user_action="Check logs",
         details={"info": "test"}
     )
-    
+
     assert report.code == "TEST_ERR_01"
     assert report.category == FailureCategory.ENVIRONMENT
     assert report.phase == "INITIALIZATION"
@@ -44,7 +44,7 @@ def test_failure_report_immutability():
         user_message="Internal error",
         user_action="Wait and retry"
     )
-    
+
     with pytest.raises(FrozenInstanceError):
         report.code = "NEW_CODE"
 
@@ -60,9 +60,9 @@ def test_failure_report_to_dict():
         user_action="Fix config file",
         details={"key": "value"}
     )
-    
+
     report_dict = report.to_dict()
-    
+
     assert report_dict == {
         "code": "TEST_ERR_03",
         "category": "USER_CONFIG",

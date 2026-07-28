@@ -45,18 +45,18 @@ def test_save_failure_snapshot(monkeypatch):
             user_message="Test",
             user_action="None"
         )
-        
+
         # Test basic snapshot
         snapshot_dir = save_failure_snapshot(report, log_tail="Test C:\\Users\\Bryan\\test.log")
-        
+
         assert os.path.exists(snapshot_dir)
         assert os.path.exists(os.path.join(snapshot_dir, "failure.json"))
         assert os.path.exists(os.path.join(snapshot_dir, "recent_logs.txt"))
-        
+
         with open(os.path.join(snapshot_dir, "recent_logs.txt"), "r") as f:
             logs = f.read()
             assert "C:\\Users\\<REDACTED>\\test.log" in logs
-            
+
         # Test retention (max 10)
         import time
         for i in range(15):
@@ -71,7 +71,7 @@ def test_save_failure_snapshot(monkeypatch):
             )
             save_failure_snapshot(rep)
             time.sleep(0.01) # to ensure different timestamps
-            
+
         failures_dir = os.path.join(temp_dir, "debug", "failures")
         snapshots = os.listdir(failures_dir)
         assert len(snapshots) == 10
@@ -81,45 +81,45 @@ def test_save_failure_snapshot(monkeypatch):
 @mock.patch("main.os.path.expanduser")
 def test_export_failure_report(mock_expanduser, monkeypatch):
     import main
-    
+
     # Mock dependencies
     api = main.Api()
     api._window = mock.MagicMock()
     api._window.create_file_dialog.return_value = ["mock_bundle.zip"]
     mock_expanduser.return_value = "mock_dir"
-    
+
     # Mock run_health_check
     api.run_health_check = mock.MagicMock(return_value={})
-    
+
     temp_dir = tempfile.mkdtemp()
     monkeypatch.setattr(constants, "APP_DIR", temp_dir)
-    
+
     # Create mock debug log and config
     with open(os.path.join(temp_dir, "debug.log"), "w", encoding="utf-8") as f:
         f.write("Log trace with C:\\Users\\Bryan\\test.log")
-        
+
     def mock_cfg_load():
         return {"webhook_url": "https://discord.com/api/webhooks/123/abc", "other_path": "C:\\Users\\Admin\\x"}
-        
+
     monkeypatch.setattr("core.settings.load", mock_cfg_load)
     monkeypatch.setattr("main.cfg.load", mock_cfg_load)
-    
+
     try:
         # Avoid file writing outside temp
         import zipfile
         mock_zip = mock.MagicMock()
         mock_zip_instance = mock.MagicMock()
         mock_zip.return_value.__enter__.return_value = mock_zip_instance
-        
+
         with mock.patch("zipfile.ZipFile", mock_zip):
             api.export_failure_report()
-            
+
             # Verify zip writes
             writes = mock_zip_instance.writestr.call_args_list
-            
+
             log_tail_written = False
             settings_written = False
-            
+
             for call in writes:
                 args, kwargs = call
                 if args[0] == "log_tail.txt":
@@ -130,7 +130,7 @@ def test_export_failure_report(mock_expanduser, monkeypatch):
                     settings_data = json.loads(args[1])
                     assert settings_data["webhook_url"] == "<redacted>"
                     assert settings_data["other_path"] == "C:\\Users\\<REDACTED>\\x"
-                    
+
             assert log_tail_written
             assert settings_written
     finally:

@@ -81,7 +81,7 @@ def test_recovery_halts_when_retry_threshold_reached(runner):
     max_retries = 3
     retries = 0
     hwnd = Mock()
-    
+
     report = create_failure_report(
         code="TEST_ERR_05",
         phase="LOAD_TEAM",
@@ -98,7 +98,7 @@ def test_recovery_halts_when_retry_threshold_reached(runner):
         # simulating a failure and check
         if runner._handle_structured_failure(report, hwnd=hwnd):
             continue
-        
+
     assert retries == max_retries
     assert not success
 
