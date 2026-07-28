@@ -147,6 +147,18 @@ STAGE_SCREEN_TIMEOUT = 10.0
 STAGE_ORDER = ["1", "2", "3", "4", "5", "Infinite", "Mastery"]
 STAGE_CLICK_BASE = (246, 230)  # Level 1's click point
 STAGE_ROW_HEIGHT = 56
+# Infinite has been observed in two different layouts at the same normalized
+# 1152x756 viewport: one where the legacy fixed click is centered, and a
+# roughly 10%-larger panel where that X lands outside the row. Locate its
+# distinctive infinity glyph inside the left stage column instead.
+STORY_STAGE_VISUAL_IMAGES = {"Infinite": "stage_infinite"}
+STORY_STAGE_SEARCH_REGION = (140, 120, 200, 560)
+STORY_STAGE_MATCH_THRESHOLD = 0.82
+STORY_STAGE_CLICK_ATTEMPTS = 3
+STORY_STAGE_SELECTED_VERIFY_TIMEOUT = 2.0
+STORY_STAGE_SELECTED_VERIFY_POLL = 0.15
+STORY_STAGE_SELECTED_SAMPLE_HALF_SIZE = 24
+STORY_STAGE_SELECTED_BLUE_MIN_FRACTION = 0.30
 
 # Raid's stage-select screen only ever shows 3 Acts, spaced much further
 # apart than Story's rows -- same screen (nav_select_stage), same confirm

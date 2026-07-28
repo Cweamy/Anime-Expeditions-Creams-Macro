@@ -121,6 +121,12 @@ nav_select_stage.png
   reuses the same screen as Story, just a different row layout), then
   clicked (verified/retried) to move on to Start/Enter Matchmaking.
 
+stage_infinite/
+  The infinity glyph in Story's Infinite row. Searched only inside the
+  left stage-list column, with variants from both observed 1152x756 UI
+  layouts. The row is clicked at the match center and its blue selected
+  state is verified before Select Stage is allowed to run.
+
 exp_select_stage.png
   Expedition's equivalent of nav_select_stage.png -- its own confirm
   button after picking a map and difficulty, Solo mode only (matchmaking
