@@ -106,18 +106,18 @@ def save_failure_snapshot(report: FailureReport, screenshot_bgr=None, log_tail: 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     snapshot_dir = os.path.join(constants.APP_DIR, "debug", "failures", f"{timestamp}_{report.code}")
     os.makedirs(snapshot_dir, exist_ok=True)
-    
+
     with open(os.path.join(snapshot_dir, "failure.json"), "w", encoding="utf-8") as f:
         json.dump(report.to_dict(), f, indent=2)
-        
+
     if screenshot_bgr is not None:
         cv2.imwrite(os.path.join(snapshot_dir, "screenshot.png"), screenshot_bgr)
-        
+
     if log_tail is not None:
         sanitized_log = redact_sensitive_info(log_tail)
         with open(os.path.join(snapshot_dir, "recent_logs.txt"), "w", encoding="utf-8") as f:
             f.write(sanitized_log)
-            
+
     # Cleanup oldest snapshots (keep 10)
     failures_dir = os.path.join(constants.APP_DIR, "debug", "failures")
     try:
@@ -132,5 +132,5 @@ def save_failure_snapshot(report: FailureReport, screenshot_bgr=None, log_tail: 
             shutil.rmtree(oldest, ignore_errors=True)
     except OSError:
         pass
-        
+
     return snapshot_dir

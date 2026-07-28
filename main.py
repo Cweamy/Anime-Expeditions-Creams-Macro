@@ -2486,7 +2486,7 @@ class Api:
         checks_list = []
         warnings_list = []
         has_blocker = False
-        
+
         def add_check(is_ok: bool, code: str, msg: str, action: str, is_blocker: bool = True):
             nonlocal has_blocker
             check_data = {
@@ -2541,7 +2541,7 @@ class Api:
         if assets_exist:
             # Check if empty (or at least contains some items)
             assets_populated = len(os.listdir(constants.ASSETS_DIR)) > 0
-            
+
         add_check(
             assets_exist and assets_populated,
             "ASSETS_MISSING",
@@ -2560,7 +2560,7 @@ class Api:
                         missing_images.append(name)
                 except Exception:
                     missing_images.append(name)
-        
+
         if missing_images:
             add_check(
                 False,
@@ -2771,7 +2771,7 @@ class Api:
                 data = cfg.load()
                 if data.get("webhook_url"):
                     data["webhook_url"] = "<redacted>"
-                
+
                 from core.diagnostics import redact_sensitive_info
                 settings_json = json.dumps(data, indent=2)
                 sanitized_settings = redact_sensitive_info(settings_json)

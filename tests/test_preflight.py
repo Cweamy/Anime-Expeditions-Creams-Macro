@@ -15,7 +15,7 @@ class MockApi(main.Api):
         self.runner = MockRunner()
         self.game_hwnd = 12345
         self.logs = []
-    
+
     def push_log(self, text: str):
         self.logs.append(text)
 
