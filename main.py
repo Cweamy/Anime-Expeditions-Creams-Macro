@@ -1042,6 +1042,7 @@ class Api:
         return {
             "enabled": False,
             "play_mode": "solo",
+            "summon_banner": "standard",
             "maps": {name: {"macro": ""} for name in BOUNTY_STORY_MAPS},
         }
 
@@ -1050,6 +1051,8 @@ class Api:
         merged = {**self._default_bounty_settings(), **saved}
         if merged.get("play_mode") not in ("solo", "matchmaking"):
             merged["play_mode"] = "solo"
+        if merged.get("summon_banner") not in ("standard", "villain"):
+            merged["summon_banner"] = "standard"
         saved_maps = saved.get("maps") or {}
         merged["maps"] = {
             name: {"macro": (saved_maps.get(name) or {}).get("macro") or ""}
@@ -1068,6 +1071,14 @@ class Api:
             return {"ok": False, "reason": "bad_play_mode"}
         settings = self.get_bounty_settings()
         settings["play_mode"] = play_mode
+        cfg.update({"bounty": settings})
+        return {"ok": True}
+
+    def set_bounty_summon_banner(self, banner: str) -> dict:
+        if banner not in ("standard", "villain"):
+            return {"ok": False, "reason": "bad_banner"}
+        settings = self.get_bounty_settings()
+        settings["summon_banner"] = banner
         cfg.update({"bounty": settings})
         return {"ok": True}
 

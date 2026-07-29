@@ -666,6 +666,17 @@
             </div>
           </div>
 
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Summon Banner</div>
+              <div class="setting-desc">Currency source for Summon bounties. Standard uses Gems; Villain uses Villain Coins.</div>
+            </div>
+            <div class="seg-toggle" style="width: auto;">
+              <button type="button" id="bounty-banner-standard" class="seg-btn" onclick="setBountySummonBanner('standard')">Standard</button>
+              <button type="button" id="bounty-banner-villain" class="seg-btn" onclick="setBountySummonBanner('villain')">Villain</button>
+            </div>
+          </div>
+
           <div>
             <div class="wh-hint" style="margin-bottom: 6px;">Resets every :00 / :30 -- pick which of the 3 stage slots to attempt below.</div>
             <div id="challenge-stage-list" class="flex flex-col gap-1.5"></div>

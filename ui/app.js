@@ -3064,6 +3064,9 @@ function renderBountyScreen() {
   const playMode = (s && s.play_mode) || 'solo';
   document.getElementById('bounty-mode-solo')?.classList.toggle('active', playMode === 'solo');
   document.getElementById('bounty-mode-matchmaking')?.classList.toggle('active', playMode === 'matchmaking');
+  const summonBanner = (s && s.summon_banner) || 'standard';
+  document.getElementById('bounty-banner-standard')?.classList.toggle('active', summonBanner === 'standard');
+  document.getElementById('bounty-banner-villain')?.classList.toggle('active', summonBanner === 'villain');
 
   const list = document.getElementById('bounty-map-list');
   if (!list) return;
@@ -3100,6 +3103,11 @@ async function toggleBountyEnabled(btn) {
 
 async function setBountyPlayMode(playMode) {
   try { await pywebview.api.set_bounty_play_mode(playMode); } catch (e) {}
+  await refreshBountyScreen();
+}
+
+async function setBountySummonBanner(banner) {
+  try { await pywebview.api.set_bounty_summon_banner(banner); } catch (e) {}
   await refreshBountyScreen();
 }
 
