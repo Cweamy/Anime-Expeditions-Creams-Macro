@@ -16,6 +16,7 @@ exist.
 import os
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 
 import cv2
@@ -565,9 +566,44 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
             # backing (SetThreadExecutionState) is per-thread.
             wm.prevent_sleep()
             self._run(*args)
+        except Exception as exc:
+            # A daemon-thread exception is otherwise invisible in the
+            # pythonw release build: Start simply becomes available again
+            # and debug.log ends at the last normal action. Keep this final
+            # boundary even though the independently recoverable phases in
+            # _run are guarded below.
+            self._log_unexpected_phase_error("runner session", exc)
+            self._set_status(action="Idle")
         finally:
             wm.allow_sleep()
             vision.close_mss()
+
+    def _log_unexpected_phase_error(self, phase: str, exc: Exception) -> None:
+        self._log(
+            f"[Macro] Unexpected error during {phase}: "
+            f"{type(exc).__name__}: {exc}")
+        self._log(f"[Debug] {traceback.format_exc().strip()}")
+
+    def _run_guarded_phase(self, phase: str, hwnd, stop_event: threading.Event,
+                           operation):
+        """Run one independently recoverable part of an unattended pass.
+
+        Returns ``(completed, result)``. An implementation bug or transient
+        capture exception in Auto Bounty/Challenge/a single queued task must
+        not kill the daemon thread and silently end the entire overnight run.
+        """
+        try:
+            return True, operation()
+        except Exception as exc:
+            self._log_unexpected_phase_error(phase, exc)
+            if not stop_event.is_set():
+                self._set_status(action=f"Recovering after {phase} error...")
+                try:
+                    self._recover_to_lobby(hwnd, stop_event)
+                except Exception as recovery_exc:
+                    self._log_unexpected_phase_error(
+                        f"{phase} lobby recovery", recovery_exc)
+            return False, None
 
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,
@@ -640,16 +676,25 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
         if self._checkpoint(stop_event):
             return
         if not self._skip_first_task_setup:
-            bounty_enabled = self._run_bounties(
-                hwnd, stop_event, coords, default_walk_paths, webhook)
+            bounty_ok, bounty_result = self._run_guarded_phase(
+                "Auto Bounty", hwnd, stop_event,
+                lambda: self._run_bounties(
+                    hwnd, stop_event, coords, default_walk_paths, webhook))
+            bounty_enabled = bool(bounty_result) if bounty_ok else bool(
+                self._bounty_settings().get("enabled"))
         else:
             bounty_enabled = False
         if self._checkpoint(stop_event):
             return
         if not self._skip_first_task_setup:
-            self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
+            self._run_guarded_phase(
+                "Challenge", hwnd, stop_event,
+                lambda: self._run_challenges(
+                    hwnd, stop_event, coords, default_walk_paths, webhook))
             if self._crafting_wants_in():
-                self._run_crafting(hwnd, stop_event)
+                self._run_guarded_phase(
+                    "Auto Crafting", hwnd, stop_event,
+                    lambda: self._run_crafting(hwnd, stop_event))
         if self._checkpoint(stop_event):
             return
 
@@ -696,8 +741,19 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                 # doesn't kill the whole overnight run -- _run_task recovers to
                 # the lobby and retries internally, only returning False when
                 # stop_event actually fired.
-                if not self._run_task(hwnd, stop_event, task, task_index, len(tasks), coords, scroll_power,
-                                        scroll_nudges, default_walk_paths, webhook):
+                task_ok, task_result = self._run_guarded_phase(
+                    f"task {task_index}/{len(tasks)}", hwnd, stop_event,
+                    lambda: self._run_task(
+                        hwnd, stop_event, task, task_index, len(tasks), coords,
+                        scroll_power, scroll_nudges, default_walk_paths, webhook))
+                if not task_ok:
+                    if self._checkpoint(stop_event):
+                        return
+                    # Recovery already returned to the lobby. Skip only this
+                    # broken task and let the remaining queue (or its next
+                    # pass) continue instead of ending the runner thread.
+                    continue
+                if not task_result:
                     self._set_status(action="Idle")
                     return
 
@@ -709,7 +765,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                 # a reached threshold just sat until the next Start -- the exact
                 # "task finished, came back to lobby, no craft" report.
                 if self._crafting_wants_in():
-                    self._run_crafting(hwnd, stop_event)
+                    self._run_guarded_phase(
+                        "Auto Crafting", hwnd, stop_event,
+                        lambda: self._run_crafting(hwnd, stop_event))
                     if self._current_hwnd and wm.is_window(self._current_hwnd):
                         hwnd = self._current_hwnd
                     if self._checkpoint(stop_event):
