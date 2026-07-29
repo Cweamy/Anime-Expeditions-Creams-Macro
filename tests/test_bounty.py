@@ -155,6 +155,9 @@ def test_detects_cyan_hard_link_using_difficulty_word():
 def test_destination_map_matching_tolerates_minor_ocr_error():
     assert bounty.match_story_map("FlowerForest - Act 1") == "Flower Forest"
     assert bounty.match_story_map("Fairy King F0rest - Act 1") == "Fairy King Forest"
+    assert bounty.match_story_map(
+        "Infinite King's Tonb - Act 1 Hard Mode Star Missions Clear Wave 10"
+    ) == "King's Tomb"
     assert bounty.match_story_map("unrelated screen") is None
 
 
