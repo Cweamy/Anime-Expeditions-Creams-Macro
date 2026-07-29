@@ -1000,6 +1000,10 @@ def test_render_crafting_screen_has_drag_grip(tmp_path):
     global.CRAFT_SPRITE_LABELS = { sprite_rainbow: 'Rainbow', sprite_red: 'Red' };
 
     const mockElements = {
+      'resource-crafting-summary': {
+        textContent: '', classList: { toggle: () => {} }
+      },
+      'resource-crafting-details': { textContent: '', title: '' },
       'toggle-crafting-enabled': { classList: { toggle: () => {} } },
       'crafting-every': { value: '' },
       'crafting-progress': { textContent: '' },
@@ -1016,11 +1020,51 @@ def test_render_crafting_screen_has_drag_grip(tmp_path):
     console.log(JSON.stringify({
       hasCraftingGrip: html.includes('crafting-grip'),
       hasDataKeyRainbow: html.includes('data-key="sprite_rainbow"'),
-      hasDataKeyRed: html.includes('data-key="sprite_red"')
+      hasDataKeyRed: html.includes('data-key="sprite_red"'),
+      summary: mockElements['resource-crafting-summary'].textContent,
+      details: mockElements['resource-crafting-details'].textContent
     }));
     """
     out = run_js(body, tmp_path)
     assert out["hasCraftingGrip"] is True
     assert out["hasDataKeyRainbow"] is True
     assert out["hasDataKeyRed"] is True
+    assert out["summary"] == "Enabled"
+    assert out["details"] == "Rainbow (Max) | 2/5 wins"
+
+
+def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
+    body = """
+    global.challengeState = {
+      enabled: true, cap: 10, play_mode: 'solo', last_reset_date: '2026-07-29',
+      daily: { enabled: true, ready: false },
+      stages: {
+        '1': { enabled: true, ready: true, count: 0 },
+        '2': { enabled: true, ready: false, count: 1 },
+        '3': { enabled: true, ready: true, count: 10 }
+      },
+      maps: {}
+    };
+    global.CHALLENGE_STAGE_SLOTS = ['1', '2', '3'];
+    const mockElements = {
+      'resource-challenge-summary': {
+        textContent: '', classList: { toggle: () => {} }
+      },
+      'resource-challenge-details': { textContent: '', title: '' }
+    };
+    global.document = { getElementById: id => mockElements[id] || null };
+
+    eval(extract('renderChallengeScreen'));
+    renderChallengeScreen();
+
+    console.log(JSON.stringify({
+      summary: mockElements['resource-challenge-summary'].textContent,
+      details: mockElements['resource-challenge-details'].textContent
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out == {
+        "summary": "Enabled",
+        "details": "Daily: 0/1 left | Regular: 1/3 ready",
+    }
 

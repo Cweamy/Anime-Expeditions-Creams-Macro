@@ -2919,16 +2919,30 @@ function renderChallengeScreen() {
 
   const summary = document.getElementById('resource-challenge-summary');
   if (summary) {
-    const regularReady = s && s.enabled
+    const enabled = !!(daily.enabled || (s && s.enabled));
+    summary.textContent = enabled ? 'Enabled' : 'Disabled';
+    summary.classList.toggle('active', enabled);
+  }
+  const details = document.getElementById('resource-challenge-details');
+  if (details) {
+    const enabledSlots = s && s.enabled
       ? CHALLENGE_STAGE_SLOTS.filter(slot => {
           const info = (s.stages && s.stages[slot]) || {};
-          return info.enabled && info.ready && !(s.cap > 0 && info.count >= s.cap);
-        }).length
-      : 0;
-    const enabled = !!(daily.enabled || (s && s.enabled));
-    const readyCount = regularReady + (daily.enabled && daily.ready ? 1 : 0);
-    summary.textContent = enabled ? (readyCount ? `${readyCount} ready` : 'Enabled') : 'Disabled';
-    summary.classList.toggle('active', enabled);
+          return info.enabled;
+        })
+      : [];
+    const regularReady = enabledSlots.filter(slot => {
+      const info = (s.stages && s.stages[slot]) || {};
+      return info.ready && !(s.cap > 0 && info.count >= s.cap);
+    }).length;
+    const dailyText = daily.enabled
+      ? `Daily: ${daily.ready ? '1/1 left' : '0/1 left'}`
+      : 'Daily: off';
+    const regularText = s && s.enabled
+      ? `Regular: ${regularReady}/${enabledSlots.length} ready`
+      : 'Regular: off';
+    details.textContent = `${dailyText} | ${regularText}`;
+    details.title = details.textContent;
   }
   const enabledBtn = document.getElementById('toggle-challenge-enabled');
   if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
@@ -3008,6 +3022,7 @@ async function toggleChallengeEnabled(btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_challenge_enabled(isOn); } catch (e) {}
+  await refreshChallengeScreen();
 }
 
 async function setChallengePlayMode(playMode) {
@@ -3020,6 +3035,7 @@ async function toggleDailyChallengeEnabled(btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_daily_challenge_enabled(isOn); } catch (e) {}
+  await refreshChallengeScreen();
 }
 
 async function setDailyChallengeCount(value) {
@@ -3033,6 +3049,7 @@ async function toggleChallengeStage(stage, btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_challenge_stage_enabled(stage, isOn); } catch (e) {}
+  await refreshChallengeScreen();
 }
 
 async function setChallengeMapMacro(map, value) {
@@ -3171,8 +3188,20 @@ function renderCraftingScreen() {
   const s = craftingState;
   const summary = document.getElementById('resource-crafting-summary');
   if (summary) {
-    summary.textContent = s && s.enabled ? `${s.count} / ${s.every} wins` : 'Disabled';
+    summary.textContent = s && s.enabled ? 'Enabled' : 'Disabled';
     summary.classList.toggle('active', !!(s && s.enabled));
+  }
+  const details = document.getElementById('resource-crafting-details');
+  if (details) {
+    const selected = ((s && s.items) || []).filter(item => item.enabled);
+    const labels = selected.map(item => {
+      const label = CRAFT_SPRITE_LABELS[item.key] || item.key;
+      return `${label} (${String(item.amount).toLowerCase() === 'max' ? 'Max' : item.amount})`;
+    });
+    const spriteText = labels.length ? labels.join(', ') : 'No sprites selected';
+    const progressText = s ? `${s.count}/${s.every} wins` : 'progress unavailable';
+    details.textContent = `${spriteText} | ${progressText}`;
+    details.title = details.textContent;
   }
   const enabledBtn = document.getElementById('toggle-crafting-enabled');
   if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
@@ -3303,6 +3332,7 @@ async function toggleCraftingEnabled(btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_crafting_enabled(isOn); } catch (e) {}
+  await refreshCraftingScreen();
 }
 
 async function setCraftingEvery(value) {
@@ -3316,6 +3346,7 @@ async function toggleCraftingItem(key, btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_crafting_item_enabled(key, isOn); } catch (e) {}
+  await refreshCraftingScreen();
 }
 
 async function setCraftingItemMax(key) {
