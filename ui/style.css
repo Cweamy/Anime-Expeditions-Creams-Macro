@@ -1070,6 +1070,30 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
 }
+.fuel-resource-controls {
+  display: flex; align-items: stretch; justify-content: flex-end; gap: 14px; flex-wrap: wrap;
+}
+.fuel-enable-control {
+  display: flex; align-items: center; gap: 9px; min-width: 132px;
+}
+.fuel-amount-control {
+  display: flex; flex-direction: column; justify-content: center; gap: 5px;
+}
+.fuel-control-title {
+  color: var(--text-dim); font-size: 11px; font-weight: 700; line-height: 1.15;
+}
+.fuel-control-hint {
+  color: var(--text-muted); font-size: 9px; line-height: 1.15; margin-top: 3px;
+}
+.fuel-control-divider {
+  width: 1px; min-height: 36px; background: var(--border);
+}
+.fuel-path-row {
+  display: grid; grid-template-columns: minmax(170px, 1fr) minmax(180px, 1.15fr) auto;
+  align-items: center; gap: 10px; padding: 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card);
+}
+.fuel-path-row .task-select { min-width: 0; width: 100%; }
 
 /* Builder panel: labeled fields in a 2-up grid (labels come from .task-field). */
 .task-builder-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }

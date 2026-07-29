@@ -488,7 +488,8 @@ class Api:
         self.runner = MacroRunner(
             self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result,
             self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot,
-            self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings)
+            self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings,
+            self.get_fuel_settings, self.mark_fuel_refill_result)
 
     def _run_stats_snapshot(self) -> dict:
         # Fed to the runner's match-result webhook so it can report the same
@@ -1241,6 +1242,200 @@ class Api:
         data = cfg.load()
         coords = {k: data.get(k, v) for k, v in MACRO_COORD_DEFAULTS.items()}
         return self.runner.start_crafting_test(lambda: self.game_hwnd, coords)
+
+    # ── Auto Fuel (see core/runner_fuel.py) ──
+
+    @staticmethod
+    def _default_fuel_settings() -> dict:
+        return {
+            "enabled": False,
+            "resources": {
+                "resource_drill": {
+                    "enabled": False,
+                    "amount": "max",
+                    "last_refilled_at": 0.0,
+                    "next_attempt_at": 0.0,
+                },
+                "gold_mine": {
+                    "enabled": False,
+                    "amount": "max",
+                    "last_refilled_at": 0.0,
+                    "next_attempt_at": 0.0,
+                },
+            },
+            "paths": {
+                "hub_to_resource_drill": "Auto Fuel - Hub to Resource Drill",
+                "hub_to_gold_mine": "Auto Fuel - Hub to Gold Mine",
+                "resource_drill_to_gold_mine": "Auto Fuel - Resource Drill to Gold Mine",
+            },
+        }
+
+    def _save_fuel_settings(self, fuel: dict) -> dict:
+        """Persist only the canonical fields, never the derived timer values."""
+        from core.runner_constants import FUEL_PATH_KEYS, FUEL_RESOURCES
+
+        canonical = {
+            "enabled": bool(fuel.get("enabled")),
+            "resources": {},
+            "paths": {},
+        }
+        for key in FUEL_RESOURCES:
+            source = (fuel.get("resources") or {}).get(key) or {}
+            canonical["resources"][key] = {
+                "enabled": bool(source.get("enabled")),
+                "amount": source.get("amount", "max"),
+                "last_refilled_at": float(source.get("last_refilled_at") or 0),
+                "next_attempt_at": float(source.get("next_attempt_at") or 0),
+            }
+        for key in FUEL_PATH_KEYS:
+            canonical["paths"][key] = str((fuel.get("paths") or {}).get(key) or "")
+        cfg.update({"fuel_refill": canonical})
+        return canonical
+
+    def get_fuel_settings(self) -> dict:
+        from core.runner_constants import (
+            FUEL_AMOUNT_MAX,
+            FUEL_INTERVAL_SECONDS,
+            FUEL_PATH_KEYS,
+            FUEL_RESOURCES,
+            FUEL_RETRY_SECONDS,
+        )
+
+        defaults = self._default_fuel_settings()
+        saved = cfg.load().get("fuel_refill") or {}
+        fuel = {
+            "enabled": bool(saved.get("enabled", defaults["enabled"])),
+            "resources": {},
+            "paths": {},
+            "interval_seconds": FUEL_INTERVAL_SECONDS,
+            "retry_seconds": FUEL_RETRY_SECONDS,
+        }
+        saved_resources = saved.get("resources") if isinstance(saved.get("resources"), dict) else {}
+        now = time.time()
+        for key in FUEL_RESOURCES:
+            saved_source = saved_resources.get(key) if isinstance(saved_resources.get(key), dict) else {}
+            source = {
+                **defaults["resources"][key],
+                **saved_source,
+            }
+            amount = source.get("amount", "max")
+            if str(amount).lower() == "max":
+                amount = "max"
+            else:
+                try:
+                    amount = min(FUEL_AMOUNT_MAX, max(1, int(amount)))
+                except (TypeError, ValueError):
+                    amount = "max"
+            try:
+                last_refilled_at = max(0.0, float(source.get("last_refilled_at") or 0))
+            except (TypeError, ValueError):
+                last_refilled_at = 0.0
+            try:
+                next_attempt_at = max(0.0, float(source.get("next_attempt_at") or 0))
+            except (TypeError, ValueError):
+                next_attempt_at = 0.0
+            # Legacy development builds used retry_after only for failures.
+            # Derive the regular 8-hour attempt once when that older shape is read.
+            if "next_attempt_at" not in saved_source:
+                try:
+                    retry_after = max(0.0, float(source.get("retry_after") or 0))
+                except (TypeError, ValueError):
+                    retry_after = 0.0
+                next_attempt_at = max(
+                    (last_refilled_at + FUEL_INTERVAL_SECONDS) if last_refilled_at else 0.0,
+                    retry_after,
+                )
+            resource_enabled = bool(source.get("enabled"))
+            due = bool(fuel["enabled"] and resource_enabled and now >= next_attempt_at)
+            fuel["resources"][key] = {
+                "enabled": resource_enabled,
+                "amount": amount,
+                "last_refilled_at": last_refilled_at,
+                "next_attempt_at": next_attempt_at,
+                "next_due_at": next_attempt_at,
+                "remaining_seconds": max(0, int(next_attempt_at - now + 0.999)),
+                "due": due,
+            }
+
+        saved_paths = saved.get("paths") if isinstance(saved.get("paths"), dict) else {}
+        for key in FUEL_PATH_KEYS:
+            fuel["paths"][key] = str(
+                saved_paths[key] if key in saved_paths else defaults["paths"][key])
+        return fuel
+
+    def set_fuel_enabled(self, enabled: bool) -> dict:
+        fuel = self.get_fuel_settings()
+        fuel["enabled"] = bool(enabled)
+        self._save_fuel_settings(fuel)
+        return {"ok": True}
+
+    def set_fuel_resource_enabled(self, resource: str, enabled: bool) -> dict:
+        from core.runner_constants import FUEL_RESOURCES
+
+        if resource not in FUEL_RESOURCES:
+            return {"ok": False, "reason": "bad_resource"}
+        fuel = self.get_fuel_settings()
+        fuel["resources"][resource]["enabled"] = bool(enabled)
+        self._save_fuel_settings(fuel)
+        return {"ok": True}
+
+    def set_fuel_resource_amount(self, resource: str, amount) -> dict:
+        from core.runner_constants import FUEL_AMOUNT_MAX, FUEL_RESOURCES
+
+        if resource not in FUEL_RESOURCES:
+            return {"ok": False, "reason": "bad_resource"}
+        if str(amount).lower() == "max":
+            amount = "max"
+        else:
+            try:
+                amount = min(FUEL_AMOUNT_MAX, max(1, int(amount)))
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "bad_amount"}
+        fuel = self.get_fuel_settings()
+        fuel["resources"][resource]["amount"] = amount
+        self._save_fuel_settings(fuel)
+        return {"ok": True}
+
+    def set_fuel_path(self, path_key: str, path_name: str) -> dict:
+        from core.runner_constants import FUEL_PATH_KEYS
+
+        if path_key not in FUEL_PATH_KEYS:
+            return {"ok": False, "reason": "bad_path_key"}
+        fuel = self.get_fuel_settings()
+        fuel["paths"][path_key] = str(path_name or "")
+        self._save_fuel_settings(fuel)
+        return {"ok": True}
+
+    def reset_fuel_timer(self) -> dict:
+        fuel = self.get_fuel_settings()
+        for resource in fuel["resources"].values():
+            if resource.get("enabled"):
+                resource["last_refilled_at"] = 0.0
+                resource["next_attempt_at"] = 0.0
+        self._save_fuel_settings(fuel)
+        self.push_log("[Fuel] Enabled resource timers reset. Auto Fuel is ready at the next safe point.")
+        return {"ok": True}
+
+    def mark_fuel_refill_result(self, resource: str, succeeded: bool) -> dict:
+        from core.runner_constants import FUEL_INTERVAL_SECONDS, FUEL_RESOURCES, FUEL_RETRY_SECONDS
+
+        if resource not in FUEL_RESOURCES:
+            return {"ok": False, "reason": "bad_resource"}
+        fuel = self.get_fuel_settings()
+        state = fuel["resources"][resource]
+        now = time.time()
+        if succeeded:
+            state["last_refilled_at"] = now
+            state["next_attempt_at"] = now + FUEL_INTERVAL_SECONDS
+        else:
+            state["next_attempt_at"] = now + FUEL_RETRY_SECONDS
+        self._save_fuel_settings(fuel)
+        return {"ok": True}
+
+    def test_fuel(self) -> dict:
+        # Runs the checked resources immediately, ignoring the master toggle
+        # and persistent timer while preserving the real navigation flow.
+        return self.runner.start_fuel_test(lambda: self.game_hwnd)
 
     def start_macro(self) -> dict:
         preflight = self.run_preflight_check()
