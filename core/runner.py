@@ -81,7 +81,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
 
     def __init__(self, mouse, keyboard, log, set_status=None, record_result=None,
                  get_challenge_settings=None, mark_challenge_stage_played=None, get_run_stats=None,
-                 get_crafting_settings=None, set_crafting_count=None, get_bounty_settings=None):
+                 get_crafting_settings=None, set_crafting_count=None, get_bounty_settings=None,
+                 get_hotkeys=None):
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
@@ -133,6 +134,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
         # in tests/CLI mode) just makes _run_challenges a no-op.
         self._get_challenge_settings = get_challenge_settings
         self._get_bounty_settings = get_bounty_settings
+        # Read when an Auto Upgrade Unit block runs so a key changed in
+        # Settings is used without rebuilding the runner or embedding a
+        # machine-specific key inside every exported macro template.
+        self._get_hotkeys = get_hotkeys or (lambda: {})
         self._mark_challenge_stage_played = mark_challenge_stage_played or (lambda *a, **kw: None)
         # Returns a fresh session/all-time win-loss + session_start + version
         # snapshot for the match-result webhook (see _send_result_webhook).

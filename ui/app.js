@@ -823,7 +823,7 @@ let rebindingAction = null;
 // Esc during capture instead.
 const HOTKEY_DEFAULTS = {
   toggle_game: 'f4', skip_waiting: '', macro_start: 'f1', macro_stop: 'f2', macro_pause: 'f5', debug_screenshot: 'f3',
-  image_manager: 'f6', toggle_compact: 'f7',
+  image_manager: 'f6', toggle_compact: 'f7', game_auto_upgrade: '',
 };
 
 // Reflects one hotkey's state into its button text and shows/hides its
@@ -907,6 +907,7 @@ async function resetHotkeys() {
     updateKeybindDisplay('debug_screenshot', hk.debug_screenshot || '');
     updateKeybindDisplay('image_manager', hk.image_manager || '');
     updateKeybindDisplay('toggle_compact', hk.toggle_compact || '');
+    updateKeybindDisplay('game_auto_upgrade', hk.game_auto_upgrade || '');
   } catch (e) {}
 }
 
@@ -1129,6 +1130,7 @@ async function loadSettingsUI() {
     updateKeybindDisplay('debug_screenshot', hk.debug_screenshot || '');
     updateKeybindDisplay('image_manager', hk.image_manager || '');
     updateKeybindDisplay('toggle_compact', hk.toggle_compact || '');
+    updateKeybindDisplay('game_auto_upgrade', hk.game_auto_upgrade || '');
     // (There was an updateDashboardHotkeys(hk) call here. No such function has
     // ever existed in this file, so every load of Settings threw a
     // ReferenceError that this bare catch swallowed. Nothing broke visibly
@@ -3533,7 +3535,11 @@ function addBlock(type, key, atIndex) {
   if (type === 'walk_path') { block.mode = 'auto'; block.pathName = ''; }
   if (type === 'send_key') { block.key = ''; }
   if (type === 'upgrade_unit') { block.params.index = ''; block.params.times = 1; }
-  if (type === 'auto_upgrade_unit') { block.params.index = ''; block.params.priority = 1; }
+  if (type === 'auto_upgrade_unit') {
+    block.params.index = '';
+    block.params.priority = 1;
+    block.params.input = 'click';
+  }
   if (type === 'sell_unit') { block.params.index = ''; }
   if (type === 'target_priority') { block.params.index = ''; block.params.priority = 'Boss'; }
   if (type === 'detect') {
@@ -4188,10 +4194,15 @@ const AUTO_UPGRADE_PRIORITIES = ['None', '1', '2', '3', '4', '5', '6'];
 
 function renderAutoUpgradeControls(b) {
   const current = String(b.params.priority ?? 1);
+  const input = String(b.params.input || 'click').toLowerCase();
   const options = AUTO_UPGRADE_PRIORITIES.map(p =>
     `<option value="${p}" ${p === current ? 'selected' : ''}>${p}</option>`).join('');
   return blkField('Unit', renderUnitIndexSelect(b, 'index'))
-    + blkField('Priority', `<select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'priority', this.value)">${options}</select>`);
+    + blkField('Priority', `<select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'priority', this.value)">${options}</select>`)
+    + blkField('Input', `<select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'input', this.value)">
+        <option value="click" ${input === 'click' ? 'selected' : ''}>Click</option>
+        <option value="hotkey" ${input === 'hotkey' ? 'selected' : ''}>Hotkey</option>
+      </select>`);
 }
 
 // Target Priority: which placed unit (#index) + target priority mode (First, Last, Strongest, Boss, Weakest, Shielded, Fastest, None).
