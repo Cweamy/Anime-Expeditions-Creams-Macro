@@ -213,12 +213,24 @@ class BountyOps:
             map_name = None
             for click_attempt in range(1, BOUNTY_NAV_CLICK_ATTEMPTS + 1):
                 wm.activate_window(hwnd)
+                # Roblox occasionally swallows input sent in the same tick
+                # that its docked child window regains focus. A live click
+                # on the exact detected Flower Forest point registered once
+                # the window received this short focus-settle interval.
+                self._interruptible_sleep(BOUNTY_CLICK_FOCUS_SETTLE, stop_event)
+                if self._checkpoint(stop_event):
+                    return True
                 self._click_ref(hwnd, objective["cx"], objective["cy"])
                 map_name = self._read_bounty_destination_map(
                     hwnd, stop_event, BOUNTY_NAV_CLICK_VERIFY_TIMEOUT)
                 if map_name:
                     break
-                if self._wait_ocr_line(hwnd, stop_event, "Bounties", 1.0) is None:
+                # The board heading is "Bounty Board". "Bounties" only
+                # appears in the tiny "Bounties Left" counter, which OCR
+                # commonly reads as e.g. "Bountie LMt". Using that counter
+                # made us incorrectly conclude the screen had changed after
+                # the very first missed click, so attempts 2 and 3 never ran.
+                if self._wait_ocr_line(hwnd, stop_event, "Bounty Board", 1.0) is None:
                     break
                 self._log(f"[Macro] Bounty objective click did not register "
                           f"(attempt {click_attempt}/{BOUNTY_NAV_CLICK_ATTEMPTS}).")

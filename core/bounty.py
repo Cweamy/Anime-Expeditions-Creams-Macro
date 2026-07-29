@@ -93,7 +93,7 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
         # remains per-objective (unlike the whole-card footer check).
         sx1 = max(0, link["x"] - 20)
         sx2 = min(board.shape[1], link["x"] + link["w"] + 20)
-        sy1 = min(board.shape[0], link["y"] + link["h"] + 5)
+        sy1 = min(board.shape[0], link["y"] + link["h"] + 1)
         sy2 = min(board.shape[0], sy1 + 30)
         status = board[sy1:sy2, sx1:sx2]
         if status.size:
@@ -141,6 +141,30 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
         progress_text = " ".join(progress_texts)
         if (re.search(r"\b1\s*/\s*1\b", progress_text)
                 or re.search(r"\b100\s*%?", progress_text)):
+            continue
+
+        # Do not click a destination merely because its colored link is
+        # visible. Near the bottom of a scrollable card the link can appear
+        # while its 0/1 progress strip is still clipped, so we cannot yet
+        # know whether that particular objective is complete. Returning no
+        # objective here lets _find_next_bounty scroll the card and inspect
+        # it again. This is visual and card-relative; it does not depend on
+        # a map name or a fixed card/click position.
+        progress_visible = bool(re.search(r"\b\d+\s*/\s*\d+\b", progress_text))
+        if status.size and not progress_visible:
+            dark = cv2.inRange(cv2.cvtColor(status, cv2.COLOR_BGR2GRAY), 0, 45)
+            dark = cv2.morphologyEx(
+                dark,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (7, 2)),
+            )
+            count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(dark)
+            progress_visible = any(
+                int(stats[i, cv2.CC_STAT_WIDTH]) >= max(45, int(link["w"] * 0.65))
+                and int(stats[i, cv2.CC_STAT_HEIGHT]) >= 3
+                for i in range(1, count)
+            )
+        if not progress_visible:
             continue
 
         nearby = []

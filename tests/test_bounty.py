@@ -78,6 +78,16 @@ def test_skips_individually_completed_amber_progress_fill():
     assert bounty.detect_objectives(frame, lines) == []
 
 
+def test_does_not_click_link_until_its_progress_strip_is_visible():
+    frame = np.full((756, 1152, 3), (85, 105, 125), dtype=np.uint8)
+    bx, by, _bw, _bh = bounty.BOARD_REGION
+    _link_text(frame, bx + 780, by + 390, "KingsTomb")
+    lines = [{"text": "Clear Wave 30 of King's Tomb", "x": 750, "y": 352,
+              "w": 150, "h": 16, "cx": 825, "cy": 360}]
+
+    assert bounty.detect_objectives(frame, lines) == []
+
+
 def test_detects_cyan_hard_link_using_difficulty_word():
     frame = _frame()
     bx, by, _bw, _bh = bounty.BOARD_REGION
