@@ -656,6 +656,33 @@
             <button class="task-toolbar-btn danger" onclick="resetChallengeCounts()">Reset</button>
           </div>
 
+          <!-- Auto Bounty -->
+          <div class="rp-head-tag" style="--rp-tag: var(--lilac); align-self: flex-start; margin-top: 6px;">Auto Bounty</div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Enable Auto Bounty</div>
+              <div class="setting-desc">Checks the Event Bounty Board before Challenge and runs supported Clear Wave or Hard objectives.</div>
+            </div>
+            <button id="toggle-bounty-enabled" class="toggle-switch" onclick="toggleBountyEnabled(this)"></button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Play Mode</div>
+              <div class="setting-desc">Solo or Matchmaking for bounty stages.</div>
+            </div>
+            <div class="seg-toggle" style="width: auto;">
+              <button type="button" id="bounty-mode-solo" class="seg-btn" onclick="setBountyPlayMode('solo')">Solo</button>
+              <button type="button" id="bounty-mode-matchmaking" class="seg-btn" onclick="setBountyPlayMode('matchmaking')">Matchmaking</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="wh-hint" style="margin-bottom: 6px;">Assign the Macro Operation Auto Bounty should use for each Story destination.</div>
+            <div id="bounty-map-list" class="flex flex-col gap-1.5"></div>
+          </div>
+
           <!-- Future resource sections (Auto Fuel, Gold, Geode, ...) go here. -->
 
         </div>

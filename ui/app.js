@@ -522,7 +522,7 @@ function switchScreen(name) {
 
   if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); }
   if (name === 'task') refreshTaskQueue();
-  if (name === 'resource') { refreshCraftingScreen(); refreshChallengeScreen(); }
+  if (name === 'resource') { refreshCraftingScreen(); refreshChallengeScreen(); refreshBountyScreen(); }
   if (name === 'settings') { refreshSavedPaths(); loadMacroCoords(); loadRewardTestMaps(); }
 
   // The Process Log only exists on the Dashboard, and a display:none element
@@ -3017,6 +3017,70 @@ async function resetChallengeCounts() {
   try { await pywebview.api.reset_challenge_counts(); } catch (e) {}
   addLog('[Challenge] Play counts reset.');
   await refreshChallengeScreen();
+}
+
+// ---------------------------------------------------------------------------
+// Auto Bounty
+// ---------------------------------------------------------------------------
+let bountyState = null;
+
+async function refreshBountyScreen() {
+  try {
+    bountyState = await pywebview.api.get_bounty_settings();
+  } catch (e) {
+    bountyState = null;
+  }
+  await refreshTaskTemplates();
+  renderBountyScreen();
+}
+
+function renderBountyScreen() {
+  const s = bountyState;
+  document.getElementById('toggle-bounty-enabled')?.classList.toggle('on', !!(s && s.enabled));
+  const playMode = (s && s.play_mode) || 'solo';
+  document.getElementById('bounty-mode-solo')?.classList.toggle('active', playMode === 'solo');
+  document.getElementById('bounty-mode-matchmaking')?.classList.toggle('active', playMode === 'matchmaking');
+
+  const list = document.getElementById('bounty-map-list');
+  if (!list) return;
+  if (!s) {
+    list.innerHTML = '<div class="rh-empty">Couldn\'t load Auto Bounty settings.</div>';
+    return;
+  }
+  const macroOpts = current => `<option value="">No Macro</option>` +
+    taskTemplates.map(name =>
+      `<option value="${escapeHtml(name)}" ${name === current ? 'selected' : ''}>&#9654; ${escapeHtml(name)}</option>`
+    ).join('');
+  list.innerHTML = CHALLENGE_STORY_MAPS.map(map => {
+    const info = s.maps[map] || { macro: '' };
+    return `
+      <div class="task-card" style="--tqc: var(--lilac); cursor: default;">
+        <div class="tq-text" style="min-width: 0;">
+          <div class="tq-title">${escapeHtml(map)}</div>
+          <div class="challenge-map-row">
+            <select class="task-select" style="width: 100%;" onchange="setBountyMapMacro('${escJs(map)}', this.value)">
+              ${macroOpts(info.macro)}
+            </select>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function toggleBountyEnabled(btn) {
+  const isOn = !btn.classList.contains('on');
+  btn.classList.toggle('on', isOn);
+  bounceToggle(btn);
+  try { await pywebview.api.set_bounty_enabled(isOn); } catch (e) {}
+}
+
+async function setBountyPlayMode(playMode) {
+  try { await pywebview.api.set_bounty_play_mode(playMode); } catch (e) {}
+  await refreshBountyScreen();
+}
+
+async function setBountyMapMacro(map, macro) {
+  try { await pywebview.api.set_bounty_map_macro(map, macro); } catch (e) {}
 }
 
 // ---------------------------------------------------------------------------

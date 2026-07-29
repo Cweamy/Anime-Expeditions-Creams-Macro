@@ -1,0 +1,218 @@
+"""Visual parsing helpers for the Event Bounty Board.
+
+The board renders supported objective destinations as colored text: green
+links open Infinite and cyan links open a Story stage whose Hard difficulty
+must be selected. Color finds the clickable label; OCR is used only to
+validate the nearby objective and read its wave/map.
+"""
+import re
+from collections import Counter
+from difflib import SequenceMatcher
+
+import cv2
+import numpy as np
+
+from . import ocr_windows
+from . import vision
+
+STORY_MAPS = ("School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest")
+BOARD_REGION = (170, 150, 970, 470)
+_GREEN_LO = np.array((35, 105, 75), dtype=np.uint8)
+_GREEN_HI = np.array((90, 255, 255), dtype=np.uint8)
+_CYAN_LO = np.array((82, 90, 70), dtype=np.uint8)
+_CYAN_HI = np.array((118, 255, 255), dtype=np.uint8)
+# Bounty destinations have now been observed rendering about 8% and 15%
+# smaller/larger across two otherwise-correct 1080p/100%-scale computers.
+# This fallback is deliberately local to the destination heading and keeps
+# the normal 0.90 confidence floor; it does not change coordinates or widen
+# matching globally.
+_DESTINATION_SCALE_FACTORS = (1.0, 0.92, 1.08, 0.85, 1.15)
+_DESTINATION_MATCH_THRESHOLD = 0.90
+
+
+def _colored_components(board_bgr: np.ndarray, lower, upper, kind: str) -> list:
+    hsv = cv2.cvtColor(board_bgr, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, lower, upper)
+    joined = cv2.morphologyEx(
+        mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 2)))
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(joined)
+    found = []
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if area < 90 or w < 35 or h < 5 or h > 22:
+            continue
+        if np.count_nonzero(mask[y:y + h, x:x + w]) / float(w * h) > 0.75:
+            continue
+        glyphs = cv2.resize(mask[y:y + h, x:x + w], (17, 8), interpolation=cv2.INTER_AREA)
+        bits = (glyphs[:, 1:] > glyphs[:, :-1]).flatten()
+        visual_id = sum(int(value) << index for index, value in enumerate(bits))
+        found.append({
+            "kind": kind, "x": x, "y": y, "w": w, "h": h,
+            "cx": x + w // 2, "cy": y + h // 2, "visual_id": visual_id,
+        })
+    return found
+
+
+def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
+    """Return supported, incomplete visible objectives in reference coordinates."""
+    bx, by, bw, bh = BOARD_REGION
+    board = frame_bgr[by:by + bh, bx:bx + bw]
+    if board.size == 0:
+        return []
+    lines = ocr_lines if ocr_lines is not None else ocr_windows.ocr_lines(board)
+    links = (
+        _colored_components(board, _GREEN_LO, _GREEN_HI, "infinite")
+        + _colored_components(board, _CYAN_LO, _CYAN_HI, "hard")
+    )
+    objectives = []
+    board_hsv = cv2.cvtColor(board, cv2.COLOR_BGR2HSV)
+    green_mask = cv2.inRange(board_hsv, _GREEN_LO, _GREEN_HI)
+    for link in links:
+        x1 = max(0, link["x"] - 18)
+        x2 = min(board.shape[1], link["x"] + link["w"] + 18)
+        y1 = min(board.shape[0], link["y"] + link["h"] + 2)
+        # Completion is rendered in two forms depending on the card: a
+        # filled progress strip directly under the objective and a broad
+        # green check button near the card footer. Include both without
+        # relying on the check's exact fixed coordinate (cards scroll).
+        y2 = min(board.shape[0], y1 + 90)
+        below = green_mask[y1:y2, x1:x2]
+        if below.size:
+            count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(below)
+            completed = any(
+                int(stats[i, cv2.CC_STAT_WIDTH]) >= max(50, int(link["w"] * 0.7))
+                and int(stats[i, cv2.CC_STAT_HEIGHT]) >= 3
+                for i in range(1, count)
+            )
+            if completed:
+                continue
+
+        nearby = []
+        for line in lines:
+            if abs(int(line["cy"]) - link["cy"]) <= 42 and (
+                    int(line["x"]) < link["x"] + link["w"] + 45
+                    and int(line["x"]) + int(line["w"]) > link["x"] - 45):
+                nearby.append(line.get("text", ""))
+        text = " ".join(nearby)
+        local_texts = []
+        if ocr_lines is None:
+            x1, y1 = max(0, link["x"] - 35), max(0, link["y"] - 30)
+            x2 = min(board.shape[1], link["x"] + link["w"] + 35)
+            local = board[y1:link["y"] + 5, x1:x2]
+            if local.size:
+                for scale in (2, 3):
+                    enlarged = cv2.resize(
+                        local, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+                    read = ocr_windows.ocr_image(enlarged)
+                    if read:
+                        local_texts.append(read)
+                text = f"{text} {' '.join(local_texts)}"
+
+        wave_value = None
+        if link["kind"] == "infinite":
+            votes = []
+            for read in local_texts:
+                numbers = re.findall(r"\d{1,3}", read)
+                if numbers:
+                    votes.append(int(numbers[-1]))
+            clean = re.findall(r"clear\s*\W*(?:w(?:ave|ave|ve|e))?\s*(\d+)", text, re.I)
+            votes.extend(int(value) for value in clean)
+            if not votes and "clear" in text.lower():
+                votes.extend(int(value) for value in re.findall(r"\d{1,3}", text))
+            if votes:
+                counts = Counter(votes)
+                wave_value = max(counts, key=lambda value: (counts[value], value))
+        if link["kind"] == "infinite" and wave_value is None:
+            continue
+        if link["kind"] == "hard" and "difficulty" not in text.lower():
+            continue
+
+        item = {
+            **link,
+            "x": bx + link["x"], "y": by + link["y"],
+            "cx": bx + link["cx"], "cy": by + link["cy"],
+            "text": re.sub(r"\s+", " ", text).strip(),
+            "target_wave": wave_value,
+        }
+        item["signature"] = (item["kind"], item["target_wave"], item["visual_id"])
+        objectives.append(item)
+    return sorted(objectives, key=lambda item: (item["cx"], item["cy"]))
+
+
+def same_signature(left: tuple, right: tuple) -> bool:
+    """Whether two sightings are the same objective despite tiny resampling."""
+    if left[:2] != right[:2]:
+        return False
+    return (int(left[2]) ^ int(right[2])).bit_count() <= 3
+
+
+def detect_card_scrolls(frame_bgr: np.ndarray) -> list:
+    """Locate visible parchment cards and derive their internal scrollbar drags."""
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    parchment = cv2.inRange(
+        hsv, np.array((5, 25, 90), np.uint8), np.array((30, 180, 255), np.uint8))
+    parchment = cv2.morphologyEx(
+        parchment, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(parchment)
+    drags = []
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if not (280 <= x <= 1135 and 150 <= y <= 675):
+            continue
+        if not (165 <= w <= 220 and 175 <= h <= 245 and area >= 15000):
+            continue
+        drags.append({
+            "x": x + w - 31,
+            "from_y": y + 58,
+            "to_y": y + h - 58,
+            "card": (x, y, w, h),
+        })
+    return sorted(drags, key=lambda item: item["x"])
+
+
+def match_story_map(text: str) -> str:
+    """Fuzzy-match an OCRed destination title to a supported Story map."""
+    normalized = re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+    if not normalized:
+        return None
+    scored = []
+    for name in STORY_MAPS:
+        target = re.sub(r"[^a-z0-9]+", "", name.lower())
+        if target in normalized:
+            return name
+        scored.append((SequenceMatcher(None, normalized, target).ratio(), name))
+    score, name = max(scored)
+    return name if score >= 0.58 else None
+
+
+def read_destination_map(frame_bgr: np.ndarray) -> str:
+    """Read the Story stage-detail heading after a bounty link is clicked."""
+    # Search bounds, not click coordinates. Kept above the board-card rows so
+    # a click that only opened the bounty tooltip cannot falsely recognize
+    # the same colored map name still sitting on the board.
+    title = frame_bgr[120:340, 180:1020]
+    read = match_story_map(ocr_windows.ocr_image(title))
+    if read:
+        return read
+
+    title_gray = cv2.cvtColor(title, cv2.COLOR_BGR2GRAY)
+    for scale in _DESTINATION_SCALE_FACTORS:
+        for map_name in STORY_MAPS:
+            try:
+                variants = vision.load_template_grays(map_name)
+            except vision.TemplateNotFound:
+                continue
+            for template_gray, mask in variants:
+                if scale != 1.0:
+                    h, w = template_gray.shape[:2]
+                    width = max(1, round(w * scale))
+                    height = max(1, round(h * scale))
+                    interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+                    template_gray = cv2.resize(
+                        template_gray, (width, height), interpolation=interpolation)
+                    if mask is not None:
+                        mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+                if vision.find_in_gray(
+                        title_gray, template_gray, _DESTINATION_MATCH_THRESHOLD, mask) is not None:
+                    return map_name
+    return None
