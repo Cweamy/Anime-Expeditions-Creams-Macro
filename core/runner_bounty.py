@@ -51,9 +51,9 @@ class BountyOps:
             time.sleep(0.35)
         return None
 
-    def _click_ref(self, hwnd, x: int, y: int) -> None:
+    def _click_ref(self, hwnd, x: int, y: int, hold: float = 0.05) -> None:
         sx, sy = vision.ref_to_screen(hwnd, x, y)
-        self._mouse.shuffle_click(sx, sy)
+        self._mouse.shuffle_click(sx, sy, hold=hold)
 
     def _open_bounty_board(self, hwnd, stop_event: threading.Event) -> bool:
         if not self._ensure_lobby(hwnd, stop_event):
@@ -133,29 +133,54 @@ class BountyOps:
         return self._ensure_lobby(hwnd, stop_event)
 
     def _find_next_bounty(self, hwnd, stop_event, attempted: list):
+        # Roblox remembers the board's horizontal position after leaving a
+        # stage. Always return to the beginning so every pass audits cards in
+        # a deterministic left-to-right order instead of starting wherever
+        # the previous click happened to leave the carousel.
+        sx, sy = vision.ref_to_screen(hwnd, *BOUNTY_SCROLL_HOVER)
+        self._mouse.move_to(sx, sy)
+        self._mouse.nudge()
+        for _ in range(BOUNTY_HORIZONTAL_SCROLL_STEPS):
+            self._mouse.scroll(-BOUNTY_HORIZONTAL_WHEEL_DELTA)
+        self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
+
         for scroll_no in range(BOUNTY_HORIZONTAL_SCROLL_STEPS + 1):
             if self._checkpoint(stop_event):
                 return None
             frame = vision.capture_game_bgr(hwnd)
             if frame is not None:
-                objectives = bounty.detect_objectives(frame)
-                for objective in objectives:
-                    if not self._bounty_was_attempted(objective["signature"], attempted):
-                        return objective
                 drags = bounty.detect_card_scrolls(frame)
-                for drag in drags:
+                # Fully inspect one card (including its private scrollbar)
+                # before considering the next card. Card positions are
+                # detected from the current frame; no bounty/map coordinates
+                # or assumed card ordering are baked in.
+                for drag in sorted(drags, key=lambda item: item["card"][0]):
                     if self._checkpoint(stop_event):
                         return None
+                    card_x, card_y, card_w, card_h = drag["card"]
+                    for objective in bounty.detect_objectives(frame):
+                        if (card_x <= objective["cx"] <= card_x + card_w
+                                and card_y <= objective["cy"] <= card_y + card_h
+                                and not self._bounty_was_attempted(
+                                    objective["signature"], attempted)):
+                            return objective
                     x1, y1 = vision.ref_to_screen(hwnd, drag["x"], drag["from_y"])
                     x2, y2 = vision.ref_to_screen(hwnd, drag["x"], drag["to_y"])
                     self._mouse.drag(x1, y1, x2, y2, duration=0.25)
-                if drags:
                     self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
                     frame = vision.capture_game_bgr(hwnd)
                     if frame is not None:
                         for objective in bounty.detect_objectives(frame):
-                            if not self._bounty_was_attempted(objective["signature"], attempted):
+                            if (card_x <= objective["cx"] <= card_x + card_w
+                                    and card_y <= objective["cy"] <= card_y + card_h
+                                    and not self._bounty_was_attempted(
+                                        objective["signature"], attempted)):
                                 return objective
+                if not drags:
+                    for objective in bounty.detect_objectives(frame):
+                        if not self._bounty_was_attempted(
+                                objective["signature"], attempted):
+                            return objective
             if scroll_no == BOUNTY_HORIZONTAL_SCROLL_STEPS:
                 break
             sx, sy = vision.ref_to_screen(hwnd, *BOUNTY_SCROLL_HOVER)
@@ -220,7 +245,13 @@ class BountyOps:
                 self._interruptible_sleep(BOUNTY_CLICK_FOCUS_SETTLE, stop_event)
                 if self._checkpoint(stop_event):
                     return True
-                self._click_ref(hwnd, objective["cx"], objective["cy"])
+                # Aim inside the lower half of the detected colored glyph
+                # box. This remains entirely detection-derived, but avoids
+                # the top edge of the very thin link hitbox seen in the live
+                # Flower Forest miss.
+                click_y = objective["cy"] + max(1, objective["h"] // 4)
+                self._click_ref(
+                    hwnd, objective["cx"], click_y, hold=0.1)
                 map_name = self._read_bounty_destination_map(
                     hwnd, stop_event, BOUNTY_NAV_CLICK_VERIFY_TIMEOUT)
                 if map_name:
@@ -257,8 +288,6 @@ class BountyOps:
                 self._save_debug_screenshot_unconditional(hwnd, "bounty_destination_unreadable")
                 self._recover_to_lobby(hwnd, stop_event)
                 continue
-
-            attempted.append(objective["signature"])
 
             macro_name = ((settings.get("maps", {}).get(map_name) or {}).get("macro") or "")
             play_mode = settings.get("play_mode") or "solo"

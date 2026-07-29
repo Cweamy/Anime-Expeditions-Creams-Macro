@@ -10,12 +10,14 @@ class _Harness(BountyOps):
         self.logs = []
         self.board_opens = 0
         self.clicks = 0
+        self.click_details = []
         self.board_stays_open = False
         self.objective = {
             "kind": "infinite",
             "target_wave": 30,
             "cx": 500,
             "cy": 400,
+            "h": 9,
             "signature": ("infinite", 30, 12345),
         }
 
@@ -40,8 +42,9 @@ class _Harness(BountyOps):
             return None
         return self.objective
 
-    def _click_ref(self, _hwnd, _x, _y):
+    def _click_ref(self, _hwnd, _x, _y, hold=0.05):
         self.clicks += 1
+        self.click_details.append((_x, _y, hold))
 
     def _read_bounty_destination_map(self, *_args, **_kwargs):
         return None
@@ -83,5 +86,54 @@ def test_missed_click_uses_all_three_attempts_while_board_remains_open(monkeypat
         123, threading.Event(), {}, {}, {}) is True
 
     assert runner.clicks == 9
+    assert all(detail == (500, 402, 0.1) for detail in runner.click_details)
     assert sum("Bounty objective click did not register" in line
                for line in runner.logs) == 9
+
+
+def test_find_next_bounty_finishes_current_card_before_later_card(monkeypatch):
+    runner = _Harness()
+    state = {"first_card_scrolled": False}
+
+    class _Mouse:
+        def move_to(self, *_args):
+            pass
+
+        def nudge(self):
+            pass
+
+        def scroll(self, _amount):
+            pass
+
+        def drag(self, x1, _y1, _x2, _y2, duration):
+            if x1 == 290:
+                state["first_card_scrolled"] = True
+
+    runner._mouse = _Mouse()
+    cards = [
+        {"x": 290, "from_y": 180, "to_y": 260, "card": (100, 100, 200, 250)},
+        {"x": 590, "from_y": 180, "to_y": 260, "card": (400, 100, 200, 250)},
+    ]
+    first_card_objective = {
+        "cx": 200, "cy": 220, "signature": ("infinite", 15, 111)}
+    later_card_objective = {
+        "cx": 500, "cy": 180, "signature": ("infinite", 30, 222)}
+
+    monkeypatch.setattr(
+        runner_bounty.vision, "ref_to_screen", lambda _hwnd, x, y: (x, y))
+    monkeypatch.setattr(
+        runner_bounty.vision, "capture_game_bgr", lambda _hwnd: object())
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_card_scrolls", lambda _frame: cards)
+    monkeypatch.setattr(
+        runner_bounty.bounty,
+        "detect_objectives",
+        lambda _frame: (
+            [first_card_objective, later_card_objective]
+            if state["first_card_scrolled"] else [later_card_objective]),
+    )
+
+    found = BountyOps._find_next_bounty(
+        runner, 123, threading.Event(), attempted=[])
+
+    assert found is first_card_objective
