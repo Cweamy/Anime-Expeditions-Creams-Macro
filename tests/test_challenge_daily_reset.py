@@ -93,6 +93,50 @@ def test_running_api_rolls_over_in_place_when_clock_crosses_boundary(monkeypatch
     assert logs == ["[Challenge] Daily play counts reset."]
 
 
+def test_daily_challenge_becomes_ready_at_the_shared_reset_without_restart(monkeypatch):
+    store = {"challenge": _saved_challenge("2026-07-27")}
+    store["challenge"]["daily"] = {
+        "enabled": True,
+        "last_completed_period": "2026-07-27",
+    }
+    clock = {"period": "2026-07-27"}
+    api = _api()
+
+    monkeypatch.setattr(main.cfg, "load", lambda: store.copy())
+    monkeypatch.setattr(main.cfg, "update", lambda changes: store.update(changes))
+    monkeypatch.setattr(main, "_current_challenge_reset_period", lambda now=None: clock["period"])
+
+    assert api.get_challenge_settings()["daily"] == {
+        "enabled": True,
+        "last_completed_period": "2026-07-27",
+        "ready": False,
+    }
+
+    clock["period"] = "2026-07-28"
+    assert api.get_challenge_settings()["daily"]["ready"] is True
+
+
+def test_mark_daily_challenge_played_rests_it_for_current_game_day(monkeypatch):
+    store = {"challenge": _saved_challenge("2026-07-28")}
+    store["challenge"]["daily"] = {
+        "enabled": True,
+        "last_completed_period": "",
+    }
+    api = _api()
+
+    monkeypatch.setattr(main.cfg, "load", lambda: store.copy())
+    monkeypatch.setattr(main.cfg, "update", lambda changes: store.update(changes))
+    monkeypatch.setattr(main, "_current_challenge_reset_period", lambda now=None: "2026-07-28")
+
+    assert api.get_challenge_settings()["daily"]["ready"] is True
+    assert api.mark_challenge_stage_played("daily") == {"ok": True}
+    assert api.get_challenge_settings()["daily"]["ready"] is False
+    assert api.set_daily_challenge_count(0) == {"ok": True}
+    assert api.get_challenge_settings()["daily"]["ready"] is True
+    assert api.set_daily_challenge_count(1) == {"ok": True}
+    assert api.get_challenge_settings()["daily"]["ready"] is False
+
+
 def test_poll_before_utc_boundary_keeps_counts_and_does_not_write(monkeypatch):
     saved = _saved_challenge("2026-07-27")
     writes = []

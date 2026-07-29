@@ -199,11 +199,29 @@ challenge.png
 
 challenge_loaded.png
   Confirms the Challenge screen has actually finished opening
-  (core.runner._enter_challenge_stage) before clicking a stage slot at
-  one of its 3 fixed positions (CHALLENGE_STAGE_CLICK) -- a load-
+  (core.runner._open_challenge_screen) before selecting Daily Challenge
+  or clicking a Regular stage slot -- a load-
   confirmation banner, not a button, so it's only waited on, never
-  clicked itself. Folder variants cover the older layouts plus the
-  larger current Daily Challenge panel.
+  clicked itself. Folder variants cover older and current layouts.
+
+daily_challenge_available.png / daily_challenge_unavailable.png
+  The green/gray Daily Challenge tab states. Available is clicked to open
+  the once-per-game-day challenge; Unavailable is the game's source of
+  truth that it should be skipped until the next 00:00 UTC reset. Folder
+  variants cover 85-115% internal UI rendering.
+
+daily_challenge_stage.png
+  The common "Daily Challenge #1" heading on the current daily map card.
+  Clicking it opens the details with Select Stage / Enter Matchmaking;
+  the map art and name change daily, so they are deliberately excluded.
+  Folder variants cover 85-115% internal UI rendering.
+
+daily_challenge_hud.png
+  The shared green Daily Challenge label shown after teleport. It anchors
+  a tight OCR crop over the tiny map name to its right, allowing the same
+  post-teleport map-detection loop to recognize any of the 5 Story maps
+  without a per-map Daily screenshot. Small/large variants cover 85-115%
+  internal UI rendering.
 
 chal_enter.png
   Challenge's own "Enter Matchmaking" button, Matchmaking play mode only
@@ -211,9 +229,9 @@ chal_enter.png
   reasoning as exp_enter_matchmaking.png).
 
 chal_select.png
-  Challenge's own confirm button, Solo play mode only, clicked
+  Challenge's own Select Stage button, Solo play mode only, clicked
   (verified/retried) right before the actual "Start" click
-  (core.runner._enter_challenge_stage) -- Challenge's equivalent of
+  (core.runner._enter_selected_challenge) -- Challenge's equivalent of
   nav_select_stage.png/exp_select_stage.png.
 
 exp_continue.png / continue_2.png

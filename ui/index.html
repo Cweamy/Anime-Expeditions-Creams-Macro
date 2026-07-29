@@ -618,7 +618,38 @@
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
-              <div class="setting-label">Enable Challenge</div>
+              <div class="setting-label">Story Map Setup</div>
+              <div class="setting-desc">Assign a Macro Operation to each Story map the challenge can land on.</div>
+            </div>
+            <button class="task-toolbar-btn" onclick="openChallengeMaps()">Story maps</button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Reset Challenge Status Now</div>
+              <div class="setting-desc">UTC game day: <span id="challenge-last-reset">-</span>. Clears Daily completion, counts, and cooldowns.</div>
+            </div>
+            <button class="task-toolbar-btn danger" onclick="resetChallengeCounts()">Reset</button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Enable Daily Challenge <span id="daily-challenge-status" class="challenge-ready-chip">Ready</span></div>
+              <div class="setting-desc">Runs the once-per-game-day Daily Challenge first. Uses Story Map Setup and resets at 00:00 UTC.</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <div class="challenge-count-group" title="Set to 1 if today's Daily Challenge was already completed manually">
+                <input id="daily-challenge-count" type="number" class="block-input" min="0" max="1" style="width: 52px;" value="0"
+                       onchange="setDailyChallengeCount(this.value)">
+                <span class="challenge-count-sep">/ 1</span>
+              </div>
+              <button id="toggle-daily-challenge-enabled" class="toggle-switch" onclick="toggleDailyChallengeEnabled(this)"></button>
+            </div>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Enable Regular Challenge</div>
               <div class="setting-desc">Runs every ready stage once, before the Task Queue, each time you press Start.</div>
             </div>
             <button id="toggle-challenge-enabled" class="toggle-switch" onclick="toggleChallengeEnabled(this)"></button>
@@ -626,8 +657,8 @@
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
-              <div class="setting-label">Play Mode</div>
-              <div class="setting-desc">Solo or Matchmaking for every Challenge stage.</div>
+              <div class="setting-label">Challenge Play Mode</div>
+              <div class="setting-desc">Solo or Matchmaking for Daily and Regular Challenge.</div>
             </div>
             <div class="seg-toggle" style="width: auto;">
               <button type="button" id="challenge-mode-solo" class="seg-btn" onclick="setChallengePlayMode('solo')">Solo</button>
@@ -638,22 +669,6 @@
           <div>
             <div class="wh-hint" style="margin-bottom: 6px;">Resets every :00 / :30 -- pick which of the 3 stage slots to attempt below.</div>
             <div id="challenge-stage-list" class="flex flex-col gap-1.5"></div>
-          </div>
-
-          <div class="setting-row" style="padding: 10px 0;">
-            <div>
-              <div class="setting-label">Story Map Setup</div>
-              <div class="setting-desc">Assign a Macro Operation to each Story map the challenge can land on.</div>
-            </div>
-            <button class="task-toolbar-btn" onclick="openChallengeMaps()">Story maps</button>
-          </div>
-
-          <div class="setting-row" style="padding: 10px 0; border-bottom: none;">
-            <div>
-              <div class="setting-label">Reset Counts Now</div>
-              <div class="setting-desc">UTC game day: <span id="challenge-last-reset">-</span>. Counts reset at 00:00 UTC without restarting the macro.</div>
-            </div>
-            <button class="task-toolbar-btn danger" onclick="resetChallengeCounts()">Reset</button>
           </div>
 
           <!-- Future resource sections (Auto Fuel, Gold, Geode, ...) go here. -->
