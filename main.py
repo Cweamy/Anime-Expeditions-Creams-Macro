@@ -1127,6 +1127,11 @@ class Api:
         return self.runner.start_crafting_test(lambda: self.game_hwnd, coords)
 
     def start_macro(self) -> dict:
+        preflight = self.run_preflight_check()
+        if preflight.get("has_blocker", False):
+            self.push_log("[Preflight] Start blocked due to environment/configuration issue.")
+            return {"ok": False, "reason": "preflight_blocker", "preflight": preflight}
+
         data = cfg.load()
         scroll_power = data.get("story_scroll_power", 3)
         scroll_nudges = data.get("story_scroll_nudges", 8)
@@ -2493,6 +2498,112 @@ class Api:
     # check flags these missing rather than every optional nicety.
     HEALTH_CRITICAL_IMAGES = ("nav_play", "nav_start_game", "victory", "defeat", "leave_stage", "exp_continue")
 
+    def run_preflight_check(self) -> dict:
+        """Run deterministic prerequisite checks before macro start."""
+        checks_list = []
+        warnings_list = []
+        has_blocker = False
+
+        def add_check(is_ok: bool, code: str, msg: str, action: str, is_blocker: bool = True):
+            nonlocal has_blocker
+            check_data = {
+                "ok": is_ok,
+                "code": code,
+                "message": msg,
+                "action": action,
+                "blocker": is_blocker
+            }
+            checks_list.append(check_data)
+            if not is_ok:
+                if is_blocker:
+                    has_blocker = True
+                else:
+                    warnings_list.append(check_data)
+
+        # 1. Roblox window attached
+        hwnd = self.game_hwnd
+        roblox_attached = bool(hwnd and wm.is_window(hwnd))
+        add_check(
+            roblox_attached,
+            "ROBLOX_NOT_FOUND",
+            "Roblox window is not open or not docked.",
+            "Launch Roblox and allow the macro to attach.",
+            True
+        )
+
+        # 2. Elevation match
+        if roblox_attached:
+            elevation_mismatch = wm.is_process_elevated(hwnd) and not wm.is_self_elevated()
+            add_check(
+                not elevation_mismatch,
+                "ELEVATION_MISMATCH",
+                "Roblox is running as Administrator but the macro is not.",
+                "Relaunch the macro as Administrator.",
+                True
+            )
+
+        # 3. Display scale
+        scale = wm.get_display_scale_percent()
+        add_check(
+            scale == 100,
+            "DISPLAY_SCALE_WARNING",
+            f"Windows display scale is set to {scale}%.",
+            "Set Windows Display Scale to 100% in Settings > Display.",
+            False
+        )
+
+        # 4. Assets folder
+        assets_exist = os.path.isdir(constants.ASSETS_DIR)
+        assets_populated = False
+        if assets_exist:
+            # Check if empty (or at least contains some items)
+            assets_populated = len(os.listdir(constants.ASSETS_DIR)) > 0
+
+        add_check(
+            assets_exist and assets_populated,
+            "ASSETS_MISSING",
+            "Assets folder is missing.",
+            "Download the complete release ZIP from GitHub and extract all files.",
+            True
+        )
+
+        # 5. Critical reference images
+        missing_images = []
+        if assets_exist:
+            from core import vision
+            for name in self.HEALTH_CRITICAL_IMAGES:
+                try:
+                    if not vision.template_variant_paths(name):
+                        missing_images.append(name)
+                except Exception:
+                    missing_images.append(name)
+
+        if missing_images:
+            add_check(
+                False,
+                "CRITICAL_IMAGES_MISSING",
+                f"Missing critical reference images: {', '.join(missing_images)}",
+                "Re-extract release ZIP keeping folder structure.",
+                True
+            )
+        else:
+            # Add a pass for critical images if we got this far without adding one
+            if assets_exist and assets_populated:
+                add_check(
+                    True,
+                    "CRITICAL_IMAGES_MISSING",
+                    "All critical reference images found.",
+                    "",
+                    True
+                )
+
+        return {
+            "ok": not has_blocker,
+            "has_blocker": has_blocker,
+            "warnings": warnings_list,
+            "checks": checks_list
+        }
+
     def run_health_check(self) -> dict:
         """Settings > Debug > "Health Check" (also offered by the first-run
         welcome): verifies the handful of environmental things that cause
@@ -2670,12 +2781,18 @@ class Api:
                 if os.path.isfile(log_path):
                     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                         tail = f.readlines()[-600:]
-                    bundle.writestr("log_tail.txt", "".join(tail))
+                    from core.diagnostics import redact_sensitive_info
+                    sanitized_tail = redact_sensitive_info("".join(tail))
+                    bundle.writestr("log_tail.txt", sanitized_tail)
 
                 data = cfg.load()
                 if data.get("webhook_url"):
                     data["webhook_url"] = "<redacted>"
-                bundle.writestr("settings.json", json.dumps(data, indent=2))
+
+                from core.diagnostics import redact_sensitive_info
+                settings_json = json.dumps(data, indent=2)
+                sanitized_settings = redact_sensitive_info(settings_json)
+                bundle.writestr("settings.json", sanitized_settings)
 
                 bundle.writestr("info.json", json.dumps({
                     "version": updater.get_current_version(),
