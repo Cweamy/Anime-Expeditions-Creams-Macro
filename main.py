@@ -1815,7 +1815,12 @@ class Api:
             if not win:
                 continue
             try:
-                win.evaluate_js("window.clearLogs && window.clearLogs()")
+                # clearLogs() on the dashboard is the user action that calls
+                # this API. Calling it from Python re-enters clear_logs()
+                # recursively and can stall all later log delivery. Invoke
+                # the shared view-only helper in both windows instead.
+                win.evaluate_js(
+                    "window.clearLogView && window.clearLogView()")
             except Exception:
                 pass
 
