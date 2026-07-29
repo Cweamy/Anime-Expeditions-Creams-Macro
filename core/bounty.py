@@ -250,6 +250,45 @@ def detect_card_scrolls(frame_bgr: np.ndarray) -> list:
     return sorted(drags, key=lambda item: item["x"])
 
 
+def detect_claim_buttons(frame_bgr: np.ndarray, cards=None) -> list:
+    """Return dynamically located claim buttons on fully completed cards."""
+    cards = detect_card_scrolls(frame_bgr) if cards is None else cards
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, _GREEN_LO, _GREEN_HI)
+    claims = []
+    for item in cards:
+        x, y, w, h = item["card"]
+        # Card actions live in its footer. Restricting detection to that
+        # footer keeps green destination labels from being mistaken for the
+        # broad green check/claim button.
+        fy1 = max(0, y + h - 55)
+        fy2 = min(frame_bgr.shape[0], y + h - 5)
+        footer = green[fy1:fy2, x:x + w]
+        if footer.size == 0:
+            continue
+        footer = cv2.morphologyEx(
+            footer,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3)),
+        )
+        count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(footer)
+        for i in range(1, count):
+            rx, ry, rw, rh, area = (int(v) for v in stats[i])
+            if rw < 55 or rh < 14 or area < 500:
+                continue
+            claims.append({
+                "kind": "claim",
+                "x": x + rx,
+                "y": fy1 + ry,
+                "w": rw,
+                "h": rh,
+                "cx": x + rx + rw // 2,
+                "cy": fy1 + ry + rh // 2,
+                "card": item["card"],
+            })
+    return sorted(claims, key=lambda item: item["cx"])
+
+
 def match_story_map(text: str) -> str:
     """Fuzzy-match an OCRed destination title to a supported Story map."""
     normalized = re.sub(r"[^a-z0-9]+", "", (text or "").lower())

@@ -158,6 +158,8 @@ class BountyOps:
                     if self._checkpoint(stop_event):
                         return None
                     card_x, card_y, card_w, card_h = drag["card"]
+                    for claim in bounty.detect_claim_buttons(frame, [drag]):
+                        return claim
                     for objective in bounty.detect_objectives(frame):
                         if (card_x <= objective["cx"] <= card_x + card_w
                                 and card_y <= objective["cy"] <= card_y + card_h
@@ -177,6 +179,9 @@ class BountyOps:
                                         objective["signature"], attempted)):
                                 return objective
                 if not drags:
+                    claims = bounty.detect_claim_buttons(frame, [])
+                    if claims:
+                        return claims[0]
                     for objective in bounty.detect_objectives(frame):
                         if not self._bounty_was_attempted(
                                 objective["signature"], attempted):
@@ -189,6 +194,32 @@ class BountyOps:
             self._mouse.scroll(BOUNTY_HORIZONTAL_WHEEL_DELTA)
             self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
         return None
+
+    def _claim_completed_bounty(self, hwnd, stop_event, claim: dict) -> bool:
+        """Click and verify one dynamically detected completed-card claim."""
+        self._set_status(action="Claiming completed bounty...")
+        for attempt in range(1, BOUNTY_NAV_CLICK_ATTEMPTS + 1):
+            if self._checkpoint(stop_event):
+                return False
+            self._log(f"[Macro] Auto Bounty: claiming completed card "
+                      f"(attempt {attempt}/{BOUNTY_NAV_CLICK_ATTEMPTS}).")
+            wm.activate_window(hwnd)
+            self._interruptible_sleep(BOUNTY_CLICK_FOCUS_SETTLE, stop_event)
+            self._click_ref(hwnd, claim["cx"], claim["cy"], hold=0.1)
+            self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
+            frame = vision.capture_game_bgr(hwnd)
+            if frame is None:
+                continue
+            still_there = any(
+                abs(button["cx"] - claim["cx"]) <= 30
+                and abs(button["cy"] - claim["cy"]) <= 30
+                for button in bounty.detect_claim_buttons(frame)
+            )
+            if not still_there:
+                self._log("[Macro] Auto Bounty: completed card claimed.")
+                return True
+        self._log("[Macro] Auto Bounty could not claim the completed card.")
+        return False
 
     def _read_bounty_destination_map(self, hwnd, stop_event, timeout=None):
         deadline = time.time() + (
@@ -215,7 +246,9 @@ class BountyOps:
                   "before Challenge and the Task Queue...")
         attempted = []
         objective_failures = []
-        for number in range(1, BOUNTY_MAX_OBJECTIVES_PER_START + 1):
+        number = 0
+        claims = 0
+        while number < BOUNTY_MAX_OBJECTIVES_PER_START:
             if self._checkpoint(stop_event):
                 return True
             if not self._open_bounty_board(hwnd, stop_event):
@@ -228,6 +261,22 @@ class BountyOps:
                           "(Clear Wave and Hard are supported; Summon is not yet).")
                 self._leave_bounty_board(hwnd, stop_event)
                 return True
+            if objective["kind"] == "claim":
+                if not self._claim_completed_bounty(
+                        hwnd, stop_event, objective):
+                    self._save_debug_screenshot_unconditional(
+                        hwnd, "bounty_claim_failed")
+                    self._leave_bounty_board(hwnd, stop_event)
+                    return True
+                claims += 1
+                self._leave_bounty_board(hwnd, stop_event)
+                if claims >= BOUNTY_MAX_CLAIMS_PER_START:
+                    self._log("[Macro] Auto Bounty reached its completed-card "
+                              "claim safety limit for this Start.")
+                    return True
+                continue
+
+            number += 1
             label = (f'Clear Wave {objective["target_wave"]}'
                      if objective["kind"] == "infinite" else "Hard difficulty")
             self._log(f"[Macro] Auto Bounty #{number}: found {label} -- opening its destination.")

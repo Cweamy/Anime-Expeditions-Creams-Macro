@@ -88,6 +88,27 @@ def test_does_not_click_link_until_its_progress_strip_is_visible():
     assert bounty.detect_objectives(frame, lines) == []
 
 
+def test_detects_completed_card_claim_button_in_dynamic_card_footer():
+    frame = _frame()
+    card = {"card": (720, 280, 196, 208)}
+    cv2.rectangle(frame, (775, 451), (855, 477), (40, 210, 65), -1)
+
+    claims = bounty.detect_claim_buttons(frame, [card])
+
+    assert len(claims) == 1
+    assert claims[0]["kind"] == "claim"
+    assert claims[0]["card"] == card["card"]
+    assert claims[0]["cx"] == 815
+
+
+def test_does_not_treat_incomplete_gray_card_action_as_claim():
+    frame = _frame()
+    card = {"card": (720, 280, 196, 208)}
+    cv2.rectangle(frame, (775, 451), (855, 477), (80, 80, 80), -1)
+
+    assert bounty.detect_claim_buttons(frame, [card]) == []
+
+
 def test_detects_cyan_hard_link_using_difficulty_word():
     frame = _frame()
     bx, by, _bw, _bh = bounty.BOARD_REGION

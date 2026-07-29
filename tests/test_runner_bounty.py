@@ -126,6 +126,9 @@ def test_find_next_bounty_finishes_current_card_before_later_card(monkeypatch):
     monkeypatch.setattr(
         runner_bounty.bounty, "detect_card_scrolls", lambda _frame: cards)
     monkeypatch.setattr(
+        runner_bounty.bounty, "detect_claim_buttons",
+        lambda _frame, _cards=None: [])
+    monkeypatch.setattr(
         runner_bounty.bounty,
         "detect_objectives",
         lambda _frame: (
@@ -137,3 +140,20 @@ def test_find_next_bounty_finishes_current_card_before_later_card(monkeypatch):
         runner, 123, threading.Event(), attempted=[])
 
     assert found is first_card_objective
+
+
+def test_claim_completed_bounty_verifies_button_disappeared(monkeypatch):
+    runner = _Harness()
+    monkeypatch.setattr(runner_bounty.wm, "activate_window", lambda _hwnd: True)
+    monkeypatch.setattr(
+        runner_bounty.vision, "capture_game_bgr", lambda _hwnd: object())
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_claim_buttons",
+        lambda _frame, _cards=None: [])
+    claim = {"cx": 700, "cy": 500}
+
+    assert runner._claim_completed_bounty(
+        123, threading.Event(), claim) is True
+
+    assert runner.click_details == [(700, 500, 0.1)]
+    assert any("completed card claimed" in line for line in runner.logs)
