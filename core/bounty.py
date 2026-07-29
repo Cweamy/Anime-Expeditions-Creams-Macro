@@ -289,6 +289,88 @@ def detect_claim_buttons(frame_bgr: np.ndarray, cards=None) -> list:
     return sorted(claims, key=lambda item: item["cx"])
 
 
+def read_reward_overlay(frame_bgr: np.ndarray) -> dict:
+    """Read the post-claim "Obtained Rewards" overlay and its close target."""
+    lines = ocr_windows.ocr_lines(frame_bgr)
+    reward_line = next(
+        (line for line in lines if "reward" in line.get("text", "").lower()),
+        None,
+    )
+    if reward_line is None:
+        return None
+    close_line = next(
+        (line for line in lines
+         if "click" in line.get("text", "").lower()
+         and "close" in line.get("text", "").lower()),
+        None,
+    )
+
+    candidates = []
+    lower_bound = int(reward_line["cy"]) + 25
+    upper_bound = int(close_line["cy"]) - 15 if close_line else frame_bgr.shape[0] * 3 // 4
+    for line in lines:
+        text = line.get("text", "")
+        if not (lower_bound <= int(line["cy"]) <= upper_bound):
+            continue
+        if not re.search(r"[A-Za-z]", text):
+            continue
+        x1 = max(0, int(line["x"]) - 30)
+        y1 = max(0, int(line["y"]) - 20)
+        x2 = min(frame_bgr.shape[1], int(line["x"]) + int(line["w"]) + 30)
+        y2 = min(frame_bgr.shape[0], int(line["y"]) + int(line["h"]) + 20)
+        crop = frame_bgr[y1:y2, x1:x2]
+        reads = []
+        for scale in (2, 3, 4):
+            enlarged = cv2.resize(
+                crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            read = ocr_windows.ocr_image(enlarged)
+            if read:
+                reads.append(read)
+        reads.append(text)
+        cleaned = [
+            re.sub(r"[^A-Za-z0-9 ]+", " ", read).strip()
+            for read in reads
+        ]
+        cleaned = [read for read in cleaned if re.search(r"[A-Za-z]{3}", read)]
+        if cleaned:
+            candidates.append((line, max(cleaned, key=lambda read: (
+                " " in read, len(read)))))
+
+    item_line, item_name = candidates[0] if candidates else (None, "Reward")
+    quantity = None
+    if item_line is not None:
+        x1 = max(0, int(item_line["x"]) - 40)
+        x2 = min(frame_bgr.shape[1], int(item_line["x"]) + int(item_line["w"]) + 10)
+        y1 = max(0, int(item_line["y"]) - 85)
+        y2 = max(y1 + 1, int(item_line["y"]) - 25)
+        badge = frame_bgr[y1:y2, x1:x2]
+        badge_reads = []
+        for scale in (3, 4, 5):
+            enlarged = cv2.resize(
+                badge, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            read = ocr_windows.ocr_image(enlarged)
+            if read:
+                badge_reads.append(read.lower())
+        for read in badge_reads:
+            for token in re.findall(r"[0-9so]+x", read):
+                normalized = token[:-1].replace("s", "5").replace("o", "0")
+                if normalized.isdigit():
+                    quantity = int(normalized)
+                    break
+            if quantity is not None:
+                break
+
+    description = f"{quantity}x {item_name}" if quantity is not None else item_name
+    target = close_line or reward_line
+    return {
+        "item": item_name,
+        "quantity": quantity,
+        "description": description,
+        "close_cx": int(target["cx"]),
+        "close_cy": int(target["cy"]),
+    }
+
+
 def match_story_map(text: str) -> str:
     """Fuzzy-match an OCRed destination title to a supported Story map."""
     normalized = re.sub(r"[^a-z0-9]+", "", (text or "").lower())

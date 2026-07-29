@@ -109,6 +109,27 @@ def test_does_not_treat_incomplete_gray_card_action_as_claim():
     assert bounty.detect_claim_buttons(frame, [card]) == []
 
 
+def test_reads_bounty_reward_overlay_and_close_target(monkeypatch):
+    frame = _frame()
+    lines = [
+        {"text": "Obtained Rewards", "x": 460, "y": 280, "w": 230, "h": 20,
+         "cx": 575, "cy": 290},
+        {"text": "Event Coin", "x": 550, "y": 399, "w": 60, "h": 10,
+         "cx": 580, "cy": 404},
+        {"text": "Click anywhere to close", "x": 490, "y": 459, "w": 175, "h": 14,
+         "cx": 577, "cy": 466},
+    ]
+    reads = iter(["Event Coin", "Event Coin", "Event Coin", "sox", "sox", "sox"])
+    monkeypatch.setattr(bounty.ocr_windows, "ocr_lines", lambda _frame: lines)
+    monkeypatch.setattr(
+        bounty.ocr_windows, "ocr_image", lambda _image: next(reads))
+
+    reward = bounty.read_reward_overlay(frame)
+
+    assert reward["description"] == "50x Event Coin"
+    assert (reward["close_cx"], reward["close_cy"]) == (577, 466)
+
+
 def test_detects_cyan_hard_link_using_difficulty_word():
     frame = _frame()
     bx, by, _bw, _bh = bounty.BOARD_REGION

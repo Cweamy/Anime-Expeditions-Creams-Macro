@@ -12,6 +12,7 @@ class _Harness(BountyOps):
         self.clicks = 0
         self.click_details = []
         self.board_stays_open = False
+        self.webhook_events = []
         self.objective = {
             "kind": "infinite",
             "target_wave": 30,
@@ -55,7 +56,10 @@ class _Harness(BountyOps):
         return None
 
     def _save_debug_screenshot_unconditional(self, *_args, **_kwargs):
-        return None
+        return "bounty_reward.png"
+
+    def _send_event_webhook(self, *args, **kwargs):
+        self.webhook_events.append((args, kwargs))
 
     def _recover_to_lobby(self, *_args, **_kwargs):
         return True
@@ -147,13 +151,19 @@ def test_claim_completed_bounty_verifies_button_disappeared(monkeypatch):
     monkeypatch.setattr(runner_bounty.wm, "activate_window", lambda _hwnd: True)
     monkeypatch.setattr(
         runner_bounty.vision, "capture_game_bgr", lambda _hwnd: object())
+    reward = {
+        "description": "50x Event Coin",
+        "close_cx": 576,
+        "close_cy": 465,
+    }
     monkeypatch.setattr(
-        runner_bounty.bounty, "detect_claim_buttons",
-        lambda _frame, _cards=None: [])
+        runner_bounty.bounty, "read_reward_overlay",
+        lambda _frame: reward if runner.clicks == 1 else None)
     claim = {"cx": 700, "cy": 500}
 
     assert runner._claim_completed_bounty(
-        123, threading.Event(), claim) is True
+        123, threading.Event(), claim, {"enabled": True}) is True
 
-    assert runner.click_details == [(700, 500, 0.1)]
-    assert any("completed card claimed" in line for line in runner.logs)
+    assert runner.click_details == [(700, 500, 0.1), (576, 465, 0.1)]
+    assert any("reward collected and overlay closed" in line for line in runner.logs)
+    assert len(runner.webhook_events) == 1

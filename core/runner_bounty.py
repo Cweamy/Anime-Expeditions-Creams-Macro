@@ -195,7 +195,8 @@ class BountyOps:
             self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
         return None
 
-    def _claim_completed_bounty(self, hwnd, stop_event, claim: dict) -> bool:
+    def _claim_completed_bounty(
+            self, hwnd, stop_event, claim: dict, webhook: dict) -> bool:
         """Click and verify one dynamically detected completed-card claim."""
         self._set_status(action="Claiming completed bounty...")
         for attempt in range(1, BOUNTY_NAV_CLICK_ATTEMPTS + 1):
@@ -207,17 +208,51 @@ class BountyOps:
             self._interruptible_sleep(BOUNTY_CLICK_FOCUS_SETTLE, stop_event)
             self._click_ref(hwnd, claim["cx"], claim["cy"], hold=0.1)
             self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
-            frame = vision.capture_game_bgr(hwnd)
-            if frame is None:
+            reward = None
+            deadline = time.time() + BOUNTY_NAV_CLICK_VERIFY_TIMEOUT
+            while time.time() < deadline and not self._checkpoint(stop_event):
+                frame = vision.capture_game_bgr(hwnd)
+                if frame is not None:
+                    reward = bounty.read_reward_overlay(frame)
+                    if reward is not None:
+                        break
+                time.sleep(0.25)
+            if reward is None:
                 continue
-            still_there = any(
-                abs(button["cx"] - claim["cx"]) <= 30
-                and abs(button["cy"] - claim["cy"]) <= 30
-                for button in bounty.detect_claim_buttons(frame)
+
+            screenshot_path = self._save_debug_screenshot_unconditional(
+                hwnd, "bounty_reward")
+            description = reward["description"]
+            self._log(f"[Macro] Auto Bounty reward: {description}.")
+            self._send_event_webhook(
+                webhook,
+                {"map": "Bounty Board"},
+                "Auto Bounty Reward Claimed",
+                f"Claimed **{description}**.",
+                0xF4B942,
+                screenshot_path,
+                extra_fields=[{
+                    "name": "Reward", "value": description, "inline": True,
+                }],
             )
-            if not still_there:
-                self._log("[Macro] Auto Bounty: completed card claimed.")
-                return True
+
+            # Claiming opens an "Obtained Rewards" overlay. It explicitly
+            # requires another click before the reward is collected and
+            # navigation can continue.
+            wm.activate_window(hwnd)
+            self._interruptible_sleep(BOUNTY_CLICK_FOCUS_SETTLE, stop_event)
+            self._click_ref(
+                hwnd, reward["close_cx"], reward["close_cy"], hold=0.1)
+            close_deadline = time.time() + BOUNTY_NAV_CLICK_VERIFY_TIMEOUT
+            while time.time() < close_deadline:
+                if self._checkpoint(stop_event):
+                    return False
+                frame = vision.capture_game_bgr(hwnd)
+                if frame is not None and bounty.read_reward_overlay(frame) is None:
+                    self._log("[Macro] Auto Bounty: reward collected and overlay closed.")
+                    return True
+                time.sleep(0.25)
+            self._log("[Macro] Auto Bounty reward overlay did not close.")
         self._log("[Macro] Auto Bounty could not claim the completed card.")
         return False
 
@@ -263,7 +298,7 @@ class BountyOps:
                 return True
             if objective["kind"] == "claim":
                 if not self._claim_completed_bounty(
-                        hwnd, stop_event, objective):
+                        hwnd, stop_event, objective, webhook):
                     self._save_debug_screenshot_unconditional(
                         hwnd, "bounty_claim_failed")
                     self._leave_bounty_board(hwnd, stop_event)
