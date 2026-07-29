@@ -576,7 +576,17 @@
         <div class="p-3 flex flex-col gap-3 overflow-y-auto" style="min-height: 0;">
 
           <!-- ── Auto Crafting ── -->
-          <div class="rp-head-tag" style="--rp-tag: var(--teal); align-self: flex-start;">Auto Crafting</div>
+          <details id="resource-card-crafting" class="resource-card">
+            <summary class="resource-card-head">
+              <span class="resource-card-icon">C</span>
+              <span class="resource-card-copy">
+                <span class="resource-card-title">Auto Crafting</span>
+                <span class="resource-card-desc">Craft selected sprites after a configurable number of wins.</span>
+              </span>
+              <span id="resource-crafting-summary" class="resource-card-state">Disabled</span>
+              <span class="resource-card-chevron">&#8250;</span>
+            </summary>
+            <div class="resource-card-body">
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
@@ -612,9 +622,21 @@
             </div>
             <button class="task-toolbar-btn danger" onclick="resetCraftingCount()">Reset</button>
           </div>
+            </div>
+          </details>
 
           <!-- ── Auto Challenge ── -->
-          <div class="rp-head-tag" style="--rp-tag: var(--amber); align-self: flex-start; margin-top: 6px;">Auto Challenge</div>
+          <details id="resource-card-challenge" class="resource-card">
+            <summary class="resource-card-head">
+              <span class="resource-card-icon">CH</span>
+              <span class="resource-card-copy">
+                <span class="resource-card-title">Auto Challenge</span>
+                <span class="resource-card-desc">Run rotating Challenge stages before queued tasks.</span>
+              </span>
+              <span id="resource-challenge-summary" class="resource-card-state">Disabled</span>
+              <span class="resource-card-chevron">&#8250;</span>
+            </summary>
+            <div class="resource-card-body">
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
@@ -666,24 +688,25 @@
             </div>
           </div>
 
-          <div class="setting-row" style="padding: 10px 0;">
-            <div>
-              <div class="setting-label">Summon Banner</div>
-              <div class="setting-desc">Currency source for Summon bounties. Standard uses Gems; Villain uses Villain Coins.</div>
-            </div>
-            <div class="seg-toggle" style="width: auto;">
-              <button type="button" id="bounty-banner-standard" class="seg-btn" onclick="setBountySummonBanner('standard')">Standard</button>
-              <button type="button" id="bounty-banner-villain" class="seg-btn" onclick="setBountySummonBanner('villain')">Villain</button>
-            </div>
-          </div>
-
           <div>
             <div class="wh-hint" style="margin-bottom: 6px;">Resets every :00 / :30 -- pick which of the 3 stage slots to attempt below.</div>
             <div id="challenge-stage-list" class="flex flex-col gap-1.5"></div>
           </div>
+            </div>
+          </details>
 
           <!-- Auto Bounty -->
-          <div class="rp-head-tag" style="--rp-tag: var(--lilac); align-self: flex-start; margin-top: 6px;">Auto Bounty</div>
+          <details id="resource-card-bounty" class="resource-card">
+            <summary class="resource-card-head">
+              <span class="resource-card-icon">B</span>
+              <span class="resource-card-copy">
+                <span class="resource-card-title">Auto Bounty</span>
+                <span class="resource-card-desc">Complete supported Bounty Board objectives before other automation.</span>
+              </span>
+              <span id="resource-bounty-summary" class="resource-card-state">Disabled</span>
+              <span class="resource-card-chevron">&#8250;</span>
+            </summary>
+            <div class="resource-card-body">
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
@@ -704,10 +727,37 @@
             </div>
           </div>
 
-          <div>
-            <div class="wh-hint" style="margin-bottom: 6px;">Assign the Macro Operation Auto Bounty should use for each Story destination.</div>
-            <div id="bounty-map-list" class="flex flex-col gap-1.5"></div>
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Summon Banner</div>
+              <div class="setting-desc">Currency source for Summon bounties. Standard uses Gems; Villain uses Villain Coins.</div>
+            </div>
+            <div class="seg-toggle" style="width: auto;">
+              <button type="button" id="bounty-banner-standard" class="seg-btn" onclick="setBountySummonBanner('standard')">Standard</button>
+              <button type="button" id="bounty-banner-villain" class="seg-btn" onclick="setBountySummonBanner('villain')">Villain</button>
+            </div>
           </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Bounties Remaining</div>
+              <div class="setting-desc">Updated from the Bounty Board. At 0, Auto Bounty skips until the 00:00 UTC reset or a manual reset.</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="bounty-remaining" class="challenge-ready-chip">10 / 10</span>
+              <button class="task-toolbar-btn danger" onclick="resetBountyRemaining()">Reset</button>
+            </div>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Story Map Setup</div>
+              <div class="setting-desc">Assign the Macro Operation Auto Bounty should use for each Story destination.</div>
+            </div>
+            <button class="task-toolbar-btn" onclick="openBountyMaps()">Story maps</button>
+          </div>
+            </div>
+          </details>
 
           <!-- Future resource sections (Auto Fuel, Gold, Geode, ...) go here. -->
 
@@ -1778,6 +1828,22 @@
       <div class="modal-body">
         <div class="wh-hint" style="margin-bottom: 8px;">Regular Challenge rotates one of the 5 Story maps through each slot &mdash; assign the Macro Operation to run for each.</div>
         <div id="challenge-map-list" style="max-height: 60vh; overflow-y: auto;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Bounty Story Maps (Resource > Auto Bounty) ============
+       Uses the same compact map-assignment flow as Auto Challenge while
+       retaining Auto Bounty's independent per-map Macro Operations. -->
+  <div id="bounty-maps-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) closeBountyMaps()">
+    <div class="modal-panel" style="width: 520px; max-width: 94vw;">
+      <div class="modal-head">
+        <span class="modal-title">Bounty Story Maps</span>
+        <span class="modal-close" onclick="closeBountyMaps()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="wh-hint" style="margin-bottom: 8px;">Assign the Macro Operation Auto Bounty should run for each Story destination.</div>
+        <div id="bounty-map-list" style="max-height: 60vh; overflow-y: auto;"></div>
       </div>
     </div>
   </div>

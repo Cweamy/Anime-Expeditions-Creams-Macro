@@ -2917,6 +2917,19 @@ function renderChallengeScreen() {
   const dailyCount = document.getElementById('daily-challenge-count');
   if (dailyCount) dailyCount.value = daily.ready ? 0 : 1;
 
+  const summary = document.getElementById('resource-challenge-summary');
+  if (summary) {
+    const regularReady = s && s.enabled
+      ? CHALLENGE_STAGE_SLOTS.filter(slot => {
+          const info = (s.stages && s.stages[slot]) || {};
+          return info.enabled && info.ready && !(s.cap > 0 && info.count >= s.cap);
+        }).length
+      : 0;
+    const enabled = !!(daily.enabled || (s && s.enabled));
+    const readyCount = regularReady + (daily.enabled && daily.ready ? 1 : 0);
+    summary.textContent = enabled ? (readyCount ? `${readyCount} ready` : 'Enabled') : 'Disabled';
+    summary.classList.toggle('active', enabled);
+  }
   const enabledBtn = document.getElementById('toggle-challenge-enabled');
   if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
   const playMode = (s && s.play_mode) || 'solo';
@@ -3060,6 +3073,14 @@ async function refreshBountyScreen() {
 
 function renderBountyScreen() {
   const s = bountyState;
+  const summary = document.getElementById('resource-bounty-summary');
+  if (summary) {
+    const remaining = s ? `${s.remaining} / ${s.total} left` : '';
+    summary.textContent = s
+      ? `${s.enabled ? 'Enabled' : 'Disabled'} · ${remaining}`
+      : 'Disabled';
+    summary.classList.toggle('active', !!(s && s.enabled));
+  }
   document.getElementById('toggle-bounty-enabled')?.classList.toggle('on', !!(s && s.enabled));
   const playMode = (s && s.play_mode) || 'solo';
   document.getElementById('bounty-mode-solo')?.classList.toggle('active', playMode === 'solo');
@@ -3067,6 +3088,10 @@ function renderBountyScreen() {
   const summonBanner = (s && s.summon_banner) || 'standard';
   document.getElementById('bounty-banner-standard')?.classList.toggle('active', summonBanner === 'standard');
   document.getElementById('bounty-banner-villain')?.classList.toggle('active', summonBanner === 'villain');
+  const remaining = document.getElementById('bounty-remaining');
+  if (remaining && s) {
+    remaining.textContent = `${s.remaining} / ${s.total}`;
+  }
 
   const list = document.getElementById('bounty-map-list');
   if (!list) return;
@@ -3099,6 +3124,7 @@ async function toggleBountyEnabled(btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_bounty_enabled(isOn); } catch (e) {}
+  await refreshBountyScreen();
 }
 
 async function setBountyPlayMode(playMode) {
@@ -3113,6 +3139,11 @@ async function setBountySummonBanner(banner) {
 
 async function setBountyMapMacro(map, macro) {
   try { await pywebview.api.set_bounty_map_macro(map, macro); } catch (e) {}
+}
+
+async function resetBountyRemaining() {
+  try { await pywebview.api.reset_bounty_remaining(); } catch (e) {}
+  await refreshBountyScreen();
 }
 
 // ---------------------------------------------------------------------------
@@ -3138,6 +3169,11 @@ async function refreshCraftingScreen() {
 
 function renderCraftingScreen() {
   const s = craftingState;
+  const summary = document.getElementById('resource-crafting-summary');
+  if (summary) {
+    summary.textContent = s && s.enabled ? `${s.count} / ${s.every} wins` : 'Disabled';
+    summary.classList.toggle('active', !!(s && s.enabled));
+  }
   const enabledBtn = document.getElementById('toggle-crafting-enabled');
   if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
   const everyInput = document.getElementById('crafting-every');
@@ -3338,6 +3374,17 @@ function openChallengeMaps() {
 
 function closeChallengeMaps() {
   const m = document.getElementById('challenge-maps-modal');
+  if (m) m.style.display = 'none';
+}
+
+function openBountyMaps() {
+  const m = document.getElementById('bounty-maps-modal');
+  if (m) m.style.display = 'flex';
+  refreshBountyScreen();  // (re)populate Auto Bounty's independent map assignments
+}
+
+function closeBountyMaps() {
+  const m = document.getElementById('bounty-maps-modal');
   if (m) m.style.display = 'none';
 }
 

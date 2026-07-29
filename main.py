@@ -204,6 +204,8 @@ CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
 CHALLENGE_DAILY_CAP = 10  # fixed, not user-editable -- see get_challenge_settings
 CHALLENGE_RESET_SCHEDULE = "utc_midnight_v1"
 BOUNTY_STORY_MAPS = list(CHALLENGE_STORY_MAPS)
+BOUNTY_DAILY_TOTAL = 10
+BOUNTY_RESET_SCHEDULE = CHALLENGE_RESET_SCHEDULE
 
 
 def _current_challenge_reset_period(now: float = None) -> str:
@@ -488,7 +490,8 @@ class Api:
         self.runner = MacroRunner(
             self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result,
             self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot,
-            self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings)
+            self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings,
+            self.set_bounty_remaining)
 
     def _run_stats_snapshot(self) -> dict:
         # Fed to the runner's match-result webhook so it can report the same
@@ -1043,6 +1046,10 @@ class Api:
             "enabled": False,
             "play_mode": "solo",
             "summon_banner": "standard",
+            "remaining": BOUNTY_DAILY_TOTAL,
+            "total": BOUNTY_DAILY_TOTAL,
+            "last_reset_date": _current_challenge_reset_period(),
+            "reset_schedule": BOUNTY_RESET_SCHEDULE,
             "maps": {name: {"macro": ""} for name in BOUNTY_STORY_MAPS},
         }
 
@@ -1053,11 +1060,33 @@ class Api:
             merged["play_mode"] = "solo"
         if merged.get("summon_banner") not in ("standard", "villain"):
             merged["summon_banner"] = "standard"
+        try:
+            total = max(1, min(99, int(merged.get("total") or BOUNTY_DAILY_TOTAL)))
+        except (TypeError, ValueError):
+            total = BOUNTY_DAILY_TOTAL
+        try:
+            remaining = max(0, min(total, int(merged.get("remaining", total))))
+        except (TypeError, ValueError):
+            remaining = total
+        merged["total"] = total
+        merged["remaining"] = remaining
         saved_maps = saved.get("maps") or {}
         merged["maps"] = {
             name: {"macro": (saved_maps.get(name) or {}).get("macro") or ""}
             for name in BOUNTY_STORY_MAPS
         }
+        reset_period = _current_challenge_reset_period()
+        if saved.get("reset_schedule") != BOUNTY_RESET_SCHEDULE:
+            # Adopt the shared UTC game-day schedule without changing a
+            # pre-existing count during migration.
+            merged["last_reset_date"] = reset_period
+            merged["reset_schedule"] = BOUNTY_RESET_SCHEDULE
+            cfg.update({"bounty": merged})
+        elif merged.get("last_reset_date") != reset_period:
+            merged["remaining"] = merged["total"]
+            merged["last_reset_date"] = reset_period
+            cfg.update({"bounty": merged})
+            self.push_log("[Bounty] Daily bounty tracker reset.")
         return merged
 
     def set_bounty_enabled(self, enabled: bool) -> dict:
@@ -1089,6 +1118,28 @@ class Api:
         settings["maps"][map_name]["macro"] = macro or ""
         cfg.update({"bounty": settings})
         return {"ok": True}
+
+    def set_bounty_remaining(self, remaining, total=None) -> dict:
+        settings = self.get_bounty_settings()
+        if total is not None:
+            try:
+                settings["total"] = max(1, min(99, int(total)))
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "bad_total"}
+        try:
+            settings["remaining"] = max(
+                0, min(settings["total"], int(remaining)))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_remaining"}
+        settings["last_reset_date"] = _current_challenge_reset_period()
+        settings["reset_schedule"] = BOUNTY_RESET_SCHEDULE
+        cfg.update({"bounty": settings})
+        return {"ok": True}
+
+    def reset_bounty_remaining(self) -> dict:
+        settings = self.get_bounty_settings()
+        return self.set_bounty_remaining(
+            settings["total"], settings["total"])
 
     def _default_crafting_settings(self) -> dict:
         from core.runner_constants import CRAFT_SPRITES, CRAFT_DEFAULT_EVERY
