@@ -1068,3 +1068,42 @@ def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
         "details": "Daily: Complete | Regular: #1 0/10, #2 1/10, #3 10/10",
     }
 
+
+def test_fuel_card_summarizes_enabled_resources(tmp_path):
+    body = """
+    global.fuelState = {
+      enabled: true,
+      resources: {
+        resource_drill: { enabled: true, next_due_at: 0 },
+        gold_mine: { enabled: false, next_due_at: 0 }
+      }
+    };
+    global.FUEL_RESOURCE_LABELS = {
+      resource_drill: 'Resource Drill',
+      gold_mine: 'Gold Mine'
+    };
+    Date.now = () => 1000;
+    const mockElements = {
+      'resource-fuel-summary': {
+        textContent: '', classList: { toggle: () => {} }
+      },
+      'resource-fuel-details': { textContent: '', title: '' },
+      'fuel-summary-status': { textContent: '' }
+    };
+    global.document = { getElementById: id => mockElements[id] || null };
+
+    eval(extract('formatFuelCountdown'));
+    eval(extract('renderFuelTimers'));
+    renderFuelTimers();
+
+    console.log(JSON.stringify({
+      summary: mockElements['resource-fuel-summary'].textContent,
+      details: mockElements['resource-fuel-details'].textContent
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out == {
+        "summary": "Enabled",
+        "details": "Resource Drill: Ready | Gold Mine: Off",
+    }
+

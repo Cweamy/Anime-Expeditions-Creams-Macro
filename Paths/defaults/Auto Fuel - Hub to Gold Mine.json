@@ -1,0 +1,65 @@
+{
+  "name": "Auto Fuel - Hub to Gold Mine",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 3.347,
+      "key": "w",
+      "state": "up"
+    },
+    {
+      "t": 3.589,
+      "key": "a",
+      "state": "down"
+    },
+    {
+      "t": 4.196,
+      "key": "a",
+      "state": "up"
+    },
+    {
+      "t": 4.47,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 6.687,
+      "key": "w",
+      "state": "up"
+    },
+    {
+      "t": 6.869,
+      "key": "a",
+      "state": "down"
+    },
+    {
+      "t": 7.112,
+      "key": "a",
+      "state": "up"
+    },
+    {
+      "t": 8.268,
+      "key": "a",
+      "state": "down"
+    },
+    {
+      "t": 8.358,
+      "key": "a",
+      "state": "up"
+    },
+    {
+      "t": 8.631,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 8.722,
+      "key": "w",
+      "state": "up"
+    }
+  ]
+}

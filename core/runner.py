@@ -34,6 +34,7 @@ from .runner_bounty import BountyOps
 from .runner_challenge import ChallengeOps
 from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
+from .runner_fuel import FuelOps
 
 
 def _find_team_load_button(frame, expected_y):
@@ -74,7 +75,7 @@ def _find_team_load_button(frame, expected_y):
     return cx, cy
 
 
-class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
+class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, BlockOps):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
     active at a time (one physical game window, one macro)."""
@@ -82,7 +83,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
     def __init__(self, mouse, keyboard, log, set_status=None, record_result=None,
                  get_challenge_settings=None, mark_challenge_stage_played=None, get_run_stats=None,
                  get_crafting_settings=None, set_crafting_count=None, get_bounty_settings=None,
-                 set_bounty_remaining=None):
+                 set_bounty_remaining=None, get_fuel_settings=None,
+                 mark_fuel_refill_result=None):
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
@@ -146,6 +148,11 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
         # main.Api). None (tests/CLI) makes every crafting path a no-op.
         self._get_crafting_settings = get_crafting_settings
         self._set_crafting_count = set_crafting_count or (lambda *a, **kw: None)
+        # Auto Fuel uses the same callback boundary as Challenge and Crafting:
+        # main.Api owns settings.json, while the runner only reads normalized
+        # state and reports each station's result.
+        self._get_fuel_settings = get_fuel_settings
+        self._mark_fuel_refill_result = mark_fuel_refill_result
         self._thread = None
         self._stop_event = None
         self._pause_event = threading.Event()
@@ -652,6 +659,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
             self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
             if self._crafting_wants_in():
                 self._run_crafting(hwnd, stop_event)
+            if self._fuel_wants_in():
+                self._run_fuel_refill(hwnd, stop_event)
         if self._checkpoint(stop_event):
             return
 
@@ -712,6 +721,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                 # "task finished, came back to lobby, no craft" report.
                 if self._crafting_wants_in():
                     self._run_crafting(hwnd, stop_event)
+                    if self._current_hwnd and wm.is_window(self._current_hwnd):
+                        hwnd = self._current_hwnd
+                    if self._checkpoint(stop_event):
+                        return
+                if self._fuel_wants_in():
+                    self._run_fuel_refill(hwnd, stop_event)
                     if self._current_hwnd and wm.is_window(self._current_hwnd):
                         hwnd = self._current_hwnd
                     if self._checkpoint(stop_event):
@@ -861,13 +876,18 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                 # reaches N, not the same one (a one-repeat lag, negligible on a
                 # farm and worth keeping the clean Leave-Stage-first ordering).
                 crafting_wants_in = (not is_last_repeat) and self._crafting_wants_in()
+                # Auto Fuel is checked at the same safe boundary. A due timer
+                # forces Leave Stage now, then the pass runs from the lobby
+                # before this same task is entered again.
+                fuel_wants_in = (not is_last_repeat) and self._fuel_wants_in()
                 # The bounded-Infinite path and the Leave-at-Minute block
                 # (left_live_match) already left the live match, so there is no
                 # Victory/Defeat screen to process here.
                 if not left_live_match and not self._handle_match_result(
                         hwnd, stop_event, task, result, duration, webhook,
                         repeat=(not is_last_repeat) and not challenge_wants_in
-                        and not crafting_wants_in and not restart_needed):
+                        and not crafting_wants_in and not fuel_wants_in
+                        and not restart_needed):
                     if stop_event.is_set():
                         return False
                     task_failed = True
@@ -964,6 +984,38 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                     # Repeat Stage requeue -- there's no stage left to requeue into.
                     if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords,
                                                   scroll_power, scroll_nudges, webhook):
+                        if stop_event.is_set():
+                            return False
+                        task_failed = True
+                        break
+                    fresh_entry = True
+                    continue
+
+                if fuel_wants_in:
+                    self._log(f'[Macro] Auto Fuel is due. Pausing "{map_name}" at a safe boundary.')
+                    self._run_fuel_refill(hwnd, stop_event)
+                    if self._checkpoint(stop_event):
+                        return False
+                    if self._current_hwnd and wm.is_window(self._current_hwnd):
+                        hwnd = self._current_hwnd
+                    self._log(f'[Macro] Auto Fuel pass finished. Resuming "{map_name}".')
+                    # Auto Fuel temporarily owns the Dashboard status context.
+                    # Restore the same task and the upcoming repeat before
+                    # re-entering so Current Task/Repeat never stay stale.
+                    self._set_status(
+                        current_task=f"{task_index} / {task_count}",
+                        current_repeat=f"{repeat_index + 1} / {repeat_total}",
+                        map=map_name,
+                        action="Resuming after Auto Fuel...",
+                        mode=mode,
+                        stage=str(task.get("stage") or "-"),
+                        difficulty=task.get("difficulty") or "-",
+                        play_mode=task.get("play_mode") or "solo",
+                        macro=task.get("macro") or "-",
+                    )
+                    if not self._run_task_setup(
+                            hwnd, stop_event, task, mode, map_name, coords,
+                            scroll_power, scroll_nudges, webhook):
                         if stop_event.is_set():
                             return False
                         task_failed = True

@@ -1,0 +1,45 @@
+{
+  "name": "Auto Fuel - Resource Drill to Gold Mine",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 1.033,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 1.277,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 1.489,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 1.671,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 3.34,
+      "key": "w",
+      "state": "up"
+    },
+    {
+      "t": 4.92,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 4.95,
+      "key": "w",
+      "state": "up"
+    }
+  ]
+}

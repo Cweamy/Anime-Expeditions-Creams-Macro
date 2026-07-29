@@ -1,0 +1,75 @@
+{
+  "name": "Auto Fuel - Hub to Resource Drill",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 3.097,
+      "key": "w",
+      "state": "up"
+    },
+    {
+      "t": 3.52,
+      "key": "a",
+      "state": "down"
+    },
+    {
+      "t": 4.461,
+      "key": "a",
+      "state": "up"
+    },
+    {
+      "t": 4.795,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 5.374,
+      "key": "w",
+      "state": "up"
+    },
+    {
+      "t": 5.556,
+      "key": "a",
+      "state": "down"
+    },
+    {
+      "t": 5.98,
+      "key": "a",
+      "state": "up"
+    },
+    {
+      "t": 6.192,
+      "key": "w",
+      "state": "down"
+    },
+    {
+      "t": 6.405,
+      "key": "w",
+      "state": "up"
+    },
+    {
+      "t": 6.527,
+      "key": "a",
+      "state": "down"
+    },
+    {
+      "t": 7.042,
+      "key": "a",
+      "state": "up"
+    },
+    {
+      "t": 7.315,
+      "key": "a",
+      "state": "down"
+    },
+    {
+      "t": 7.529,
+      "key": "a",
+      "state": "up"
+    }
+  ]
+}
