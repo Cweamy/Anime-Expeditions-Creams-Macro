@@ -166,6 +166,11 @@ class BountyOps:
                                 and not self._bounty_was_attempted(
                                     objective["signature"], attempted)):
                             return objective
+                    if not drag.get("has_scrollbar", True):
+                        # Every visible objective was already inspected and
+                        # this card has no private bar, so there is no hidden
+                        # content to reveal. Move directly to the next card.
+                        continue
                     x1, y1 = vision.ref_to_screen(hwnd, drag["x"], drag["from_y"])
                     x2, y2 = vision.ref_to_screen(hwnd, drag["x"], drag["to_y"])
                     self._mouse.drag(x1, y1, x2, y2, duration=0.25)

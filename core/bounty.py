@@ -241,11 +241,30 @@ def detect_card_scrolls(frame_bgr: np.ndarray) -> list:
             continue
         if not (165 <= w <= 220 and 175 <= h <= 245 and area >= 15000):
             continue
+        # Some bounty cards fit all objectives and render no private
+        # scrollbar at all. The track, when present, is a narrow dark
+        # vertical run just inside the card's right edge. Mark its presence
+        # so callers do not repeatedly drag plain parchment on barless cards.
+        edge = cv2.cvtColor(
+            frame_bgr[y + 50:y + h - 70, x + w - 45:x + w - 20],
+            cv2.COLOR_BGR2HSV,
+        )
+        has_scrollbar = False
+        if edge.size:
+            dark_columns = (edge[:, :, 2] < 155).mean(axis=0) > 0.55
+            has_scrollbar = bool(
+                np.convolve(
+                    dark_columns.astype(np.uint8),
+                    np.ones(5, dtype=np.uint8),
+                    mode="valid",
+                ).max(initial=0) >= 5
+            )
         drags.append({
             "x": x + w - 31,
             "from_y": y + 58,
             "to_y": y + h - 58,
             "card": (x, y, w, h),
+            "has_scrollbar": has_scrollbar,
         })
     return sorted(drags, key=lambda item: item["x"])
 

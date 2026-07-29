@@ -146,6 +146,57 @@ def test_find_next_bounty_finishes_current_card_before_later_card(monkeypatch):
     assert found is first_card_objective
 
 
+def test_find_next_bounty_does_not_drag_a_card_without_scrollbar(monkeypatch):
+    runner = _Harness()
+    drag_calls = []
+
+    class _Mouse:
+        def move_to(self, *_args):
+            pass
+
+        def nudge(self):
+            pass
+
+        def scroll(self, _amount):
+            pass
+
+        def drag(self, *args, **kwargs):
+            drag_calls.append((args, kwargs))
+
+    runner._mouse = _Mouse()
+    cards = [
+        {
+            "x": 290, "from_y": 180, "to_y": 260,
+            "card": (100, 100, 200, 250), "has_scrollbar": False,
+        },
+        {
+            "x": 590, "from_y": 180, "to_y": 260,
+            "card": (400, 100, 200, 250), "has_scrollbar": False,
+        },
+    ]
+    later_card_objective = {
+        "cx": 500, "cy": 180, "signature": ("infinite", 30, 222)}
+
+    monkeypatch.setattr(
+        runner_bounty.vision, "ref_to_screen", lambda _hwnd, x, y: (x, y))
+    monkeypatch.setattr(
+        runner_bounty.vision, "capture_game_bgr", lambda _hwnd: object())
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_card_scrolls", lambda _frame: cards)
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_claim_buttons",
+        lambda _frame, _cards=None: [])
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_objectives",
+        lambda _frame: [later_card_objective])
+
+    found = BountyOps._find_next_bounty(
+        runner, 123, threading.Event(), attempted=[])
+
+    assert found is later_card_objective
+    assert drag_calls == []
+
+
 def test_claim_completed_bounty_verifies_button_disappeared(monkeypatch):
     runner = _Harness()
     monkeypatch.setattr(runner_bounty.wm, "activate_window", lambda _hwnd: True)
