@@ -290,6 +290,44 @@ def load_path(name: str) -> dict:
     return {"name": name, "events": []}
 
 
+def collect_paths(names) -> dict:
+    """Bundle the given recorded walks as {name: {"name", "events"}} for
+    embedding in a shared macro code. Names with no recording (or an empty
+    one) are skipped -- there's nothing to carry, and the block would skip the
+    walk on the far side anyway."""
+    bundle = {}
+    for name in names:
+        data = load_path(name)
+        events = data.get("events") or []
+        if events:
+            bundle[name] = {"name": data.get("name") or name, "events": events}
+    return bundle
+
+
+def import_path(name: str, events: list) -> str:
+    """Persist a walk bundled with an imported macro and return the name the
+    block should reference. If an identical recording already exists under
+    this name (a shipped default, or a prior import of the same macro) it's
+    reused as-is. If a DIFFERENT recording holds the name, the bundle is saved
+    under the next free "<name> (n)" instead -- save_path keys its own
+    collision check on the display name, not the content, so saving straight
+    over the same name would silently destroy the existing recording. The
+    caller remaps the block's pathName to whatever comes back."""
+    name = (name or "").strip() or "path"
+    events = list(events or [])
+    candidate, n = name, 2
+    while True:
+        existing_events = load_path(candidate).get("events") or []
+        if not existing_events:
+            # Free (nothing recorded under this name) -- save here.
+            return save_path(candidate, events)
+        if existing_events == events:
+            # Same walk already present -- reuse it, no duplicate.
+            return candidate
+        candidate = f"{name} ({n})"
+        n += 1
+
+
 def replay_events(events: list, keyboard, stop_event: threading.Event = None, sprint: bool = False) -> None:
     """Replays a recorded WASD event list through a Keyboard controller,
     sleeping between events to reproduce the original press/release timing

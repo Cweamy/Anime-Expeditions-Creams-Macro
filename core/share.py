@@ -138,6 +138,55 @@ def count_template_blocks(blocks) -> int:
     return 0
 
 
+def _iter_blocks(blocks):
+    """Yield every block dict in a template, whatever shape its container is:
+    a flat list, a phase dict (prestart/battle/loop_a/loop_b/legacy -- any
+    list-valued key), and a Detect block's nested then/else. Mirrors the
+    traversal count_template_blocks uses so both agree on what counts as a
+    block. Non-block list values (e.g. an equipment list) get walked too but
+    harmlessly -- callers filter by block "type"."""
+    if isinstance(blocks, list):
+        items = blocks
+    elif isinstance(blocks, dict):
+        items = [b for v in blocks.values() if isinstance(v, list) for b in v]
+    else:
+        return
+    for b in items:
+        if not isinstance(b, dict):
+            continue
+        yield b
+        if b.get("type") == "detect":
+            yield from _iter_blocks(b.get("then") or [])
+            yield from _iter_blocks(b.get("else") or [])
+
+
+def collect_walk_path_names(blocks) -> set:
+    """Names of recorded walks referenced by custom Walk Path blocks. Auto-mode
+    blocks resolve to shipped default paths at runtime (present on every
+    install) and carry no pathName, so only explicit custom references -- the
+    ones a recipient wouldn't otherwise have -- are collected."""
+    names = set()
+    for b in _iter_blocks(blocks):
+        if b.get("type") == "walk_path" and b.get("mode") == "custom":
+            name = (b.get("pathName") or "").strip()
+            if name:
+                names.add(name)
+    return names
+
+
+def remap_walk_path_names(blocks, rename_map) -> None:
+    """Rewrite custom Walk Path block pathNames in place from rename_map. Used
+    on import when a bundled walk had to be saved under a different name (to
+    avoid clobbering an existing recording) so the block still points at it."""
+    if not rename_map:
+        return
+    for b in _iter_blocks(blocks):
+        if b.get("type") == "walk_path" and b.get("mode") == "custom":
+            new = rename_map.get((b.get("pathName") or "").strip())
+            if new:
+                b["pathName"] = new
+
+
 def _parse_payload(payload: dict) -> dict:
     """Parses and validates a decoded payload dictionary."""
     if not isinstance(payload, dict):
@@ -145,6 +194,12 @@ def _parse_payload(payload: dict) -> dict:
 
     kind = payload.get("kind")
     templates = {}
+    # Recorded walks bundled alongside the blocks (see export_template_code) so
+    # a shared macro's custom Walk Path blocks work on the importer's machine.
+    # Absent in codes made before this existed -- an empty dict then.
+    bundled_paths = payload.get("paths")
+    if not isinstance(bundled_paths, dict):
+        bundled_paths = {}
 
     # Multi-template pack
     if kind == "anime-expeditions-template-pack" or "templates" in payload:
@@ -156,14 +211,14 @@ def _parse_payload(payload: dict) -> dict:
                     templates[str(tname)] = blocks
                 elif isinstance(tval, list):
                     templates[str(tname)] = tval
-        return {"ok": True, "type": "pack", "templates": templates}
+        return {"ok": True, "type": "pack", "templates": templates, "paths": bundled_paths}
 
     # Single template
     if "name" in payload or "blocks" in payload:
         name = str(payload.get("name", "Imported Template"))
         blocks = payload.get("blocks", {})
         templates[name] = blocks
-        return {"ok": True, "type": "single", "templates": templates}
+        return {"ok": True, "type": "single", "templates": templates, "paths": bundled_paths}
 
     return {"ok": False, "reason": "Unrecognized template schema."}
 
@@ -187,4 +242,5 @@ def preview_template_code(input_str: str) -> dict:
         "type": res.get("type", "single"),
         "total_templates": len(items),
         "items": items,
+        "walk_paths": len(res.get("paths", {})),
     }

@@ -1509,6 +1509,18 @@ class Api:
         return {"ok": ok}
 
     def export_template_code(self, names=None) -> dict:
+        from core import paths
+
+        def _bundle(*block_sets):
+            # Recorded walks that the macro's custom Walk Path blocks reference,
+            # packed alongside so they work on the importer's machine (auto-mode
+            # walks use shipped defaults everyone already has -- see
+            # share.collect_walk_path_names).
+            needed = set()
+            for blocks in block_sets:
+                needed |= share.collect_walk_path_names(blocks)
+            return paths.collect_paths(needed)
+
         if isinstance(names, str) and names.strip():
             if not tpl.template_exists(names):
                 return {"ok": False, "reason": f'Macro "{names}" is not saved -- save it before exporting.'}
@@ -1520,6 +1532,9 @@ class Api:
                 "name": names,
                 "blocks": blocks,
             }
+            bundled = _bundle(blocks)
+            if bundled:
+                payload["paths"] = bundled
             code = share.encode_template_code(payload)
             return {"ok": True, "code": code, "count": 1}
         elif isinstance(names, list) and len(names) > 0:
@@ -1535,6 +1550,9 @@ class Api:
                     "name": t_name,
                     "blocks": blocks,
                 }
+                bundled = _bundle(blocks)
+                if bundled:
+                    payload["paths"] = bundled
                 code = share.encode_template_code(payload)
                 return {"ok": True, "code": code, "count": 1}
             else:
@@ -1549,6 +1567,9 @@ class Api:
                     "version": 1,
                     "templates": templates,
                 }
+                bundled = _bundle(*templates.values())
+                if bundled:
+                    payload["paths"] = bundled
                 code = share.encode_template_code(payload)
                 return {"ok": True, "code": code, "count": len(templates)}
         else:
@@ -1562,10 +1583,15 @@ class Api:
                 "version": 1,
                 "templates": templates,
             }
+            bundled = _bundle(*templates.values())
+            if bundled:
+                payload["paths"] = bundled
             code = share.encode_template_code(payload)
             return {"ok": True, "code": code, "count": len(templates)}
 
     def import_template_code(self, code_str: str) -> dict:
+        from core import paths
+
         res = share.decode_template_code(code_str)
         if not res.get("ok"):
             return {"ok": False, "reason": res.get("reason", "Failed to decode input.")}
@@ -1574,13 +1600,29 @@ class Api:
         if not templates:
             return {"ok": False, "reason": "No valid templates found in code/URL."}
 
+        # Recreate any recorded walks bundled with the macro FIRST, then remap
+        # the blocks to whatever name each landed under (import_path avoids
+        # clobbering a different recording of the same name), so a shared
+        # macro's custom Walk Path blocks resolve on this machine too.
+        bundled_paths = res.get("paths", {}) or {}
+        rename_map = {}
+        for pname, pdata in bundled_paths.items():
+            events = pdata.get("events", []) if isinstance(pdata, dict) else pdata
+            saved_path = paths.import_path(pname, events)
+            if saved_path != pname:
+                rename_map[pname] = saved_path
+
         imported_names = []
         for tname, blocks in templates.items():
+            share.remap_walk_path_names(blocks, rename_map)
             saved = tpl.save_template(tname, blocks)
             imported_names.append(saved)
 
-        self.push_log(f"Imported {len(imported_names)} template(s) via Share Code: {', '.join(imported_names)}")
-        return {"ok": True, "count": len(imported_names), "templates": imported_names}
+        walk_note = f" (+{len(bundled_paths)} walk path(s))" if bundled_paths else ""
+        self.push_log(f"Imported {len(imported_names)} template(s) via Share Code: "
+                       f"{', '.join(imported_names)}{walk_note}")
+        return {"ok": True, "count": len(imported_names), "templates": imported_names,
+                "walk_paths": len(bundled_paths)}
 
     def preview_template_code(self, code_str: str) -> dict:
         return share.preview_template_code(code_str)

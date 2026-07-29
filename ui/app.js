@@ -6283,7 +6283,10 @@ async function updateImportPreview() {
         badgeEl.style.background = isSingle ? 'color-mix(in srgb, var(--teal) 20%, transparent)' : 'color-mix(in srgb, var(--lilac) 20%, transparent)';
         badgeEl.style.color = isSingle ? 'var(--teal)' : 'var(--lilac)';
       }
-      if (countEl) countEl.textContent = `${res.total_templates} template(s)`;
+      if (countEl) {
+        const walkNote = res.walk_paths ? ` + ${res.walk_paths} walk path(s)` : '';
+        countEl.textContent = `${res.total_templates} template(s)${walkNote}`;
+      }
 
       if (itemsEl) {
         itemsEl.innerHTML = res.items.map(item =>

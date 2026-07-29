@@ -270,3 +270,72 @@ def test_v2_is_shorter_than_v1_for_a_single_template():
     v1_len = len(share.HEADER_PREFIX_V1 + base64.urlsafe_b64encode(zlib.compress(jb, 9)).decode("ascii").rstrip("="))
     v2_len = len(share.encode_template_code(payload))
     assert v2_len < v1_len, f"v2 ({v2_len}) should be shorter than v1 ({v1_len})"
+
+
+# ── Bundled walk paths ─────────────────────────────────────────────────────
+
+def _walk(mode, path_name):
+    return {"type": "walk_path", "params": {}, "once": True, "mode": mode, "pathName": path_name}
+
+
+def test_collect_walk_path_names_only_custom_with_a_name():
+    blocks = {
+        "prestart": [
+            _walk("auto", ""),                 # auto -> shipped default, no name to carry
+            _walk("custom", "My Route"),
+            _walk("custom", ""),               # custom but unset -> nothing to carry
+        ],
+        "battle": [
+            {"type": "place_unit", "params": {}},
+            _walk("custom", "  Trimmed  "),    # whitespace stripped
+        ],
+    }
+    assert share.collect_walk_path_names(blocks) == {"My Route", "Trimmed"}
+
+
+def test_collect_walk_path_names_recurses_detect_branches():
+    blocks = [
+        {"type": "detect", "then": [_walk("custom", "ThenPath")],
+         "else": [{"type": "detect", "then": [_walk("custom", "NestedPath")], "else": []}]},
+    ]
+    assert share.collect_walk_path_names(blocks) == {"ThenPath", "NestedPath"}
+
+
+def test_remap_walk_path_names_rewrites_in_place():
+    blocks = {"prestart": [_walk("custom", "Old"), _walk("auto", ""), _walk("custom", "Keep")]}
+    share.remap_walk_path_names(blocks, {"Old": "Old (2)"})
+    names = [b["pathName"] for b in blocks["prestart"] if b["mode"] == "custom"]
+    assert names == ["Old (2)", "Keep"]
+
+
+def test_encode_decode_round_trips_bundled_paths():
+    payload = {
+        "kind": "anime-expeditions-template",
+        "version": 1,
+        "name": "Route Macro",
+        "blocks": {"prestart": [_walk("custom", "My Route")]},
+        "paths": {"My Route": {"name": "My Route",
+                                 "events": [{"t": 0.0, "key": "w", "state": "down"},
+                                            {"t": 0.5, "key": "w", "state": "up"}]}},
+    }
+    result = share.decode_template_code(share.encode_template_code(payload))
+    assert result["ok"] is True
+    assert result["paths"]["My Route"]["events"][0]["key"] == "w"
+
+
+def test_decode_without_paths_yields_empty_dict():
+    payload = {"kind": "anime-expeditions-template", "name": "Plain",
+               "blocks": [{"type": "upgrade_unit", "params": {"index": "1"}}]}
+    result = share.decode_template_code(share.encode_template_code(payload))
+    assert result["paths"] == {}
+
+
+def test_preview_reports_bundled_walk_path_count():
+    payload = {
+        "kind": "anime-expeditions-template",
+        "name": "Route Macro",
+        "blocks": {"prestart": [_walk("custom", "My Route")]},
+        "paths": {"My Route": {"name": "My Route", "events": [{"t": 0.0, "key": "w", "state": "down"}]}},
+    }
+    preview = share.preview_template_code(share.encode_template_code(payload))
+    assert preview["walk_paths"] == 1
