@@ -12,6 +12,207 @@ def _link_text(frame, x, y, text="FlowerForest", color=(40, 210, 65)):
     cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
 
+def test_reads_remaining_bounty_counter_from_orange_mask(monkeypatch):
+    frame = _frame()
+    reads = iter(["", "2 / 10"])
+    monkeypatch.setattr(
+        bounty.ocr_windows, "ocr_image", lambda _image: next(reads))
+
+    assert bounty.read_bounties_left(frame) == (2, 10)
+
+
+def test_rejects_impossible_remaining_bounty_counter(monkeypatch):
+    frame = _frame()
+    monkeypatch.setattr(
+        bounty.ocr_windows, "ocr_image", lambda _image: "12 / 10")
+
+    assert bounty.read_bounties_left(frame) is None
+
+
+def test_detects_incomplete_summon_objective_from_card_scoped_ocr():
+    frame = _frame()
+    cards = [{"card": (250, 180, 200, 230)}]
+    lines = [
+        {"text": "Summon 500 times", "cx": 350, "cy": 250},
+        {"text": "150 / 500", "cx": 350, "cy": 280},
+        # An unrelated board counter must not affect the objective.
+        {"text": "2 / 10 Bounties Left", "cx": 1040, "cy": 80},
+    ]
+
+    found = bounty.detect_summon_objectives(frame, cards, lines)
+
+    assert len(found) == 1
+    assert found[0]["target_summons"] == 500
+    assert found[0]["current_summons"] == 150
+    assert found[0]["remaining_summons"] == 350
+
+
+def test_summon_objective_requires_matching_progress_and_skips_complete():
+    frame = _frame()
+    cards = [{"card": (250, 180, 200, 230)}]
+    incomplete_without_progress = [
+        {"text": "Summon 250 times", "cx": 350, "cy": 250},
+        {"text": "2 / 10", "cx": 350, "cy": 280},
+    ]
+    complete = [
+        {"text": "Summon 250 times", "cx": 350, "cy": 250},
+        {"text": "250 / 250", "cx": 350, "cy": 280},
+    ]
+
+    assert bounty.detect_summon_objectives(
+        frame, cards, incomplete_without_progress) == []
+    assert bounty.detect_summon_objectives(frame, cards, complete) == []
+
+
+def test_summon_objective_tolerates_live_ocr_spelling_confusion():
+    frame = _frame()
+    cards = [{"card": (250, 180, 200, 230)}]
+    lines = [
+        {"text": "Surnrnon 500 tirnes", "cx": 350, "cy": 250},
+        {"text": "50 / 500", "cx": 350, "cy": 280},
+    ]
+
+    found = bounty.detect_summon_objectives(frame, cards, lines)
+
+    assert len(found) == 1
+    assert found[0]["remaining_summons"] == 450
+
+
+def test_summon_objective_accepts_touching_target_and_apostrophe_progress(
+        monkeypatch):
+    frame = _frame()
+    cards = [{"card": (250, 180, 200, 230)}]
+    lines = [
+        {"text": "Summcn500 times", "cx": 350, "cy": 250},
+        {"text": "0'500", "cx": 350, "cy": 280},
+    ]
+    monkeypatch.setattr(bounty.ocr_windows, "ocr_image", lambda _image: "")
+
+    found = bounty.detect_summon_objectives(frame, cards, lines)
+
+    assert len(found) == 1
+    assert found[0]["target_summons"] == 500
+    assert found[0]["remaining_summons"] == 500
+
+
+def test_summon_card_fallback_recovers_misread_target_and_progress(monkeypatch):
+    frame = _frame()
+    cards = [{"card": (250, 180, 200, 230)}]
+    lines = [{"text": "Summcn 25Ltimes", "cx": 350, "cy": 250}]
+    reads = iter([
+        "Summon 250 times 0/250 (0%)",
+        "Summm 250 times 0/250",
+    ])
+    monkeypatch.setattr(
+        bounty.ocr_windows, "ocr_image", lambda _image: next(reads))
+
+    found = bounty.detect_summon_objectives(frame, cards, lines)
+
+    assert len(found) == 1
+    assert found[0]["target_summons"] == 250
+
+
+def test_summon_card_fallback_runs_when_full_frame_ocr_omits_row(monkeypatch):
+    frame = _frame()
+    cards = [{"card": (250, 180, 200, 230)}]
+    monkeypatch.setattr(
+        bounty.ocr_windows,
+        "ocr_lines",
+        lambda _image: [
+            {"text": "Summcn500 times", "cx": 210, "cy": 120},
+            {"text": "0'500", "cx": 210, "cy": 145},
+        ],
+    )
+
+    found = bounty.detect_summon_objectives(frame, cards, [])
+
+    assert len(found) == 1
+    assert found[0]["target_summons"] == 500
+    assert found[0]["remaining_summons"] == 500
+
+
+def test_summon_card_retries_larger_ocr_when_times_word_is_mangled(monkeypatch):
+    frame = _frame()
+    cards = [{"card": (250, 180, 200, 230)}]
+    reads = iter([
+        [
+            {"text": "Summm 2SO ttrne-", "cx": 210, "cy": 120},
+            {"text": "0/250", "cx": 210, "cy": 145},
+        ],
+        [
+            {"text": "Summon 250 times", "cx": 315, "cy": 180},
+            {"text": "0/250", "cx": 315, "cy": 218},
+        ],
+    ])
+    monkeypatch.setattr(
+        bounty.ocr_windows, "ocr_lines", lambda _image: next(reads))
+
+    found = bounty.detect_summon_objectives(frame, cards, [])
+
+    assert len(found) == 1
+    assert found[0]["target_summons"] == 250
+
+
+def test_summon_target_requires_valid_50x_structure():
+    assert bounty._extract_summon_targets(["Summon 1254 times"]) == []
+    assert bounty._extract_summon_targets(["Summcn 2SO times"]) == [250]
+    assert bounty._extract_summon_targets(["Summon SOO times"]) == [500]
+
+
+def test_lobby_summon_uses_focused_sidebar_ocr(monkeypatch):
+    frame = _frame()
+    lines = [{"text": "Summon", "cx": 96, "cy": 90}]
+    monkeypatch.setattr(
+        bounty.ocr_windows, "ocr_lines", lambda _image: lines)
+
+    target = bounty.detect_lobby_summon(frame)
+
+    assert target["cx"] == 113
+    assert target["cy"] == 430
+
+
+def test_summon_progress_falls_back_to_detected_half_filled_bar(monkeypatch):
+    frame = _frame()
+    x, y, w, h = 250, 180, 200, 230
+    cards = [{"card": (x, y, w, h)}]
+    summon_cy = y + 55
+    lines = [
+        {"text": "Summcn 500 times", "cx": x + 100, "cy": summon_cy},
+        {"text": "250560150", "cx": x + 100, "cy": summon_cy + 12},
+    ]
+    cv2.rectangle(
+        frame, (x, y), (x + w - 1, y + h - 1), (105, 130, 165), -1)
+    # A 120px progress track, half warm fill and half dark remainder.
+    cv2.rectangle(
+        frame, (x + 38, y + 72), (x + 157, y + 75), (25, 25, 25), -1)
+    cv2.rectangle(
+        frame, (x + 38, y + 72), (x + 97, y + 75), (20, 150, 235), -1)
+    monkeypatch.setattr(bounty.ocr_windows, "ocr_image", lambda _image: "")
+
+    found = bounty.detect_summon_objectives(frame, cards, lines)
+
+    assert len(found) == 1
+    assert found[0]["current_summons"] == 250
+    assert found[0]["remaining_summons"] == 250
+
+
+def test_detects_summon_menu_from_tabs_and_green_actions():
+    frame = _frame()
+    cv2.rectangle(frame, (520, 550), (730, 605), (40, 210, 65), -1)
+    cv2.rectangle(frame, (760, 550), (980, 605), (40, 210, 65), -1)
+    lines = [
+        {"text": "Standard", "cx": 610, "cy": 170},
+        {"text": "Mini", "cx": 738, "cy": 170},
+    ]
+
+    menu = bounty.detect_summon_menu(frame, lines)
+
+    assert menu is not None
+    assert menu["tabs"]["standard"]["cx"] == 610
+    assert menu["tabs"]["villain"]["cx"] == 482
+    assert menu["summon_50"]["cx"] == 870
+
+
 def test_detects_green_wave_link_from_color_and_nearby_objective():
     frame = _frame()
     bx, by, _bw, _bh = bounty.BOARD_REGION
@@ -155,6 +356,9 @@ def test_detects_cyan_hard_link_using_difficulty_word():
 def test_destination_map_matching_tolerates_minor_ocr_error():
     assert bounty.match_story_map("FlowerForest - Act 1") == "Flower Forest"
     assert bounty.match_story_map("Fairy King F0rest - Act 1") == "Fairy King Forest"
+    assert bounty.match_story_map(
+        "Infinite King's Tonb - Act 1 Hard Mode Star Missions Clear Wave 10"
+    ) == "King's Tomb"
     assert bounty.match_story_map("unrelated screen") is None
 
 
