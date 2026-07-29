@@ -1065,6 +1065,6 @@ def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
     out = run_js(body, tmp_path)
     assert out == {
         "summary": "Enabled",
-        "details": "Daily: 0/1 left | Regular: 1/3 ready",
+        "details": "Daily: Complete | Regular: #1 0/10, #2 1/10, #3 10/10",
     }
 

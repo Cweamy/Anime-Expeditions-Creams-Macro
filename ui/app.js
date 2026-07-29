@@ -2925,22 +2925,15 @@ function renderChallengeScreen() {
   }
   const details = document.getElementById('resource-challenge-details');
   if (details) {
-    const enabledSlots = s && s.enabled
-      ? CHALLENGE_STAGE_SLOTS.filter(slot => {
-          const info = (s.stages && s.stages[slot]) || {};
-          return info.enabled;
-        })
-      : [];
-    const regularReady = enabledSlots.filter(slot => {
-      const info = (s.stages && s.stages[slot]) || {};
-      return info.ready && !(s.cap > 0 && info.count >= s.cap);
-    }).length;
     const dailyText = daily.enabled
-      ? `Daily: ${daily.ready ? '1/1 left' : '0/1 left'}`
-      : 'Daily: off';
+      ? `Daily: ${daily.ready ? 'Ready' : 'Complete'}`
+      : 'Daily: Off';
     const regularText = s && s.enabled
-      ? `Regular: ${regularReady}/${enabledSlots.length} ready`
-      : 'Regular: off';
+      ? `Regular: ${CHALLENGE_STAGE_SLOTS.map(slot => {
+          const info = (s.stages && s.stages[slot]) || {};
+          return info.enabled ? `#${slot} ${info.count || 0}/${s.cap}` : `#${slot} Off`;
+        }).join(', ')}`
+      : 'Regular: Off';
     details.textContent = `${dailyText} | ${regularText}`;
     details.title = details.textContent;
   }
@@ -3092,9 +3085,9 @@ function renderBountyScreen() {
   const s = bountyState;
   const summary = document.getElementById('resource-bounty-summary');
   if (summary) {
-    const remaining = s ? `${s.remaining} / ${s.total} left` : '';
+    const remaining = s ? `${s.remaining}/${s.total} left` : '';
     summary.textContent = s
-      ? `${s.enabled ? 'Enabled' : 'Disabled'} · ${remaining}`
+      ? `${s.enabled ? 'Enabled' : 'Disabled'} | ${remaining}`
       : 'Disabled';
     summary.classList.toggle('active', !!(s && s.enabled));
   }
