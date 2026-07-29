@@ -46,16 +46,65 @@ function renderLogLine(div, line) {
   const match = /^\[([^\]]+)\](.*)$/.exec(line);
   div.appendChild(document.createTextNode('> '));
   if (match) {
-    div.style.setProperty('--cat', logTagColor(match[1]));
+    const tagName = match[1];
+    div.style.setProperty('--cat', logTagColor(tagName));
+    if (tagName === 'Diagnostics' || tagName === 'Preflight') {
+      div.classList.add('log-badge-diagnostic');
+    }
     const tag = document.createElement('span');
     tag.className = 'log-tag';
-    tag.textContent = `[${match[1]}]`;
+    tag.textContent = `[${tagName}]`;
     div.appendChild(tag);
     div.appendChild(document.createTextNode(match[2]));
   } else {
     div.appendChild(document.createTextNode(line));
   }
 }
+
+function showToast(message) {
+  let toast = document.getElementById('diagnostic-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'diagnostic-toast';
+    Object.assign(toast.style, {
+      position: 'fixed',
+      bottom: '20px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: 'var(--bg-surface, rgba(0,0,0,0.8))',
+      color: 'var(--text, white)',
+      border: '1px solid var(--border, transparent)',
+      padding: '8px 16px',
+      borderRadius: '8px',
+      fontSize: '12px',
+      zIndex: '1000',
+      transition: 'opacity 0.3s',
+      pointerEvents: 'none',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+    });
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.style.opacity = '1';
+  setTimeout(() => {
+    toast.style.opacity = '0';
+  }, 3000);
+}
+
+window.copyDiagnosticReport = function() {
+  if (window.pywebview && pywebview.api && pywebview.api.export_failure_report) {
+    pywebview.api.export_failure_report().then((report) => {
+      if (report) {
+        navigator.clipboard.writeText(report).catch(() => {});
+      }
+      showToast('Diagnostic report copied to clipboard');
+    }).catch(() => {
+      showToast('Failed to export diagnostic report');
+    });
+  } else {
+    showToast('pywebview API not available');
+  }
+};
 
 function logListEl() {
   return document.getElementById('log-list');
