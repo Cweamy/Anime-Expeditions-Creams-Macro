@@ -624,8 +624,11 @@ FUEL_PATH_KEYS = (
     "hub_to_gold_mine",
     "resource_drill_to_gold_mine",
 )
+FUEL_UNIT_SECONDS = 5 * 60
+FUEL_MIN_SAFETY_SECONDS = 5 * 60
+FUEL_SAFETY_RATIO = 0.04
 FUEL_INTERVAL_SECONDS = 8 * 60 * 60
-FUEL_RETRY_SECONDS = 15 * 60
+FUEL_RETRY_SECONDS = 5 * 60
 FUEL_AMOUNT_MAX = 100
 FUEL_AREA_TIMEOUT = 10.0
 FUEL_LOAD_TIMEOUT = 60.0
@@ -635,4 +638,18 @@ FUEL_ACTION_TIMEOUT = 15.0
 FUEL_CONFIRM_TIMEOUT = 20.0
 FUEL_CLOSE_TIMEOUT = 2.0
 
+
+def fuel_refill_interval_seconds(amount) -> int:
+    """Return a safe refill interval for Max or a numeric fuel amount."""
+    if str(amount).lower() == "max":
+        return FUEL_INTERVAL_SECONDS
+
+    try:
+        units = min(FUEL_AMOUNT_MAX, max(1, int(amount)))
+    except (TypeError, ValueError):
+        return FUEL_INTERVAL_SECONDS
+
+    coverage = units * FUEL_UNIT_SECONDS
+    safety = max(FUEL_MIN_SAFETY_SECONDS, int(coverage * FUEL_SAFETY_RATIO))
+    return max(FUEL_UNIT_SECONDS, coverage - safety)
 
