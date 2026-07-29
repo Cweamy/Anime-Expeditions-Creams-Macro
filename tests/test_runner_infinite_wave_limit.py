@@ -91,14 +91,37 @@ def test_impossible_unlimited_reads_cannot_confirm_the_exit_wave(monkeypatch):
     assert left == [45]
 
 
-def test_later_wave_cannot_substitute_for_the_configured_exit_wave(monkeypatch):
+def test_confirmed_later_wave_substitutes_after_target_wave_was_seen(monkeypatch):
+    runner = _runner()
+    state = {}
+    left = []
+    readings = iter(((45, None), (47, None), (47, None)))
+
+    monkeypatch.setattr(
+        runner_module.vision, "capture_window_region_bgr", lambda *_args: object())
+    monkeypatch.setattr(
+        runner_module.wave_module, "read_wave", lambda _image: next(readings))
+    monkeypatch.setattr(
+        runner, "_leave_infinite_at_wave_limit",
+        lambda _hwnd, _stop, limit: left.append(limit) or True)
+
+    for _ in range(3):
+        state["next_check"] = 0
+        result = runner._check_infinite_wave_limit(
+            123, threading.Event(), 45, state)
+
+    assert result == "wave_limit"
+    assert left == [45]
+
+
+def test_later_wave_cannot_exit_without_observing_target_wave(monkeypatch):
     runner = _runner()
     state = {}
     left = []
 
     monkeypatch.setattr(
         runner_module.vision, "capture_window_region_bgr", lambda *_args: object())
-    monkeypatch.setattr(runner_module.wave_module, "read_wave", lambda _image: (47, None))
+    monkeypatch.setattr(runner_module.wave_module, "read_wave", lambda _image: (55, None))
     monkeypatch.setattr(
         runner, "_leave_infinite_at_wave_limit",
         lambda *_args: left.append(True) or True)
@@ -109,6 +132,26 @@ def test_later_wave_cannot_substitute_for_the_configured_exit_wave(monkeypatch):
             123, threading.Event(), 45, state) is None
 
     assert left == []
+
+
+def test_infinite_limit_is_checked_before_battle_blocks():
+    runner = _runner()
+    runner._check_infinite_wave_limit = MagicMock(return_value="wave_limit")
+    runner._run_battle_blocks_tick = MagicMock()
+
+    result = runner._wait_for_match_result(
+        123,
+        threading.Event(),
+        battle_blocks=[{"type": "upgrade_unit"}],
+        task={
+            "mode": "story",
+            "stage": "Infinite",
+            "infinite_wave_limit": 45,
+        },
+    )
+
+    assert result == "wave_limit"
+    runner._run_battle_blocks_tick.assert_not_called()
 
 
 def test_failed_leave_reports_failure_to_match_loop(monkeypatch):
