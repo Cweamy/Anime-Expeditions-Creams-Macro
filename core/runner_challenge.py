@@ -6,10 +6,16 @@ MacroRunner's behavior (see core/runner.py, which composes the mixins).
 Methods here run with MacroRunner's full self: shared state and helpers
 (_log, _coords, _checkpoint, _click_found_image, ...) resolve normally.
 """
+import difflib
+import re
 import threading
 import time
 
+import cv2
+
+from . import ocr
 from . import vision
+from . import ocr_windows
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- the shared constants namespace
 
@@ -32,6 +38,60 @@ class ChallengeOps:
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f'[Macro] Challenge map detected: "{map_name}" (score {match["score"]:.2f}).{suffix}')
             return map_name
+        return self._detect_challenge_map_ocr(hwnd)
+
+    def _detect_challenge_map_ocr(self, hwnd) -> str:
+        """Fallback for the tiny Daily Challenge map label shown in-game."""
+        frame = vision.capture_game_bgr(hwnd)
+        if frame is None:
+            return None
+
+        # Anchor the crop to Daily Challenge's green HUD label instead of a
+        # fixed map-name position; longer names extend farther left.
+        try:
+            hud_match = vision.find_in_gray_multiscale(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), "daily_challenge_hud")
+        except vision.TemplateNotFound:
+            return None
+        if hud_match is None:
+            return None
+        x = max(0, hud_match["x"] + hud_match["w"] - 5)
+        y = max(0, hud_match["y"] - 7)
+        crop = frame[y:min(frame.shape[0], y + 43), x:frame.shape[1]]
+        if crop.size == 0:
+            return None
+
+        # The raw glyphs are only around 10px tall. Color upscaling preserves
+        # their white fill and dark outline better than a global threshold.
+        candidates = [
+            cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_CUBIC),
+            cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_LANCZOS4),
+        ]
+        candidates.extend(ocr.candidate_masks(crop, upscale=8))
+        texts = [ocr_windows.ocr_image(candidate) for candidate in candidates]
+        aliases = {
+            "School Grounds": "grounds",
+            "Rose Kingdom": "kingdom",
+            "Fairy King Forest": "fairy",
+            "King's Tomb": "tomb",
+            "Flower Forest": "flower",
+        }
+        for text in texts:
+            tokens = re.findall(r"[a-z]+", text.lower())
+            scores = sorted(
+                (
+                    max((difflib.SequenceMatcher(None, alias, token).ratio() for token in tokens), default=0),
+                    map_name,
+                )
+                for map_name, alias in aliases.items()
+            )
+            best_score, best_map = scores[-1]
+            runner_up = scores[-2][0]
+            if best_score >= 0.65 and best_score - runner_up >= 0.12:
+                self._log(
+                    f'[Macro] Challenge map OCR: "{text.strip()}" -> '
+                    f'"{best_map}" (score {best_score:.2f}).')
+                return best_map
         return None
 
     def _challenge_has_ready_stage(self) -> bool:
@@ -48,6 +108,9 @@ class ChallengeOps:
             challenge = self._get_challenge_settings()
         except Exception:
             return False
+        daily = challenge.get("daily") or {}
+        if daily.get("enabled") and daily.get("ready"):
+            return True
         if not challenge.get("enabled"):
             return False
         cap = challenge.get("cap", 0)
@@ -63,9 +126,9 @@ class ChallengeOps:
 
     def _run_challenges(self, hwnd, stop_event: threading.Event, coords: dict,
                           default_walk_paths: dict, webhook: dict) -> None:
-        """Runs every ready (enabled, under today's cap, off its own
-        cooldown) Regular Challenge stage slot once each, in #1/#2/#3
-        order, then returns -- called once before the Task Queue ever
+        """Runs a ready Daily Challenge first, then every ready Regular
+        Challenge stage slot once each in #1/#2/#3 order. Called before
+        the Task Queue ever
         starts (see _run), AND again between repeats of an in-progress
         task whenever _challenge_has_ready_stage says a slot's ready (see
         _run_task's repeat loop), not just that one time at the start
@@ -82,10 +145,34 @@ class ChallengeOps:
         except Exception as exc:
             self._log(f"[Macro] Couldn't read Challenge settings: {exc}")
             return
-        if not challenge.get("enabled"):
+        daily = challenge.get("daily") or {}
+        if not challenge.get("enabled") and not daily.get("enabled"):
             return
 
         self._log("[Macro] Challenge is enabled -- running any ready stage(s) before the Task Queue...")
+        if daily.get("enabled") and daily.get("ready"):
+            play_mode = challenge.get("play_mode") or "solo"
+            result = self._run_one_daily_challenge(
+                hwnd, stop_event, play_mode, challenge, coords, default_walk_paths, webhook)
+            if self._checkpoint(stop_event):
+                return
+            if result in ("win", "unavailable"):
+                # The gray Unavailable state is the game's source of truth:
+                # it means this account cannot claim Daily Challenge again
+                # until the shared daily reset, even if local state was lost.
+                self._mark_challenge_stage_played("daily")
+            elif result == "loss":
+                self._log("[Macro] Daily Challenge was a loss -- leaving it ready for another attempt today.")
+            else:
+                self._log("[Macro] Daily Challenge didn't complete cleanly -- recovering to the lobby.")
+                if not self._recover_failed_challenge(hwnd, stop_event):
+                    return
+
+        # Daily can be enabled independently of the rotating Regular slots.
+        if not challenge.get("enabled"):
+            self._log("[Macro] Challenge pass finished -- moving on to the Task Queue.")
+            return
+
         cap = challenge.get("cap", 0)
         for slot in CHALLENGE_STAGE_SLOTS:
             if self._checkpoint(stop_event):
@@ -132,25 +219,18 @@ class ChallengeOps:
                            f':00/:30 window (daily count not used).')
             else:
                 self._log(f'[Macro] Challenge #{slot} didn\'t complete cleanly -- recovering to the lobby.')
-                # A quick, targeted Leave Stage + Return to Lobby is tried
-                # FIRST, on every failed slot (not just handled differently
-                # for the first one) -- most failures here still have Leave
-                # Stage sitting right there on screen (a stuck detection
-                # mid-battle, a follow-up click that never showed up), and
-                # clicking straight through it is faster and more reliable
-                # than immediately reaching for the heavier generic
-                # _recover_to_lobby (menu-backing-out, map-search-failure
-                # handling, ...) that's built for recovering from states
-                # Leave Stage doesn't even apply to. Only falls through to
-                # that heavier recovery if Leave Stage genuinely isn't there.
-                if not self._click_and_verify_gone(
-                        hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT, success_name="return"):
-                    if not self._recover_to_lobby(hwnd, stop_event):
-                        return
-                else:
-                    self._click_return_to_lobby_if_found(hwnd, stop_event)
+                if not self._recover_failed_challenge(hwnd, stop_event):
+                    return
 
         self._log("[Macro] Challenge pass finished -- moving on to the Task Queue.")
+
+    def _recover_failed_challenge(self, hwnd, stop_event: threading.Event) -> bool:
+        """Prefer the direct stage exit, then fall back to generic recovery."""
+        if not self._click_and_verify_gone(
+                hwnd, stop_event, "leave_stage", NAV_CLICK_TIMEOUT, success_name="return"):
+            return self._recover_to_lobby(hwnd, stop_event)
+        self._click_return_to_lobby_if_found(hwnd, stop_event)
+        return not self._checkpoint(stop_event)
 
     def _run_one_challenge_stage(self, hwnd, stop_event: threading.Event, slot: str, play_mode: str,
                                    challenge: dict, coords: dict, default_walk_paths: dict,
@@ -170,8 +250,27 @@ class ChallengeOps:
             return None
         if self._checkpoint(stop_event):
             return None
+        return self._run_challenge_battle(
+            hwnd, stop_event, f"Challenge #{slot}", play_mode, challenge, default_walk_paths, webhook)
 
-        self._log(f"[Macro] Challenge #{slot}: identifying the map...")
+    def _run_one_daily_challenge(self, hwnd, stop_event: threading.Event, play_mode: str,
+                                  challenge: dict, coords: dict, default_walk_paths: dict,
+                                  webhook: dict) -> str:
+        self._log(f"[Macro] Daily Challenge: entering ({play_mode})...")
+        self._set_status(current_task="Daily Challenge", map="-", action="Entering Daily Challenge...",
+                          mode="challenge", stage="Daily", difficulty="-", play_mode=play_mode, macro="-")
+        entry = self._enter_daily_challenge_stage(hwnd, stop_event, play_mode, coords, webhook)
+        if entry != "entered":
+            return entry
+        if self._checkpoint(stop_event):
+            return None
+        return self._run_challenge_battle(
+            hwnd, stop_event, "Daily Challenge", play_mode, challenge, default_walk_paths, webhook)
+
+    def _run_challenge_battle(self, hwnd, stop_event: threading.Event, label: str, play_mode: str,
+                               challenge: dict, default_walk_paths: dict, webhook: dict) -> str:
+        """Identify the assigned Story map and run the shared battle flow."""
+        self._log(f"[Macro] {label}: identifying the map...")
         self._set_status(action="Identifying Challenge map...")
         deadline = time.time() + CHALLENGE_MAP_DETECT_TIMEOUT
         detected_map = None
@@ -183,14 +282,14 @@ class ChallengeOps:
                 break
             time.sleep(MATCH_RESULT_POLL_INTERVAL)
         if not detected_map:
-            self._log(f"[Macro] Challenge #{slot}: never recognized a map -- stopping.")
+            self._log(f"[Macro] {label}: never recognized a map -- stopping.")
             return None
 
         macro_name = (challenge.get("maps", {}).get(detected_map) or {}).get("macro") or ""
         if macro_name:
-            self._log(f'[Macro] Challenge #{slot} landed on "{detected_map}" -- running "{macro_name}".')
+            self._log(f'[Macro] {label} landed on "{detected_map}" -- running "{macro_name}".')
         else:
-            self._log(f'[Macro] Challenge #{slot} landed on "{detected_map}" -- no Macro Operation assigned for it.')
+            self._log(f'[Macro] {label} landed on "{detected_map}" -- no Macro Operation assigned for it.')
 
         # mode="story" (not "challenge") deliberately -- this reuses the
         # EXACT SAME Pre Start/Start Game/Victory-Defeat pipeline a real
@@ -198,8 +297,10 @@ class ChallengeOps:
         # that's genuinely what Challenge's own battle is. is_challenge is
         # the marker other code checks when it actually needs to tell the
         # two apart.
+        is_daily = label == "Daily Challenge"
         task = {
-            "mode": "story", "is_challenge": True, "map": detected_map, "difficulty": "Normal",
+            "mode": "story", "is_challenge": True, "is_daily_challenge": is_daily,
+            "map": detected_map, "difficulty": "Hard" if is_daily else "Normal",
             "macro": macro_name, "play_mode": play_mode, "repeat": 1, "team": "", "equipment": "include",
         }
         self._set_status(map=detected_map, action="Battle...", difficulty=task["difficulty"], macro=macro_name or "-")
@@ -225,6 +326,59 @@ class ChallengeOps:
         equivalent of _run_task_setup, except there's no map/difficulty to
         pick (the game assigns both at random), just a fixed-position
         stage row and a screen-load confirmation."""
+        if not self._open_challenge_screen(hwnd, stop_event):
+            return False
+
+        if slot not in CHALLENGE_STAGE_SLOTS:
+            self._log(f'[Macro] Unknown Challenge stage slot "{slot}".')
+            return False
+        x, y = self._cxy(f"challenge_stage_{slot}")
+        self._log(f'[Macro] Challenge screen loaded -- clicking stage slot #{slot} at ({x}, {y}).')
+        self._set_status(action=f"Clicking Challenge #{slot}...")
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._mouse.click(left + x, top + y)
+        if self._checkpoint(stop_event):
+            return False
+        return self._enter_selected_challenge(hwnd, stop_event, play_mode, coords, webhook, daily=False)
+
+    def _enter_daily_challenge_stage(self, hwnd, stop_event: threading.Event, play_mode: str,
+                                      coords: dict, webhook: dict) -> str:
+        """Enter Daily Challenge, or report its gray unavailable state."""
+        if not self._open_challenge_screen(hwnd, stop_event):
+            return None
+        try:
+            unavailable = vision.find_image(hwnd, "daily_challenge_unavailable")
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't check Daily Challenge availability: {exc}")
+            return None
+        if unavailable is not None:
+            self._log(
+                f'[Macro] Daily Challenge is unavailable for this game day '
+                f'(score {unavailable["score"]:.2f}) -- skipping.')
+            # We opened a menu but did not enter a stage; return to the lobby
+            # before Regular Challenge or the Task Queue continues.
+            return "unavailable" if self._recover_to_lobby(hwnd, stop_event) else None
+
+        self._set_status(action="Clicking Daily Challenge...")
+        if self._click_found_image(
+                hwnd, "daily_challenge_available", CHALLENGE_SCREEN_TIMEOUT, stop_event) is None:
+            self._log('[Macro] Daily Challenge was neither available nor unavailable -- stopping.')
+            return None
+        if self._checkpoint(stop_event):
+            return None
+        self._set_status(action="Selecting Daily Challenge stage...")
+        if self._click_found_image(
+                hwnd, "daily_challenge_stage", CHALLENGE_SCREEN_TIMEOUT, stop_event) is None:
+            self._log('[Macro] Daily Challenge stage card never appeared -- stopping.')
+            return None
+        if self._checkpoint(stop_event):
+            return None
+        if not self._enter_selected_challenge(hwnd, stop_event, play_mode, coords, webhook, daily=True):
+            return None
+        return "entered"
+
+    def _open_challenge_screen(self, hwnd, stop_event: threading.Event) -> bool:
+        """Lobby -> Play -> Challenge and wait for the panel to finish loading."""
         if not self._ensure_lobby(hwnd, stop_event):
             return False
         if self._checkpoint(stop_event):
@@ -251,19 +405,13 @@ class ChallengeOps:
                 self._log(f'[Macro] "challenge_loaded" not found within {CHALLENGE_SCREEN_TIMEOUT:.0f}s -- '
                            f"can't confirm the Challenge screen opened, stopping.")
             return False
+        return True
 
-        if slot not in CHALLENGE_STAGE_SLOTS:
-            self._log(f'[Macro] Unknown Challenge stage slot "{slot}".')
-            return False
-        x, y = self._cxy(f"challenge_stage_{slot}")
-        self._log(f'[Macro] Challenge screen loaded -- clicking stage slot #{slot} at ({x}, {y}).')
-        self._set_status(action=f"Clicking Challenge #{slot}...")
-        left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._mouse.click(left + x, top + y)
-        if self._checkpoint(stop_event):
-            return False
-
-        challenge_task_stub = {"mode": "challenge", "is_challenge": True}
+    def _enter_selected_challenge(self, hwnd, stop_event: threading.Event, play_mode: str,
+                                   coords: dict, webhook: dict, daily: bool) -> bool:
+        """Use the shared Select Stage / matchmaking controls after selection."""
+        challenge_task_stub = {
+            "mode": "challenge", "is_challenge": True, "is_daily_challenge": daily}
         if play_mode == "matchmaking":
             if not self._click_enter_matchmaking(hwnd, stop_event, coords, "challenge"):
                 return False

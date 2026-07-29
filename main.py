@@ -11,7 +11,7 @@ import json
 import queue
 import subprocess
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from core import window as wm
 from core import config
@@ -196,8 +196,9 @@ RUN_HISTORY_LIMIT = 50  # oldest entries drop off past this -- a running log, no
 # keyed by MAP (which macro to run for it, how many times it's been played
 # today) while the 3 slots are just simple on/off toggles for "attempt
 # whatever's in this slot". CHALLENGE_STORY_MAPS matches TASK_DATA.story's
-# maps in ui/app.js. Daily counts use the game's shared 00:00 UTC rollover;
-# the independent stage-availability clock still rotates every :00/:30.
+# maps in ui/app.js. Daily counts and the once-a-day Daily Challenge use the
+# game's shared 00:00 UTC rollover; the independent Regular Challenge
+# stage-availability clock still rotates every :00/:30.
 CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest"]
 CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
 CHALLENGE_DAILY_CAP = 10  # fixed, not user-editable -- see get_challenge_settings
@@ -246,34 +247,52 @@ def _current_challenge_window_start(now: float = None) -> float:
 
 
 def _time_until_challenge_ready(challenge: dict) -> str:
-    """"Ready" if any enabled, not-yet-capped stage slot hasn't been
-    played in the CURRENT :00/:30 window yet; otherwise MM:SS until the
-    next :00/:30 mark (same clock for every slot). "All capped" if every
-    enabled slot has hit today's daily cap, "No stages enabled" if none
-    are toggled on at all. Computed fresh on every get_status() poll, same
-    "don't store text, compute it live" approach as _format_ago."""
+    """"Ready" if Daily Challenge or any enabled Regular slot is ready.
+
+    Regular slots rotate at :00/:30. Daily Challenge becomes ready at the
+    shared 00:00 UTC game reset. The shortest relevant wait is returned
+    without storing a countdown, so a long-running app crosses either
+    boundary without a restart.
+    """
+    daily = challenge.get("daily") or {}
+    daily_enabled = bool(daily.get("enabled"))
+    if daily_enabled and daily.get("ready"):
+        return "Ready"
+
     cap = challenge.get("cap", 0)
     any_enabled = False
     any_uncapped = False
-    for info in challenge.get("stages", {}).values():
-        if not info.get("enabled"):
-            continue
-        any_enabled = True
-        if cap and info.get("count", 0) >= cap:
-            continue
-        any_uncapped = True
-        if info.get("ready"):
-            return "Ready"
-    if not any_enabled:
+    if challenge.get("enabled"):
+        for info in challenge.get("stages", {}).values():
+            if not info.get("enabled"):
+                continue
+            any_enabled = True
+            if cap and info.get("count", 0) >= cap:
+                continue
+            any_uncapped = True
+            if info.get("ready"):
+                return "Ready"
+
+    if not any_enabled and not daily_enabled:
         return "No stages enabled"
-    if not any_uncapped:
+    if not any_uncapped and not daily_enabled:
         return "All capped"
+
     now = time.time()
-    local = time.localtime(now)
-    secs_into_hour = local.tm_min * 60 + local.tm_sec
-    remaining = (1800 - secs_into_hour) if secs_into_hour < 1800 else (3600 - secs_into_hour)
-    mins, secs = divmod(int(remaining), 60)
-    return f"{mins:02d}:{secs:02d}"
+    waits = []
+    if any_uncapped:
+        local = time.localtime(now)
+        secs_into_hour = local.tm_min * 60 + local.tm_sec
+        waits.append((1800 - secs_into_hour) if secs_into_hour < 1800 else (3600 - secs_into_hour))
+    if daily_enabled:
+        utc_now = datetime.fromtimestamp(now, timezone.utc)
+        next_reset = (utc_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        waits.append(max(1, int(next_reset.timestamp() - now)))
+
+    remaining = min(waits)
+    hours, remainder = divmod(int(remaining), 3600)
+    mins, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{mins:02d}:{secs:02d}" if hours else f"{mins:02d}:{secs:02d}"
 
 
 def _get_build_info() -> str:
@@ -481,8 +500,9 @@ class Api:
         data = cfg.load()
         try:
             challenge = self.get_challenge_settings()
+            challenge_enabled = challenge.get("enabled") or (challenge.get("daily") or {}).get("enabled")
             time_until_challenge = (_time_until_challenge_ready(challenge)
-                                     if challenge.get("enabled") else "Disabled")
+                                     if challenge_enabled else "Disabled")
         except Exception:
             time_until_challenge = "Disabled"
         # run_history is newest-first (see _record_match_result) -- reversed to
@@ -655,7 +675,11 @@ class Api:
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / (wins + losses) * 100) if (wins + losses) else None,
-            "time_until_challenge": _time_until_challenge_ready(challenge) if challenge.get("enabled") else "Disabled",
+            "time_until_challenge": (
+                _time_until_challenge_ready(challenge)
+                if challenge.get("enabled") or (challenge.get("daily") or {}).get("enabled")
+                else "Disabled"
+            ),
             "all_time_wins": all_time_wins,
             "all_time_losses": all_time_losses,
             "all_time_win_rate": (
@@ -801,6 +825,10 @@ class Api:
         return {
             "enabled": False,
             "play_mode": "solo",
+            "daily": {
+                "enabled": False,
+                "last_completed_period": "",
+            },
             "cap": CHALLENGE_DAILY_CAP,
             # The daily play limit tracks each STAGE SLOT (Regular Challenge
             # #1/#2/#3), not the map -- whichever map is currently rotated
@@ -835,6 +863,11 @@ class Api:
         merged["cap"] = CHALLENGE_DAILY_CAP  # fixed -- ignore any stale saved value from before this was hardcoded
         if merged.get("play_mode") not in ("solo", "matchmaking"):
             merged["play_mode"] = "solo"
+        saved_daily = saved.get("daily") or {}
+        merged["daily"] = {
+            "enabled": bool(saved_daily.get("enabled", False)),
+            "last_completed_period": str(saved_daily.get("last_completed_period") or ""),
+        }
         window_start = _current_challenge_window_start()
         merged_stages = {}
         for slot in CHALLENGE_STAGE_SLOTS:
@@ -866,6 +899,7 @@ class Api:
         merged["maps"] = merged_maps
 
         reset_period = _current_challenge_reset_period()
+        merged["daily"]["ready"] = merged["daily"]["last_completed_period"] != reset_period
         if saved.get("reset_schedule") != CHALLENGE_RESET_SCHEDULE:
             # Older versions stored the computer's local date. That value
             # cannot be compared safely with a UTC game-day identifier,
@@ -883,13 +917,19 @@ class Api:
         return merged
 
     def mark_challenge_stage_played(self, stage: str, count_play: bool = True) -> dict:
-        # Called by the runner right after actually running a Challenge
-        # stage -- starts that slot's cooldown (not ready again until the
-        # next :00/:30 window) and bumps its daily count in one write.
+        # "daily" rests the once-a-day challenge until the next game day.
+        # A numbered Regular slot starts its :00/:30 cooldown and bumps its
+        # daily count in one write.
         # count_play=False is the LOSS case: the cooldown still applies
         # (retrying the same rotated-in stage right away just loses again
         # -- wait for the next window), but a loss shouldn't eat one of the
         # day's capped plays the way a real completion does.
+        if stage == "daily":
+            challenge = self.get_challenge_settings()
+            challenge["daily"]["last_completed_period"] = _current_challenge_reset_period()
+            challenge["daily"]["ready"] = False
+            cfg.update({"challenge": challenge})
+            return {"ok": True}
         if stage not in CHALLENGE_STAGE_SLOTS:
             return {"ok": False, "reason": "bad_stage"}
         challenge = self.get_challenge_settings()
@@ -910,6 +950,27 @@ class Api:
             return {"ok": False, "reason": "bad_play_mode"}
         challenge = self.get_challenge_settings()
         challenge["play_mode"] = play_mode
+        cfg.update({"challenge": challenge})
+        return {"ok": True}
+
+    def set_daily_challenge_enabled(self, enabled: bool) -> dict:
+        challenge = self.get_challenge_settings()
+        challenge["daily"]["enabled"] = bool(enabled)
+        cfg.update({"challenge": challenge})
+        return {"ok": True}
+
+    def set_daily_challenge_count(self, count) -> dict:
+        """Manually set today's once-per-day progress to 0 or 1."""
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_count"}
+        if count not in (0, 1):
+            return {"ok": False, "reason": "bad_count"}
+        challenge = self.get_challenge_settings()
+        challenge["daily"]["last_completed_period"] = (
+            _current_challenge_reset_period() if count else "")
+        challenge["daily"]["ready"] = count == 0
         cfg.update({"challenge": challenge})
         return {"ok": True}
 
@@ -967,10 +1028,12 @@ class Api:
         for s in challenge["stages"].values():
             s["count"] = 0
             s["last_played_at"] = 0  # also clears cooldown -- every slot becomes available immediately
+        challenge["daily"]["last_completed_period"] = ""
+        challenge["daily"]["ready"] = True
         challenge["last_reset_date"] = _current_challenge_reset_period()
         challenge["reset_schedule"] = CHALLENGE_RESET_SCHEDULE
         cfg.update({"challenge": challenge})
-        self.push_log("[Challenge] Play counts and cooldowns reset manually.")
+        self.push_log("[Challenge] Daily status, play counts, and cooldowns reset manually.")
         return {"ok": True}
 
     # ── Auto Crafting (see core/runner_crafting.py) ──
@@ -979,6 +1042,7 @@ class Api:
         return {
             "enabled": False,
             "play_mode": "solo",
+            "summon_banner": "standard",
             "maps": {name: {"macro": ""} for name in BOUNTY_STORY_MAPS},
         }
 
@@ -987,6 +1051,8 @@ class Api:
         merged = {**self._default_bounty_settings(), **saved}
         if merged.get("play_mode") not in ("solo", "matchmaking"):
             merged["play_mode"] = "solo"
+        if merged.get("summon_banner") not in ("standard", "villain"):
+            merged["summon_banner"] = "standard"
         saved_maps = saved.get("maps") or {}
         merged["maps"] = {
             name: {"macro": (saved_maps.get(name) or {}).get("macro") or ""}
@@ -1005,6 +1071,14 @@ class Api:
             return {"ok": False, "reason": "bad_play_mode"}
         settings = self.get_bounty_settings()
         settings["play_mode"] = play_mode
+        cfg.update({"bounty": settings})
+        return {"ok": True}
+
+    def set_bounty_summon_banner(self, banner: str) -> dict:
+        if banner not in ("standard", "villain"):
+            return {"ok": False, "reason": "bad_banner"}
+        settings = self.get_bounty_settings()
+        settings["summon_banner"] = banner
         cfg.update({"bounty": settings})
         return {"ok": True}
 

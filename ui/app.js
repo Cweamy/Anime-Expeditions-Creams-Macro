@@ -2906,6 +2906,17 @@ async function refreshChallengeScreen() {
 
 function renderChallengeScreen() {
   const s = challengeState;
+  const daily = (s && s.daily) || { enabled: false, ready: true };
+  const dailyEnabledBtn = document.getElementById('toggle-daily-challenge-enabled');
+  if (dailyEnabledBtn) dailyEnabledBtn.classList.toggle('on', !!daily.enabled);
+  const dailyStatus = document.getElementById('daily-challenge-status');
+  if (dailyStatus) {
+    dailyStatus.textContent = daily.ready ? 'Ready' : 'Completed today';
+    dailyStatus.className = daily.ready ? 'challenge-ready-chip' : 'challenge-cap-chip';
+  }
+  const dailyCount = document.getElementById('daily-challenge-count');
+  if (dailyCount) dailyCount.value = daily.ready ? 0 : 1;
+
   const enabledBtn = document.getElementById('toggle-challenge-enabled');
   if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
   const playMode = (s && s.play_mode) || 'solo';
@@ -2991,6 +3002,19 @@ async function setChallengePlayMode(playMode) {
   await refreshChallengeScreen();
 }
 
+async function toggleDailyChallengeEnabled(btn) {
+  const isOn = !btn.classList.contains('on');
+  btn.classList.toggle('on', isOn);
+  bounceToggle(btn);
+  try { await pywebview.api.set_daily_challenge_enabled(isOn); } catch (e) {}
+}
+
+async function setDailyChallengeCount(value) {
+  const count = Math.max(0, Math.min(1, parseInt(value, 10) || 0));
+  try { await pywebview.api.set_daily_challenge_count(count); } catch (e) {}
+  await refreshChallengeScreen();
+}
+
 async function toggleChallengeStage(stage, btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
@@ -3015,7 +3039,7 @@ async function setChallengeStageCooldown(stage, onCooldown) {
 
 async function resetChallengeCounts() {
   try { await pywebview.api.reset_challenge_counts(); } catch (e) {}
-  addLog('[Challenge] Play counts reset.');
+  addLog('[Challenge] Daily status, play counts, and cooldowns reset.');
   await refreshChallengeScreen();
 }
 
@@ -3040,6 +3064,9 @@ function renderBountyScreen() {
   const playMode = (s && s.play_mode) || 'solo';
   document.getElementById('bounty-mode-solo')?.classList.toggle('active', playMode === 'solo');
   document.getElementById('bounty-mode-matchmaking')?.classList.toggle('active', playMode === 'matchmaking');
+  const summonBanner = (s && s.summon_banner) || 'standard';
+  document.getElementById('bounty-banner-standard')?.classList.toggle('active', summonBanner === 'standard');
+  document.getElementById('bounty-banner-villain')?.classList.toggle('active', summonBanner === 'villain');
 
   const list = document.getElementById('bounty-map-list');
   if (!list) return;
@@ -3076,6 +3103,11 @@ async function toggleBountyEnabled(btn) {
 
 async function setBountyPlayMode(playMode) {
   try { await pywebview.api.set_bounty_play_mode(playMode); } catch (e) {}
+  await refreshBountyScreen();
+}
+
+async function setBountySummonBanner(banner) {
+  try { await pywebview.api.set_bounty_summon_banner(banner); } catch (e) {}
   await refreshBountyScreen();
 }
 
