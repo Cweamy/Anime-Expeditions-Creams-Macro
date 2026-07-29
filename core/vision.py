@@ -770,17 +770,10 @@ def save_match_debug(hwnd: int, name: str, match: dict) -> str:
     either one with a similar score; the drawn box makes that immediately
     obvious. match must be in full-window coords (what find_image/
     wait_for_image return -- already offset if a region was used)."""
-    import mss
     os.makedirs(DEBUG_DIR, exist_ok=True)
-    left, top, right, bottom = wm.get_window_rect_screen(hwnd)
-    with mss.MSS() as sct:
-        shot = sct.grab({"left": left, "top": top, "width": right - left, "height": bottom - top})
-        bgr = np.array(shot)[:, :, :3].copy()
-    # match coords are reference-space -- normalize the screenshot to the
-    # same space before drawing on it (identity at the Windows norm, see
-    # capture_game_gray).
-    if bgr.shape[:2] != (config.FIXED_WIN_H, config.FIXED_WIN_W):
-        bgr = cv2.resize(bgr, (config.FIXED_WIN_W, config.FIXED_WIN_H), interpolation=cv2.INTER_AREA)
+    bgr = capture_game_bgr(hwnd)
+    if bgr is None:
+        raise RuntimeError("window capture returned no image")
     x, y, w, h = match["x"], match["y"], match["w"], match["h"]
     cv2.rectangle(bgr, (x, y), (x + w, y + h), (0, 255, 0), 2)
     cv2.putText(bgr, f"{name} {match['score']:.2f}", (x, max(12, y - 6)),
@@ -811,14 +804,10 @@ def save_region_debug(hwnd: int, name: str, region: tuple) -> str:
     save_match_debug for that) to debug/region_<name>.png, so a fixed search
     region can be visually checked/tuned without needing a match to trigger
     first. region is in the game window's own client coords (x, y, w, h)."""
-    import mss
     os.makedirs(DEBUG_DIR, exist_ok=True)
-    left, top, sx, sy = _window_geometry(hwnd)
-    rx, ry, rw, rh = region
-    with mss.MSS() as sct:
-        shot = sct.grab({"left": int(left + rx * sx), "top": int(top + ry * sy),
-                          "width": int(round(rw * sx)), "height": int(round(rh * sy))})
-        bgr = np.array(shot)[:, :, :3]
+    bgr = capture_game_bgr(hwnd, region)
+    if bgr is None:
+        raise RuntimeError("window capture returned no image")
     path = os.path.join(DEBUG_DIR, f"region_{name}.png")
     cv2.imwrite(path, bgr)
     return path
@@ -967,7 +956,11 @@ def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float 
         match = find_image(hwnd, name, region, threshold, template_dir)
         if match is not None:
             return match
-        time.sleep(interval)
+        if stop_event is not None:
+            if stop_event.wait(interval):
+                return None
+        else:
+            time.sleep(interval)
     return None
 
 
@@ -1093,7 +1086,11 @@ def wait_for_image_any(hwnd: int, names: tuple, region: tuple = None, threshold:
         match, name = find_image_any(hwnd, names, region, threshold, template_dir)
         if match is not None:
             return match, name
-        time.sleep(interval)
+        if stop_event is not None:
+            if stop_event.wait(interval):
+                return None, None
+        else:
+            time.sleep(interval)
     return None, None
 
 

@@ -89,3 +89,24 @@ def test_install_tesseract_real_failure():
         ok = install_tesseract(log=logs.append)
         assert ok is False
         assert any("winget install failed (exit 1)" in m for m in logs)
+
+
+def test_install_tesseract_already_installed_output_text():
+    """Test text matching when exit code is unexpected but output says already installed."""
+    logs = []
+    def mock_run(cmd, **kwargs):
+        if "--version" in cmd:
+            res = MagicMock()
+            res.returncode = 0
+            return res
+        res = MagicMock()
+        res.returncode = 999
+        res.stdout = "Foi encontrado um pacote existente já instalado."
+        res.stderr = ""
+        return res
+
+    with patch("subprocess.run", side_effect=mock_run):
+        ok = install_tesseract(log=logs.append)
+        assert ok is True
+        assert "[Tesseract] Already installed and up to date." in logs
+

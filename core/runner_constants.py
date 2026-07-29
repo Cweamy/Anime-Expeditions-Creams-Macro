@@ -53,6 +53,11 @@ LOBBY_CHECK_TIMEOUT = 15.0   # how long to wait for the Play button to appear be
 STORY_SCREEN_TIMEOUT = 10.0  # Play's menu (Story/Raid) animates in, not instant
 BACK_CONFIRM_TIMEOUT = 8.0   # how long to wait for nav_back after clicking Story, to confirm it landed
 GAMEMODE_CLICK_TIMEOUT = 8.0  # how long to search for the Raid card once the menu's open
+# A gamemode click can be misdirected onto a nearby player/invite control.
+# Check immediately afterward and, if that opened a party overlay, dismiss
+# it and retry the exact intended card instead of claiming navigation worked.
+GAMEMODE_OVERLAY_CHECK_DELAY = 0.5
+GAMEMODE_OVERLAY_RETRY_ATTEMPTS = 2
 # A perfectly-matched Play click that never opens the gamemode menu is
 # exactly the "click didn't register" focus flakiness _click_play's own
 # activate_window() reassertion was already added for (see its comment) --
@@ -200,6 +205,21 @@ EVENT_ACT_IMAGES = {
 EVENT_ACT_SCROLL_FROM_INDEX = 2  # 0-based into EVENT_ACT_ORDER: index 2 == Act "3"
 EVENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Event screen (nav_event / event_gamemode / the Act card) to appear
 
+# Auto Bounty derives all objective clicks from the live board. These values
+# only bound waits and the board's outer scroll gesture.
+BOUNTY_SCREEN_TIMEOUT = 10.0
+BOUNTY_DESTINATION_TIMEOUT = 10.0
+BOUNTY_NAV_CLICK_ATTEMPTS = 3
+BOUNTY_NAV_CLICK_VERIFY_TIMEOUT = 4.0
+BOUNTY_CLICK_FOCUS_SETTLE = 0.2
+BOUNTY_OBJECTIVE_FAILURE_ATTEMPTS = 3
+BOUNTY_MAX_CLAIMS_PER_START = 12
+BOUNTY_SCROLL_HOVER = (720, 650)
+BOUNTY_HORIZONTAL_WHEEL_DELTA = -360
+BOUNTY_HORIZONTAL_SCROLL_STEPS = 8
+BOUNTY_SCROLL_SETTLE = 0.45
+BOUNTY_MAX_OBJECTIVES_PER_START = 10
+
 # Villian Invasion Act 4 ("Crow - Dawn") relic gate. DROP_RELIC_IMAGE is the
 # Crow Relic reward shown on the Victory screen (relics only drop on a win) --
 # spotting it is what triggers a farm task's optional auto-divert to Act 4.
@@ -310,6 +330,7 @@ RAID_IMAGE_NAMES = ("raid",)
 STORY_IMAGE_NAMES = ("story",)
 NAV_START_IMAGE_NAMES = ("nav_start",)
 NAV_DISBAND_IMAGE_NAMES = ("nav_disband",)
+PARTY_OVERLAY_IMAGE_NAMES = NAV_DISBAND_IMAGE_NAMES + ("invite_players_open",)
 # 10 visual variants on file, all inside Assets/ui/priority_upgrade/ --
 # every one tried per search, same folder-variant mechanism as above.
 PRIORITY_UPGRADE_IMAGE_NAMES = ("priority_upgrade",)
@@ -340,6 +361,10 @@ START_GAME_CHECK_TIMEOUT = 1.5
 NAV_CLICK_TIMEOUT = 8.0  # nav_settings / nav_search in the Auto Vote Start fallback
 REPEAT_STAGE_MODAL_CLEAR_TIMEOUT = 5.0  # how long to wait for the Victory/Defeat banner to actually clear after Repeat Stage
 REWARD_CARD_CLEAR_TIMEOUT = 6.0  # how long to spend dismissing "select upgrade card" before Repeat/Leave Stage
+# Character/reward portraits on Victory can open a centered Obtainments
+# modal. Its Close button stays in this middle-bottom band even when the
+# underlying result panel and hotbar shift slightly.
+RESULT_MODAL_CLOSE_REGION = (350, 500, 450, 110)
 # The Victory/Defeat panel's reward row streams its items in one at a time, so
 # the screenshot (and the Crow Relic drop check) used to be able to fire before
 # they'd all rendered. A short settle lets the row finish populating first.

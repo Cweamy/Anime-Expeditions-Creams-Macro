@@ -90,9 +90,18 @@ nav_back.png
 
 nav_disband.png
   Optional. Checked right before clicking the gamemode card (Story/Raid/
-  Expedition) for a "Disband Party" prompt that can block the click --
-  found and clicked, this clears the way first. Missing template just
-  skips the check.
+  Challenge/Expedition) for a party prompt that can block the click.
+  Folder variants cover both "Disband Party" and incoming-invite
+  "Decline" buttons. The prompt is dismissed and verified before the
+  gamemode click; a missing template just skips the optional check.
+
+invite_players_open.png / invite_players_close.png
+  Optional. The outgoing "Invite Players" browser can also block a
+  gamemode click after an accidental click on a player portrait or invite
+  control. Its unique title must be detected before the generic-looking
+  Close button is accepted; the same zero-hold, park, and verify recovery
+  used for Disband/Decline then clears it. If the intended gamemode click
+  itself opened this browser, that exact gamemode is retried once.
 
 story/
   The Story gamemode card. Searched first (its folder holds two crops of
@@ -179,7 +188,8 @@ victory.png / defeat.png
   makes the task repeat the expedition via Repeat Stage like any other
   loss (core.runner._check_expedition_wave_result). If Expedition's defeat
   art ever renders differently on your setup, add a crop of it to the
-  defeat/ folder as another variant.
+  defeat/ folder as another variant. Victory's current-layout variants
+  also cover internal UI rendering from 85-115%.
 
 School Grounds.png / Rose Kingdom.png / Fairy King Forest.png /
 King's Tomb.png / Flower Forest.png
@@ -293,7 +303,8 @@ leave_stage.png
   mid-task recovery, and the normal end-of-run flow when no repeats are
   left (verified/retried click that backs out to the lobby). The live
   variant is the top-left door icon beside the cogwheel, which is present
-  during an active stage and opens Exit Confirmation.
+  during an active stage and opens Exit Confirmation. Small/large variants
+  cover internal UI rendering from 85-115%.
 
 repeat_stage.png
   End-of-match flow when the task has repeats left (and isn't
@@ -305,7 +316,15 @@ return.png
   confirmation instead of backing out on its own; polled briefly (not a
   one-shot check -- the popup can take a moment to animate in) right after
   every Leave Stage click and clicked if found. The live variant covers
-  the larger red button shown by the active-stage Exit Confirmation.
+  the larger red button shown by the active-stage Exit Confirmation, with
+  small/large variants for 85-115% rendering.
+
+result_modal_close.png
+  Victory-only recovery. A stray click on a character/reward portrait can
+  open its centered Obtainments modal over Repeat/Leave Stage. The macro
+  finds this large Close button only in its middle-bottom band, clicks it
+  without a hold to prevent click-through, parks the cursor, and verifies
+  the modal closed. Folder variants cover 85-115% rendering.
 
 team.png
   Used by Team Loadout application (core.runner._apply_team_loadout).

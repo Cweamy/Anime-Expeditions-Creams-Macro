@@ -2017,3 +2017,17 @@ li.fail .onb-ingame-name { color: var(--rose); }
   border-radius: 6px; padding: 2px 10px; cursor: pointer; margin-left: 4px;
 }
 .im-card-use:hover { background: var(--brand); color: #000; }
+
+/* Lightweight badge style for Diagnostics / Preflight logs */
+.log-entry.log-badge-diagnostic {
+  background: color-mix(in srgb, var(--cat) 8%, transparent);
+  border-left: 2px solid var(--cat);
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+.log-entry.log-badge-diagnostic .log-tag {
+  background: color-mix(in srgb, var(--cat) 15%, transparent);
+  padding: 1px 4px;
+  border-radius: 4px;
+  margin-right: 4px;
+}

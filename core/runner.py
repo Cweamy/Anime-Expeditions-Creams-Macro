@@ -26,9 +26,11 @@ from . import ocr_windows
 from . import stage_select
 from . import vision
 from . import wave as wave_module
+from .diagnostics import FailureCategory, RecoveryAction, FailureReport, create_failure_report, save_failure_snapshot
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- see runner_constants' docstring
 from .runner_blocks import BlockOps
+from .runner_bounty import BountyOps
 from .runner_challenge import ChallengeOps
 from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
@@ -72,14 +74,14 @@ def _find_team_load_button(frame, expected_y):
     return cx, cy
 
 
-class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
+class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
     active at a time (one physical game window, one macro)."""
 
     def __init__(self, mouse, keyboard, log, set_status=None, record_result=None,
                  get_challenge_settings=None, mark_challenge_stage_played=None, get_run_stats=None,
-                 get_crafting_settings=None, set_crafting_count=None):
+                 get_crafting_settings=None, set_crafting_count=None, get_bounty_settings=None):
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
@@ -130,6 +132,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         # avoids core/ reaching back into main.py). None (the default, e.g.
         # in tests/CLI mode) just makes _run_challenges a no-op.
         self._get_challenge_settings = get_challenge_settings
+        self._get_bounty_settings = get_bounty_settings
         self._mark_challenge_stage_played = mark_challenge_stage_played or (lambda *a, **kw: None)
         # Returns a fresh session/all-time win-loss + session_start + version
         # snapshot for the match-result webhook (see _send_result_webhook).
@@ -354,7 +357,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             self._log("[Macro] Resumed.")
             self._paused_logged = False
         if stop_event.is_set():
-            self._try_leave_stage()
+            self._try_leave_stage(stop_event)
             # Say WHAT was in flight when the stop landed, not just
             # "Stopped." -- someone stopping a run that's visibly hung
             # (e.g. sitting on "Waiting for gamemode menu...") is exactly
@@ -376,23 +379,20 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             return True
         return False
 
-    def _interruptible_sleep(self, seconds: float, stop_event: threading.Event) -> None:
+    def _interruptible_sleep(self, seconds: float, stop_event: threading.Event = None) -> None:
         """time.sleep(), but bails out immediately once stop_event fires
         instead of blocking it for the full duration -- F2/Stop is supposed
         to stay instant (see _checkpoint/_try_leave_stage's own comment on
         this), which a plain time.sleep(5.0) settle delay quietly breaks
-        for however long is left on it. Used for the multi-second Expedition
-        settle delays (EXTRACT_CONFIRM_SETTLE, EXPEDITION_CONTINUE_COOLDOWN)
-        -- short delays elsewhere (SETTLE_DELAY and smaller) aren't worth
-        the same treatment, they're not long enough to actually notice."""
-        deadline = time.time() + seconds
-        while True:
-            remaining = deadline - time.time()
-            if remaining <= 0 or (stop_event is not None and stop_event.is_set()):
-                return
-            time.sleep(min(0.15, remaining))
+        for however long is left on it."""
+        if seconds <= 0:
+            return
+        if stop_event is not None:
+            stop_event.wait(seconds)
+        else:
+            time.sleep(seconds)
 
-    def _try_leave_stage(self) -> None:
+    def _try_leave_stage(self, stop_event: threading.Event = None) -> None:
         # F2/Stop must stay instant (see main.py's hotkey wiring), so this is
         # a single one-shot check, not a wait -- no match just means either
         # Leave Stage isn't on screen right now (not mid-match) or the image
@@ -402,6 +402,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         if self._left_stage_this_run or self._current_hwnd is None:
             return
         self._left_stage_this_run = True
+        stop_evt = stop_event or getattr(self, "_stop_event", None)
         try:
             match = vision.find_image(self._current_hwnd, "leave_stage")
         except vision.TemplateNotFound:
@@ -409,8 +410,8 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         if match is not None:
             self._log(f"[Macro] Stopping -- clicking Leave Stage (score {match['score']:.2f}) to quit to menu.")
             vision.click_match(self._mouse, self._current_hwnd, match)
-            self._interruptible_sleep(0.5, stop_event)
-            self._click_return_to_lobby_if_found(self._current_hwnd, stop_event=stop_event)
+            self._interruptible_sleep(0.5, stop_evt)
+            self._click_return_to_lobby_if_found(self._current_hwnd, stop_event=stop_evt)
 
     def _click_return_to_lobby_if_found(self, hwnd, stop_event: threading.Event = None) -> bool:
         # Leave Stage can bring up its own "Return to Lobby" confirmation
@@ -498,6 +499,48 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
         return True
+
+    def _clear_result_obtainment_modal(self, hwnd, stop_event: threading.Event = None) -> bool:
+        """Dismiss a character/reward Obtainments modal over Victory.
+
+        The modal can be opened by a stray click on the result panel's unit
+        portraits. Its Close button disappears over another clickable result
+        control, so use a zero-hold click and immediately park away to avoid
+        clicking through into the newly exposed panel.
+        """
+        try:
+            match = vision.find_image(
+                hwnd, "result_modal_close", region=RESULT_MODAL_CLOSE_REGION)
+        except vision.TemplateNotFound:
+            return True
+        if match is None:
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        park_x, park_y = self._cxy("unit_info_reset")
+        for attempt in range(1, 3):
+            debug_path = self._debug_save(hwnd, "result_modal_close", match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f"[Macro] Found a Victory Obtainments modal (score {match['score']:.2f}) -- "
+                       f"closing it (attempt {attempt}/2).{suffix}")
+            if not wm.activate_window(hwnd):
+                self._log("[Macro] Couldn't confirm focus before closing the Victory modal.")
+            click_x, click_y = vision.ref_to_screen(hwnd, match["cx"], match["cy"])
+            self._mouse.click(click_x, click_y, hold=0.0)
+            self._mouse.move_to(left + park_x, top + park_y)
+            if stop_event is not None and stop_event.is_set():
+                return False
+            time.sleep(0.3)
+            try:
+                match = vision.find_image(
+                    hwnd, "result_modal_close", region=RESULT_MODAL_CLOSE_REGION)
+            except vision.TemplateNotFound:
+                return True
+            if match is None:
+                return True
+
+        self._log("[Macro] Victory Obtainments modal still showing after 2 close attempts -- stopping.")
+        return False
 
 
     def _debug_save(self, hwnd, name: str, match: dict) -> str:
@@ -587,12 +630,20 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         except vision.TemplateNotFound:
             pass
 
-        # Challenge runs ONCE per Start (not once per task-queue pass, see
+        # Bounty and Challenge run ONCE per Start (not once per task-queue
+        # pass, see
         # the while loop below) -- if it's enabled, every ready stage slot
         # gets attempted before the Task Queue ever starts. Skipped when
         # starting already in-game: its navigation begins at the lobby,
         # which is exactly where we aren't -- ready slots still get their
         # chance at the between-repeats check once the current stage ends.
+        if self._checkpoint(stop_event):
+            return
+        if not self._skip_first_task_setup:
+            bounty_enabled = self._run_bounties(
+                hwnd, stop_event, coords, default_walk_paths, webhook)
+        else:
+            bounty_enabled = False
         if self._checkpoint(stop_event):
             return
         if not self._skip_first_task_setup:
@@ -611,7 +662,10 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             # than keep replaying a stale snapshot from when the run started.
             tasks = get_tasks()
             if not tasks:
-                self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
+                if bounty_enabled:
+                    self._log("[Macro] Auto Bounty pass finished and the Task Queue is empty -- going Idle.")
+                else:
+                    self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
                 self._set_status(action="Idle")
                 return
 
@@ -966,7 +1020,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         if leave_match is not None:
             self._log(f"[Macro] Found Leave Stage (score {leave_match['score']:.2f}) -- clicking it.")
             vision.click_match(self._mouse, hwnd, leave_match)
-            time.sleep(SETTLE_DELAY)
+            self._interruptible_sleep(SETTLE_DELAY, stop_event)
             self._click_return_to_lobby_if_found(hwnd, stop_event)
         if self._checkpoint(stop_event):
             return False
@@ -974,6 +1028,29 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         if self._checkpoint(stop_event):
             return False
         return self._ensure_lobby(hwnd, stop_event)
+
+    def _handle_structured_failure(self, report: FailureReport, hwnd=None) -> bool:
+        """Handles structured failure reports to enforce bounded recovery logic."""
+        self._log(f"[Diagnostics] [{report.category.name}] {report.user_message} (Action: {report.user_action})")
+        save_failure_snapshot(report)
+
+        if report.recovery_action in (RecoveryAction.RETRY_STEP, RecoveryAction.RETRY_PHASE):
+            return True
+        elif report.recovery_action == RecoveryAction.RETURN_TO_LOBBY:
+            if not hwnd:
+                hwnd = self._current_hwnd
+            if report.code in ("ROBLOX_DISCONNECTED", "ROBLOX_CRASHED"):
+                self._attempt_rejoin(hwnd, self._stop_event)
+            else:
+                self._recover_to_lobby(hwnd, self._stop_event)
+            return False
+        elif report.recovery_action in (RecoveryAction.STOP_TASK, RecoveryAction.STOP_RUNNER):
+            self._set_status(action="Stopped due to failure")
+            if report.recovery_action == RecoveryAction.STOP_RUNNER:
+                if self._stop_event is not None:
+                    self._stop_event.set()
+            return False
+        return False
 
     def _run_task_setup(self, hwnd, stop_event: threading.Event, task: dict, mode: str, map_name: str,
                           coords: dict, scroll_power: int, scroll_nudges: int, webhook: dict = None) -> bool:
@@ -1035,7 +1112,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             if mode == "expedition":
                 # No stage-row picker to click through -- just the difficulty
                 # stepper, straight after the map.
-                time.sleep(DIFFICULTY_CLICK_DELAY)
+                self._interruptible_sleep(DIFFICULTY_CLICK_DELAY, stop_event)
                 self._select_expedition_difficulty(hwnd, stop_event, task.get("difficulty") or "1")
             else:
                 stage = task.get("stage") or "1"
@@ -1059,6 +1136,11 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             if self._checkpoint(stop_event):
                 return False
 
+        return self._enter_selected_stage(hwnd, stop_event, task, mode, coords, webhook)
+
+    def _enter_selected_stage(self, hwnd, stop_event: threading.Event, task: dict, mode: str,
+                                coords: dict, webhook: dict = None) -> bool:
+        """Enter a stage whose final map/stage panel is already open."""
         # nav_select_stage is a confirm button that finalizes the stage/
         # difficulty pick -- Start/Enter Matchmaking doesn't actually
         # appear/work until it's pressed, so it needs an actual (verified,
@@ -1147,7 +1229,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                 self._keyboard.tap(ord("Z"))
                 time.sleep(0.1)
                 vision.click_match(self._mouse, hwnd, start_match)
-                time.sleep(START_GAME_CLICK_VERIFY_SETTLE)
+                self._interruptible_sleep(START_GAME_CLICK_VERIFY_SETTLE, stop_event)
                 if self._checkpoint(stop_event):
                     return None
 
@@ -1358,7 +1440,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                 result = self._check_expedition_wave_result(hwnd, stop_event)
                 if result is not None:
                     return result
-                time.sleep(MATCH_RESULT_POLL_INTERVAL)
+                self._interruptible_sleep(MATCH_RESULT_POLL_INTERVAL, stop_event)
                 continue
 
             try:
@@ -1530,6 +1612,9 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             # repeat_stage/leave_stage search below.
             self._mouse.move_to(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
             time.sleep(0.1)
+
+        if result == "win" and not self._clear_result_obtainment_modal(hwnd, stop_event):
+            return False
 
         # Matchmaking never uses Repeat Stage, even with more repeats left --
         # a matchmade lobby is a one-shot party for that specific match, not
@@ -3335,6 +3420,89 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             time.sleep(BACK_SPAM_DELAY)
         self._log(f"[Macro] Stopped backing out after {BACK_SPAM_MAX_CLICKS} clicks (Back button still found).")
 
+    def _dismiss_party_overlay(self, hwnd, stop_event: threading.Event) -> bool:
+        """Clear an optional party prompt before gamemode clicks.
+
+        These prompts disappear quickly enough that a normal held click can
+        release over the newly exposed card underneath. Use an immediate
+        down/up and park away from the menu before checking that it cleared.
+        """
+        def _dismiss_target():
+            match, name = vision.find_image_any(hwnd, PARTY_OVERLAY_IMAGE_NAMES)
+            if match is None or name != "invite_players_open":
+                return match, name
+
+            # The outgoing player browser has a generic-looking Close
+            # button. Only accept it after its unique title is visible so
+            # another modal's Close button can never become this recovery's
+            # click target.
+            close = vision.find_image(hwnd, "invite_players_close")
+            return (close, "invite_players_close") if close is not None else (None, name)
+
+        try:
+            match, name = _dismiss_target()
+        except vision.TemplateNotFound:
+            return True
+        if name == "invite_players_open" and match is None:
+            self._log('[Macro] "Invite Players" is open, but its Close button could not be found -- stopping.')
+            return False
+        if match is None:
+            return True
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        park_x, park_y = self._cxy("unit_info_reset")
+        for attempt in range(1, 3):
+            debug_path = self._debug_save(hwnd, name, match)
+            suffix = f" Debug: {debug_path}" if debug_path else ""
+            self._log(f"[Macro] Found party overlay (score {match['score']:.2f}) -- "
+                       f"dismissing it (attempt {attempt}/2).{suffix}")
+            if not wm.activate_window(hwnd):
+                self._log("[Macro] Couldn't confirm focus before dismissing the party overlay.")
+            click_x, click_y = vision.ref_to_screen(hwnd, match["cx"], match["cy"])
+            self._mouse.click(click_x, click_y, hold=0.0)
+            self._mouse.move_to(left + park_x, top + park_y)
+            if stop_event.is_set():
+                return False
+            time.sleep(0.3)
+            try:
+                remaining, name = _dismiss_target()
+            except vision.TemplateNotFound:
+                return True
+            if name == "invite_players_open" and remaining is None:
+                self._log('[Macro] "Invite Players" is still open, but its Close button could not be found -- stopping.')
+                return False
+            if remaining is None:
+                return True
+            match = remaining
+
+        self._log("[Macro] Party overlay still showing after 2 dismissal attempts -- stopping.")
+        return False
+
+    def _click_gamemode_target(self, hwnd, stop_event: threading.Event, label: str, click_target) -> bool:
+        """Click a gamemode card, recovering if the click opens an invite UI."""
+        for attempt in range(1, GAMEMODE_OVERLAY_RETRY_ATTEMPTS + 1):
+            click_target()
+            if stop_event.is_set():
+                return False
+            time.sleep(GAMEMODE_OVERLAY_CHECK_DELAY)
+            try:
+                overlay, _ = vision.find_image_any(hwnd, PARTY_OVERLAY_IMAGE_NAMES)
+            except vision.TemplateNotFound:
+                return True
+            if overlay is None:
+                return True
+
+            self._log(f"[Macro] A party overlay appeared after clicking {label} -- "
+                       "closing it before retrying the intended card.")
+            if not self._dismiss_party_overlay(hwnd, stop_event):
+                return False
+            if attempt < GAMEMODE_OVERLAY_RETRY_ATTEMPTS:
+                self._log(f"[Macro] Retrying {label} "
+                           f"(attempt {attempt + 1}/{GAMEMODE_OVERLAY_RETRY_ATTEMPTS}).")
+
+        self._log(f"[Macro] Couldn't click {label} without reopening a party overlay -- stopping.")
+        return False
+
     def _click_gamemode(self, hwnd, stop_event: threading.Event, mode: str, wait_for_menu: bool = True) -> bool:
         # Story's card position doesn't move once the menu is open, so it's
         # just a fixed coordinate (see STORY_CLICK's comment). Raid's isn't
@@ -3377,25 +3545,8 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
                     self._save_debug_screenshot_unconditional(hwnd, "gamemode_menu_timeout")
                 return False
 
-        # A "Disband Party" prompt can sit in front of the menu at this
-        # point -- if it's up, Story can't be clicked (or clicks through to
-        # the wrong thing) until it's dismissed. Optional/one-shot: no long
-        # wait, since most runs never see it, and if nav_disband.png hasn't
-        # been added yet this is just silently skipped rather than failing
-        # the whole run over a nice-to-have check.
-        try:
-            disband_match, disband_name = vision.find_image_any(hwnd, NAV_DISBAND_IMAGE_NAMES)
-        except vision.TemplateNotFound:
-            disband_match, disband_name = None, None
-        if disband_match is not None:
-            debug_path = self._debug_save(hwnd, disband_name, disband_match)
-            suffix = f" Debug: {debug_path}" if debug_path else ""
-            self._log(f"[Macro] Found Disband Party prompt (score {disband_match['score']:.2f}) -- "
-                       f"clicking it before Story.{suffix}")
-            vision.click_match(self._mouse, hwnd, disband_match)
-            if stop_event.is_set():
-                return False
-            time.sleep(0.3)  # let the prompt actually close before clicking the gamemode card
+        if not self._dismiss_party_overlay(hwnd, stop_event):
+            return False
 
         if mode == "expedition":
             self._log("[Macro] Menu open -- searching for Expedition...")
@@ -3414,8 +3565,8 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f"[Macro] Found Expedition (score {match['score']:.2f}) -- clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, match)
-            return True
+            return self._click_gamemode_target(
+                hwnd, stop_event, "Expedition", lambda: vision.click_match(self._mouse, hwnd, match))
 
         if mode == "challenge":
             self._log("[Macro] Menu open -- searching for Challenge...")
@@ -3434,8 +3585,8 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f"[Macro] Found Challenge (score {match['score']:.2f}) -- clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, match)
-            return True
+            return self._click_gamemode_target(
+                hwnd, stop_event, "Challenge", lambda: vision.click_match(self._mouse, hwnd, match))
 
         if mode == "raid":
             self._log("[Macro] Menu open -- searching for Raid...")
@@ -3454,8 +3605,8 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f"[Macro] Found Raid (score {match['score']:.2f}) -- clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, match)
-            return True
+            return self._click_gamemode_target(
+                hwnd, stop_event, "Raid", lambda: vision.click_match(self._mouse, hwnd, match))
 
         # story.png alone used to not be distinct enough to match reliably
         # (see STORY_CLICK's comment) -- Assets/ui/story/ holds a second
@@ -3474,14 +3625,18 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f"[Macro] Found Story (score {match['score']:.2f}) -- clicking it.{suffix}")
-            vision.click_match(self._mouse, hwnd, match)
+            clicked = self._click_gamemode_target(
+                hwnd, stop_event, "Story", lambda: vision.click_match(self._mouse, hwnd, match))
         else:
             if stop_event.is_set():
                 return False
             story_x, story_y = self._cxy("story_click")
             self._log(f"[Macro] Story card not found by image search -- falling back to fixed coordinate ({story_x}, {story_y}).")
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            self._mouse.click(left + story_x, top + story_y)
+            clicked = self._click_gamemode_target(
+                hwnd, stop_event, "Story", lambda: self._mouse.click(left + story_x, top + story_y))
+        if not clicked:
+            return False
         # Unlike Raid/Expedition/Challenge (which wait_for_image their own
         # gamemode card before clicking, naturally giving the screen a
         # moment), the fixed-coordinate fallback above is blind -- nav_back

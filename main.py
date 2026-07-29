@@ -203,6 +203,7 @@ CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "
 CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
 CHALLENGE_DAILY_CAP = 10  # fixed, not user-editable -- see get_challenge_settings
 CHALLENGE_RESET_SCHEDULE = "utc_midnight_v1"
+BOUNTY_STORY_MAPS = list(CHALLENGE_STORY_MAPS)
 
 
 def _current_challenge_reset_period(now: float = None) -> str:
@@ -487,7 +488,7 @@ class Api:
         self.runner = MacroRunner(
             self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result,
             self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot,
-            self.get_crafting_settings, self.set_crafting_count)
+            self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings)
 
     def _run_stats_snapshot(self) -> dict:
         # Fed to the runner's match-result webhook so it can report the same
@@ -1037,6 +1038,47 @@ class Api:
 
     # ── Auto Crafting (see core/runner_crafting.py) ──
 
+    def _default_bounty_settings(self) -> dict:
+        return {
+            "enabled": False,
+            "play_mode": "solo",
+            "maps": {name: {"macro": ""} for name in BOUNTY_STORY_MAPS},
+        }
+
+    def get_bounty_settings(self) -> dict:
+        saved = cfg.load().get("bounty") or {}
+        merged = {**self._default_bounty_settings(), **saved}
+        if merged.get("play_mode") not in ("solo", "matchmaking"):
+            merged["play_mode"] = "solo"
+        saved_maps = saved.get("maps") or {}
+        merged["maps"] = {
+            name: {"macro": (saved_maps.get(name) or {}).get("macro") or ""}
+            for name in BOUNTY_STORY_MAPS
+        }
+        return merged
+
+    def set_bounty_enabled(self, enabled: bool) -> dict:
+        settings = self.get_bounty_settings()
+        settings["enabled"] = bool(enabled)
+        cfg.update({"bounty": settings})
+        return {"ok": True}
+
+    def set_bounty_play_mode(self, play_mode: str) -> dict:
+        if play_mode not in ("solo", "matchmaking"):
+            return {"ok": False, "reason": "bad_play_mode"}
+        settings = self.get_bounty_settings()
+        settings["play_mode"] = play_mode
+        cfg.update({"bounty": settings})
+        return {"ok": True}
+
+    def set_bounty_map_macro(self, map_name: str, macro: str) -> dict:
+        if map_name not in BOUNTY_STORY_MAPS:
+            return {"ok": False, "reason": "bad_map"}
+        settings = self.get_bounty_settings()
+        settings["maps"][map_name]["macro"] = macro or ""
+        cfg.update({"bounty": settings})
+        return {"ok": True}
+
     def _default_crafting_settings(self) -> dict:
         from core.runner_constants import CRAFT_SPRITES, CRAFT_DEFAULT_EVERY
         return {
@@ -1190,6 +1232,11 @@ class Api:
         return self.runner.start_crafting_test(lambda: self.game_hwnd, coords)
 
     def start_macro(self) -> dict:
+        preflight = self.run_preflight_check()
+        if preflight.get("has_blocker", False):
+            self.push_log("[Preflight] Start blocked due to environment/configuration issue.")
+            return {"ok": False, "reason": "preflight_blocker", "preflight": preflight}
+
         data = cfg.load()
         scroll_power = data.get("story_scroll_power", 3)
         scroll_nudges = data.get("story_scroll_nudges", 8)
@@ -2403,6 +2450,23 @@ class Api:
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True}
 
+    def get_ocr_status(self) -> dict:
+        # Returns whether Windows OCR is available and whether Tesseract is installed.
+        from core import ocr_windows, ocr
+        win_available = ocr_windows.is_available()
+        tess_ok = False
+        try:
+            ocr.get_pytesseract()
+            tess_ok = True
+        except Exception:
+            tess_ok = False
+        return {
+            "ok": True,
+            "windows_ocr": win_available,
+            "tesseract_installed": tess_ok,
+        }
+
+
     def list_roblox_windows(self) -> list:
         # Settings > Debug > "Select Roblox Window": every standalone Roblox
         # window NOT already docked (see core.window.list_roblox_windows),
@@ -2538,6 +2602,112 @@ class Api:
     # Reference names the macro genuinely cannot run without -- the health
     # check flags these missing rather than every optional nicety.
     HEALTH_CRITICAL_IMAGES = ("nav_play", "nav_start_game", "victory", "defeat", "leave_stage", "exp_continue")
+
+    def run_preflight_check(self) -> dict:
+        """Run deterministic prerequisite checks before macro start."""
+        checks_list = []
+        warnings_list = []
+        has_blocker = False
+
+        def add_check(is_ok: bool, code: str, msg: str, action: str, is_blocker: bool = True):
+            nonlocal has_blocker
+            check_data = {
+                "ok": is_ok,
+                "code": code,
+                "message": msg,
+                "action": action,
+                "blocker": is_blocker
+            }
+            checks_list.append(check_data)
+            if not is_ok:
+                if is_blocker:
+                    has_blocker = True
+                else:
+                    warnings_list.append(check_data)
+
+        # 1. Roblox window attached
+        hwnd = self.game_hwnd
+        roblox_attached = bool(hwnd and wm.is_window(hwnd))
+        add_check(
+            roblox_attached,
+            "ROBLOX_NOT_FOUND",
+            "Roblox window is not open or not docked.",
+            "Launch Roblox and allow the macro to attach.",
+            True
+        )
+
+        # 2. Elevation match
+        if roblox_attached:
+            elevation_mismatch = wm.is_process_elevated(hwnd) and not wm.is_self_elevated()
+            add_check(
+                not elevation_mismatch,
+                "ELEVATION_MISMATCH",
+                "Roblox is running as Administrator but the macro is not.",
+                "Relaunch the macro as Administrator.",
+                True
+            )
+
+        # 3. Display scale
+        scale = wm.get_display_scale_percent()
+        add_check(
+            scale == 100,
+            "DISPLAY_SCALE_WARNING",
+            f"Windows display scale is set to {scale}%.",
+            "Set Windows Display Scale to 100% in Settings > Display.",
+            False
+        )
+
+        # 4. Assets folder
+        assets_exist = os.path.isdir(constants.ASSETS_DIR)
+        assets_populated = False
+        if assets_exist:
+            # Check if empty (or at least contains some items)
+            assets_populated = len(os.listdir(constants.ASSETS_DIR)) > 0
+
+        add_check(
+            assets_exist and assets_populated,
+            "ASSETS_MISSING",
+            "Assets folder is missing.",
+            "Download the complete release ZIP from GitHub and extract all files.",
+            True
+        )
+
+        # 5. Critical reference images
+        missing_images = []
+        if assets_exist:
+            from core import vision
+            for name in self.HEALTH_CRITICAL_IMAGES:
+                try:
+                    if not vision.template_variant_paths(name):
+                        missing_images.append(name)
+                except Exception:
+                    missing_images.append(name)
+
+        if missing_images:
+            add_check(
+                False,
+                "CRITICAL_IMAGES_MISSING",
+                f"Missing critical reference images: {', '.join(missing_images)}",
+                "Re-extract release ZIP keeping folder structure.",
+                True
+            )
+        else:
+            # Add a pass for critical images if we got this far without adding one
+            if assets_exist and assets_populated:
+                add_check(
+                    True,
+                    "CRITICAL_IMAGES_MISSING",
+                    "All critical reference images found.",
+                    "",
+                    True
+                )
+
+        return {
+            "ok": not has_blocker,
+            "has_blocker": has_blocker,
+            "warnings": warnings_list,
+            "checks": checks_list
+        }
 
     def run_health_check(self) -> dict:
         """Settings > Debug > "Health Check" (also offered by the first-run
@@ -2716,12 +2886,18 @@ class Api:
                 if os.path.isfile(log_path):
                     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                         tail = f.readlines()[-600:]
-                    bundle.writestr("log_tail.txt", "".join(tail))
+                    from core.diagnostics import redact_sensitive_info
+                    sanitized_tail = redact_sensitive_info("".join(tail))
+                    bundle.writestr("log_tail.txt", sanitized_tail)
 
                 data = cfg.load()
                 if data.get("webhook_url"):
                     data["webhook_url"] = "<redacted>"
-                bundle.writestr("settings.json", json.dumps(data, indent=2))
+
+                from core.diagnostics import redact_sensitive_info
+                settings_json = json.dumps(data, indent=2)
+                sanitized_settings = redact_sensitive_info(settings_json)
+                bundle.writestr("settings.json", sanitized_settings)
 
                 bundle.writestr("info.json", json.dumps({
                     "version": updater.get_current_version(),

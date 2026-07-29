@@ -1,6 +1,6 @@
 """Thread-safe MSS instance lifecycle manager for screen capture operations.
 
-Provides thread-local reuse of mss.MSS objects to eliminate GDI handle thrashing
+Provides thread-local reuse of MSS capture objects to eliminate GDI handle thrashing
 during continuous polling while ensuring explicit resource cleanup via close()
 when worker threads finish or when the application shuts down.
 """
@@ -19,14 +19,22 @@ def set_mss_factory(factory):
 
 
 def get_mss():
-    """Returns the thread-local mss.MSS instance, creating one if not present."""
+    """Return the thread-local capture instance, creating one if absent.
+
+    Current MSS releases expose the public constructor as ``mss.mss()``.
+    Some older/bundled builds exposed ``MSS()`` instead, so retaining that
+    fallback keeps existing packaged installations compatible.
+    """
     sct = getattr(_thread_local, "sct", None)
     if sct is None:
         if _factory is not None:
             sct = _factory()
         else:
             import mss
-            sct = mss.MSS()
+            constructor = getattr(mss, "mss", None) or getattr(mss, "MSS", None)
+            if constructor is None:
+                raise RuntimeError("Installed mss package has no capture constructor.")
+            sct = constructor()
         _thread_local.sct = sct
         with _mss_lock:
             _active_instances.add(sct)
@@ -34,7 +42,7 @@ def get_mss():
 
 
 def close_mss():
-    """Closes and removes the mss.MSS instance for the current thread."""
+    """Closes and removes the MSS instance for the current thread."""
     sct = getattr(_thread_local, "sct", None)
     if sct is not None:
         _thread_local.sct = None
@@ -47,7 +55,7 @@ def close_mss():
 
 
 def close_all_mss():
-    """Closes all active mss.MSS instances across all threads."""
+    """Closes all active MSS instances across all threads."""
     with _mss_lock:
         instances = list(_active_instances)
         _active_instances.clear()

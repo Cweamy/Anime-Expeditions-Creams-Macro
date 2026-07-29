@@ -522,7 +522,7 @@ function switchScreen(name) {
 
   if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); }
   if (name === 'task') refreshTaskQueue();
-  if (name === 'resource') { refreshCraftingScreen(); refreshChallengeScreen(); }
+  if (name === 'resource') { refreshCraftingScreen(); refreshChallengeScreen(); refreshBountyScreen(); }
   if (name === 'settings') { refreshSavedPaths(); loadMacroCoords(); loadRewardTestMaps(); }
 
   // The Process Log only exists on the Dashboard, and a display:none element
@@ -1836,18 +1836,42 @@ async function installTesseract(btn) {
 }
 
 function finishTesseractInstall(success) {
-  const btn = tesseractInstallBtn;
+  const btn = tesseractInstallBtn || document.getElementById('btn-install-tesseract');
   if (!btn) return;
-  btn.textContent = success ? 'Installed' : 'Failed';
-  setTimeout(() => {
-    btn.textContent = btn.dataset.original || 'Install';
-    btn.disabled = false;
+  if (success) {
+    btn.textContent = 'Installed';
+    btn.disabled = true;
     tesseractInstallBtn = null;
-  }, 3200);
+  } else {
+    btn.textContent = 'Failed';
+    setTimeout(() => {
+      btn.textContent = btn.dataset.original || 'Install';
+      btn.disabled = false;
+      tesseractInstallBtn = null;
+    }, 3200);
+  }
+}
+
+async function updateTesseractButtonStatus() {
+  const btn = document.getElementById('btn-install-tesseract');
+  if (!btn || !window.pywebview) return;
+  try {
+    const status = await pywebview.api.get_ocr_status();
+    if (status && status.ok) {
+      if (status.tesseract_installed) {
+        btn.textContent = 'Installed';
+        btn.disabled = true;
+      } else if (status.windows_ocr) {
+        btn.textContent = 'Installed (Win OCR)';
+        btn.disabled = true;
+      }
+    }
+  } catch (e) {}
 }
 
 window.tesseractInstallDone = () => finishTesseractInstall(true);
 window.tesseractInstallFailed = () => finishTesseractInstall(false);
+
 
 // Settings > General > "Open Assets Folder" (also the Image Manager's
 // "Open Folder" button) -- the loose, user-editable folder every reference
@@ -3020,6 +3044,70 @@ async function resetChallengeCounts() {
 }
 
 // ---------------------------------------------------------------------------
+// Auto Bounty
+// ---------------------------------------------------------------------------
+let bountyState = null;
+
+async function refreshBountyScreen() {
+  try {
+    bountyState = await pywebview.api.get_bounty_settings();
+  } catch (e) {
+    bountyState = null;
+  }
+  await refreshTaskTemplates();
+  renderBountyScreen();
+}
+
+function renderBountyScreen() {
+  const s = bountyState;
+  document.getElementById('toggle-bounty-enabled')?.classList.toggle('on', !!(s && s.enabled));
+  const playMode = (s && s.play_mode) || 'solo';
+  document.getElementById('bounty-mode-solo')?.classList.toggle('active', playMode === 'solo');
+  document.getElementById('bounty-mode-matchmaking')?.classList.toggle('active', playMode === 'matchmaking');
+
+  const list = document.getElementById('bounty-map-list');
+  if (!list) return;
+  if (!s) {
+    list.innerHTML = '<div class="rh-empty">Couldn\'t load Auto Bounty settings.</div>';
+    return;
+  }
+  const macroOpts = current => `<option value="">No Macro</option>` +
+    taskTemplates.map(name =>
+      `<option value="${escapeHtml(name)}" ${name === current ? 'selected' : ''}>&#9654; ${escapeHtml(name)}</option>`
+    ).join('');
+  list.innerHTML = CHALLENGE_STORY_MAPS.map(map => {
+    const info = s.maps[map] || { macro: '' };
+    return `
+      <div class="task-card" style="--tqc: var(--lilac); cursor: default;">
+        <div class="tq-text" style="min-width: 0;">
+          <div class="tq-title">${escapeHtml(map)}</div>
+          <div class="challenge-map-row">
+            <select class="task-select" style="width: 100%;" onchange="setBountyMapMacro('${escJs(map)}', this.value)">
+              ${macroOpts(info.macro)}
+            </select>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function toggleBountyEnabled(btn) {
+  const isOn = !btn.classList.contains('on');
+  btn.classList.toggle('on', isOn);
+  bounceToggle(btn);
+  try { await pywebview.api.set_bounty_enabled(isOn); } catch (e) {}
+}
+
+async function setBountyPlayMode(playMode) {
+  try { await pywebview.api.set_bounty_play_mode(playMode); } catch (e) {}
+  await refreshBountyScreen();
+}
+
+async function setBountyMapMacro(map, macro) {
+  try { await pywebview.api.set_bounty_map_macro(map, macro); } catch (e) {}
+}
+
+// ---------------------------------------------------------------------------
 // Auto Crafting screen (see core/runner_crafting.py). Interleaved like
 // Challenge: after every N qualifying wins it runs one crafting pass. The
 // label map mirrors CRAFT_SPRITE_LABELS in core/runner_constants.py -- same
@@ -3060,9 +3148,10 @@ function renderCraftingScreen() {
     const upDis = i === 0 ? 'disabled' : '';
     const downDis = i === items.length - 1 ? 'disabled' : '';
     return `
-      <div class="task-card" style="--tqc: var(--teal); cursor: default;">
-        <div class="tq-text" style="min-width: 0;">
-          <div class="challenge-map-row">
+      <div class="task-card" data-key="${it.key}" style="--tqc: var(--teal); cursor: default;">
+        <span class="task-grip crafting-grip" onclick="event.stopPropagation()" title="Drag to reorder priority">&#10247;</span>
+        <div class="tq-text" style="min-width: 0; flex: 1;">
+          <div class="challenge-map-row" style="margin-top: 0;">
             <div style="display: flex; flex-direction: column; gap: 2px;">
               <button class="task-toolbar-btn" ${upDis} style="padding: 0 6px; line-height: 1.2;" onclick="moveCraftingItem('${it.key}', -1)" title="Higher priority">&#9650;</button>
               <button class="task-toolbar-btn" ${downDis} style="padding: 0 6px; line-height: 1.2;" onclick="moveCraftingItem('${it.key}', 1)" title="Lower priority">&#9660;</button>
@@ -3080,6 +3169,90 @@ function renderCraftingScreen() {
       </div>`;
   }).join('');
 }
+
+// ── Crafting item drag-reorder: grip-drag with a floating ghost + drop indicator ──
+(function () {
+  let dragItemKey = null, ghost = null, indicator = null;
+
+  function craftingItemLabel(key) {
+    return CRAFT_SPRITE_LABELS[key] || key;
+  }
+
+  function dropTargetAt(y) {
+    const list = document.getElementById('crafting-item-list');
+    if (!list) return null;
+    const cards = [...list.querySelectorAll('.task-card')].filter(c => c.dataset.key !== dragItemKey);
+    for (const c of cards) {
+      const r = c.getBoundingClientRect();
+      if (y < r.top + r.height / 2) return c;
+    }
+    return null;
+  }
+
+  document.addEventListener('mousedown', e => {
+    const grip = e.target.closest('#crafting-item-list .crafting-grip');
+    if (!grip) return;
+    e.preventDefault();
+    const cardEl = grip.closest('.task-card');
+    if (!cardEl || !cardEl.dataset.key) return;
+    dragItemKey = cardEl.dataset.key;
+
+    const rect = cardEl.getBoundingClientRect();
+    ghost = document.createElement('div');
+    ghost.className = 'drag-ghost';
+    ghost.textContent = craftingItemLabel(dragItemKey);
+    document.body.appendChild(ghost);
+    ghost.style.left = rect.left + 'px';
+    ghost.style.top = (e.clientY - 14) + 'px';
+
+    indicator = document.createElement('div');
+    indicator.className = 'drop-indicator';
+
+    cardEl.classList.add('dragging');
+    document.body.style.cursor = 'grabbing';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragItemKey || !ghost) return;
+    ghost.style.top = (e.clientY - 14) + 'px';
+    ghost.style.left = (e.clientX + 14) + 'px';
+    const list = document.getElementById('crafting-item-list');
+    if (!list) return;
+    const before = dropTargetAt(e.clientY);
+    if (before) list.insertBefore(indicator, before);
+    else list.appendChild(indicator);
+  });
+
+  document.addEventListener('mouseup', async e => {
+    if (!dragItemKey) return;
+    const list = document.getElementById('crafting-item-list');
+    const before = list ? dropTargetAt(e.clientY) : null;
+
+    const items = (craftingState && craftingState.items) || [];
+    const order = items.map(x => x.key);
+    const fromIdx = order.indexOf(dragItemKey);
+
+    if (ghost) ghost.remove();
+    if (indicator) indicator.remove();
+    const cardEl = list ? list.querySelector(`.task-card[data-key="${dragItemKey}"]`) : null;
+    if (cardEl) cardEl.classList.remove('dragging');
+
+    ghost = indicator = null;
+    const currentDragKey = dragItemKey;
+    dragItemKey = null;
+    document.body.style.cursor = '';
+
+    if (fromIdx !== -1) {
+      order.splice(fromIdx, 1);
+      const toIdx = before ? order.indexOf(before.dataset.key) : order.length;
+      if (toIdx !== -1 && toIdx !== fromIdx) {
+        order.splice(toIdx, 0, currentDragKey);
+        try { await pywebview.api.set_crafting_order(order); } catch (err) {}
+        await refreshCraftingScreen();
+      }
+    }
+  });
+})();
 
 async function toggleCraftingEnabled(btn) {
   const isOn = !btn.classList.contains('on');
@@ -6023,6 +6196,9 @@ window.addEventListener('pywebviewready', async () => {
     sessionStart = info.session_start;
     allTimeBase = info.all_time_base;
   } catch (e) {}
+
+  updateTesseractButtonStatus();
+
 
   renderPalette();
   renderPhases();
