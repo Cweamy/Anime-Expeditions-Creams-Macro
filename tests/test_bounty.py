@@ -51,6 +51,33 @@ def test_skips_completed_objective_with_green_check_button():
     assert bounty.detect_objectives(frame, lines) == []
 
 
+def test_skips_individually_completed_objective_without_card_check(monkeypatch):
+    frame = _frame()
+    bx, by, _bw, _bh = bounty.BOARD_REGION
+    _link_text(frame, bx + 80, by + 130, "RoseKingdom")
+    lines = [{"text": "Clear Wave 45 of Rose Kingdom", "x": 60, "y": 92,
+              "w": 170, "h": 16, "cx": 145, "cy": 100}]
+    monkeypatch.setattr(bounty.ocr_windows, "ocr_lines", lambda _image: lines)
+    monkeypatch.setattr(bounty.ocr_windows, "ocr_image", lambda _image: "1/1 (100%)")
+    assert bounty.detect_objectives(frame) == []
+
+
+def test_skips_individually_completed_amber_progress_fill():
+    frame = _frame()
+    bx, by, _bw, _bh = bounty.BOARD_REGION
+    _link_text(frame, bx + 80, by + 130, "RoseKingdom")
+    cv2.rectangle(
+        frame,
+        (bx + 65, by + 151),
+        (bx + 180, by + 155),
+        (20, 150, 235),
+        -1,
+    )
+    lines = [{"text": "Clear Wave 45 of Rose Kingdom", "x": 60, "y": 92,
+              "w": 170, "h": 16, "cx": 145, "cy": 100}]
+    assert bounty.detect_objectives(frame, lines) == []
+
+
 def test_detects_cyan_hard_link_using_difficulty_word():
     frame = _frame()
     bx, by, _bw, _bh = bounty.BOARD_REGION

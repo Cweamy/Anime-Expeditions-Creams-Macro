@@ -189,6 +189,7 @@ class BountyOps:
         self._log("[Macro] Auto Bounty is enabled -- checking gameplay bounties "
                   "before Challenge and the Task Queue...")
         attempted = []
+        objective_failures = []
         for number in range(1, BOUNTY_MAX_OBJECTIVES_PER_START + 1):
             if self._checkpoint(stop_event):
                 return True
@@ -202,8 +203,6 @@ class BountyOps:
                           "(Clear Wave and Hard are supported; Summon is not yet).")
                 self._leave_bounty_board(hwnd, stop_event)
                 return True
-            attempted.append(objective["signature"])
-
             label = (f'Clear Wave {objective["target_wave"]}'
                      if objective["kind"] == "infinite" else "Hard difficulty")
             self._log(f"[Macro] Auto Bounty #{number}: found {label} -- opening its destination.")
@@ -224,11 +223,30 @@ class BountyOps:
                 self._log(f"[Macro] Bounty objective click did not register "
                           f"(attempt {click_attempt}/{BOUNTY_NAV_CLICK_ATTEMPTS}).")
             if not map_name:
-                self._log("[Macro] Auto Bounty could not read the destination map -- "
-                          "skipping it for this Start.")
+                failure = next(
+                    (item for item in objective_failures
+                     if bounty.same_signature(item["signature"], objective["signature"])),
+                    None,
+                )
+                if failure is None:
+                    failure = {"signature": objective["signature"], "count": 0}
+                    objective_failures.append(failure)
+                failure["count"] += 1
+                exhausted = failure["count"] >= BOUNTY_OBJECTIVE_FAILURE_ATTEMPTS
+                if exhausted:
+                    attempted.append(objective["signature"])
+                self._log(
+                    "[Macro] Auto Bounty could not read the destination map -- "
+                    + (f"giving up on this objective after {failure['count']} attempts for this Start."
+                       if exhausted else
+                       f"returning to the board to retry it "
+                       f"({failure['count']}/{BOUNTY_OBJECTIVE_FAILURE_ATTEMPTS}).")
+                )
                 self._save_debug_screenshot_unconditional(hwnd, "bounty_destination_unreadable")
                 self._recover_to_lobby(hwnd, stop_event)
                 continue
+
+            attempted.append(objective["signature"])
 
             macro_name = ((settings.get("maps", {}).get(map_name) or {}).get("macro") or "")
             play_mode = settings.get("play_mode") or "solo"

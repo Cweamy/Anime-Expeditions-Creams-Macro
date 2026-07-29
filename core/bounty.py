@@ -87,6 +87,62 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
             if completed:
                 continue
 
+        # Individual 0/1 objectives render their completed progress as a
+        # long saturated amber/red fill. The empty state is a black track.
+        # This is more reliable than OCR for the tiny "1/1 (100%)" text and
+        # remains per-objective (unlike the whole-card footer check).
+        sx1 = max(0, link["x"] - 20)
+        sx2 = min(board.shape[1], link["x"] + link["w"] + 20)
+        sy1 = min(board.shape[0], link["y"] + link["h"] + 5)
+        sy2 = min(board.shape[0], sy1 + 30)
+        status = board[sy1:sy2, sx1:sx2]
+        if status.size:
+            status_hsv = cv2.cvtColor(status, cv2.COLOR_BGR2HSV)
+            filled = cv2.inRange(
+                status_hsv,
+                np.array((0, 100, 100), dtype=np.uint8),
+                np.array((35, 255, 255), dtype=np.uint8),
+            )
+            # The tiny black "1/1 (100%)" text cuts the otherwise solid
+            # completion fill into several short pieces. Join only nearby
+            # horizontal pieces inside this objective's narrow status strip.
+            filled = cv2.morphologyEx(
+                filled,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (7, 3)),
+            )
+            count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(filled)
+            if any(
+                    int(stats[i, cv2.CC_STAT_WIDTH]) >= max(45, int(link["w"] * 0.65))
+                    and int(stats[i, cv2.CC_STAT_HEIGHT]) >= 2
+                    for i in range(1, count)):
+                continue
+
+        # A card can contain several objectives and only gets the large
+        # footer check after ALL of them are complete. Each individual
+        # objective still shows "1/1 (100%)" beneath its link, often on an
+        # amber/red progress bar rather than a green one. Read that small
+        # status strip directly so a completed Rose objective is skipped
+        # even while another objective on the same card remains unfinished.
+        progress_texts = []
+        if ocr_lines is None:
+            px1 = max(0, link["x"] - 35)
+            px2 = min(board.shape[1], link["x"] + link["w"] + 35)
+            py1 = max(0, link["y"] + link["h"] - 3)
+            py2 = min(board.shape[0], py1 + 34)
+            progress = board[py1:py2, px1:px2]
+            if progress.size:
+                for scale in (2, 3):
+                    enlarged = cv2.resize(
+                        progress, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+                    read = ocr_windows.ocr_image(enlarged)
+                    if read:
+                        progress_texts.append(read)
+        progress_text = " ".join(progress_texts)
+        if (re.search(r"\b1\s*/\s*1\b", progress_text)
+                or re.search(r"\b100\s*%?", progress_text)):
+            continue
+
         nearby = []
         for line in lines:
             if abs(int(line["cy"]) - link["cy"]) <= 42 and (
