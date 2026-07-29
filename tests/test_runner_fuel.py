@@ -1,6 +1,11 @@
 import threading
 
 from core import keys
+from core.runner_constants import (
+    FUEL_ACTION_TIMEOUT,
+    FUEL_CLICK_DELAY,
+    FUEL_CONFIRM_TIMEOUT,
+)
 from core.runner_fuel import FuelOps
 
 
@@ -263,6 +268,43 @@ def test_success_closes_station_hud_when_close_button_is_found(monkeypatch):
         "nav_closeui",
     ]
     assert "[Fuel] Gold Mine station HUD closed." in runner.logs
+
+
+def test_refill_spaces_clicks_and_tolerates_delayed_server_ui(monkeypatch):
+    runner = DummyRunner(due=("gold_mine",))
+    waits = []
+    sleeps = []
+
+    def wait_for(hwnd, name, timeout, stop_event):
+        waits.append((name, timeout))
+        if name == "nav_closeui":
+            return None
+        return {"name": name}
+
+    def wait_until_gone(hwnd, names, timeout, stop_event):
+        waits.append((names[0], timeout))
+        return True
+
+    monkeypatch.setattr(runner, "_fuel_wait_for", wait_for)
+    monkeypatch.setattr(runner, "_wait_for_image_gone", wait_until_gone)
+    monkeypatch.setattr(
+        "core.runner_fuel.vision.click_match", lambda *_args: None)
+    monkeypatch.setattr(
+        "core.runner_fuel.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    assert runner._fuel_refill_station(
+        123, threading.Event(), "gold_mine", "max") is True
+    assert sleeps == [
+        FUEL_CLICK_DELAY,
+        FUEL_CLICK_DELAY,
+        FUEL_CLICK_DELAY,
+    ]
+    assert waits[:3] == [
+        ("fuel_add", FUEL_ACTION_TIMEOUT),
+        ("fuel_max", FUEL_ACTION_TIMEOUT),
+        ("fuel_confirm", FUEL_ACTION_TIMEOUT),
+    ]
+    assert waits[3] == ("fuel_confirm", FUEL_CONFIRM_TIMEOUT)
 
 
 def test_manual_test_idle_status_clears_all_fuel_context():

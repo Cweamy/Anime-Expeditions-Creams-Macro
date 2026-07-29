@@ -90,7 +90,7 @@ class FuelOps:
         vision.click_match(self._mouse, hwnd, add_match)
         if self._checkpoint(stop_event):
             return False
-        time.sleep(SETTLE_DELAY)
+        time.sleep(FUEL_CLICK_DELAY)
 
         if str(amount).lower() == "max":
             max_match = self._fuel_wait_for(
@@ -112,7 +112,7 @@ class FuelOps:
             self._keyboard.type_text(str(int(amount)))
         if self._checkpoint(stop_event):
             return False
-        time.sleep(SETTLE_DELAY)
+        time.sleep(FUEL_CLICK_DELAY)
 
         confirm_match = self._fuel_wait_for(
             hwnd, "fuel_confirm", FUEL_ACTION_TIMEOUT, stop_event)
@@ -122,6 +122,7 @@ class FuelOps:
         vision.click_match(self._mouse, hwnd, confirm_match)
         if self._checkpoint(stop_event):
             return False
+        time.sleep(FUEL_CLICK_DELAY)
 
         confirmed = self._wait_for_image_gone(
             hwnd, ("fuel_confirm",), FUEL_CONFIRM_TIMEOUT, stop_event)
