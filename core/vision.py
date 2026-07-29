@@ -967,7 +967,11 @@ def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float 
         match = find_image(hwnd, name, region, threshold, template_dir)
         if match is not None:
             return match
-        time.sleep(interval)
+        if stop_event is not None:
+            if stop_event.wait(interval):
+                return None
+        else:
+            time.sleep(interval)
     return None
 
 
@@ -1093,7 +1097,11 @@ def wait_for_image_any(hwnd: int, names: tuple, region: tuple = None, threshold:
         match, name = find_image_any(hwnd, names, region, threshold, template_dir)
         if match is not None:
             return match, name
-        time.sleep(interval)
+        if stop_event is not None:
+            if stop_event.wait(interval):
+                return None, None
+        else:
+            time.sleep(interval)
     return None, None
 
 
