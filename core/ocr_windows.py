@@ -73,3 +73,44 @@ def ocr_image(img) -> str:
         return result.text or ""
     except Exception:
         return ""
+
+
+def ocr_lines(img) -> list:
+    """Recognize text while preserving each line's image-space bounds."""
+    if not is_available():
+        return []
+    try:
+        from winsdk.windows.graphics.imaging import SoftwareBitmap, BitmapPixelFormat, BitmapAlphaMode
+        from winsdk.windows.security.cryptography import CryptographicBuffer
+
+        bgr = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        bgra = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
+        h, w = bgra.shape[:2]
+        buf = CryptographicBuffer.create_from_byte_array(bytes(bgra.tobytes()))
+        bitmap = SoftwareBitmap.create_copy_from_buffer(
+            buf, BitmapPixelFormat.BGRA8, w, h, BitmapAlphaMode.PREMULTIPLIED)
+        with _lock:
+            loop = asyncio.new_event_loop()
+            try:
+                result = loop.run_until_complete(_engine.recognize_async(bitmap))
+            finally:
+                loop.close()
+
+        lines = []
+        for line in result.lines:
+            words = list(line.words)
+            if not words:
+                continue
+            rects = [word.bounding_rect for word in words]
+            x1 = min(int(rect.x) for rect in rects)
+            y1 = min(int(rect.y) for rect in rects)
+            x2 = max(int(rect.x + rect.width) for rect in rects)
+            y2 = max(int(rect.y + rect.height) for rect in rects)
+            lines.append({
+                "text": line.text or "",
+                "x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1,
+                "cx": (x1 + x2) // 2, "cy": (y1 + y2) // 2,
+            })
+        return lines
+    except Exception:
+        return []

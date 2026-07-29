@@ -1,4 +1,7 @@
 import threading
+import sys
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -59,6 +62,30 @@ def test_reuse_within_same_thread():
     assert inst1 is inst2
     assert len(created) == 1
     assert not inst1.closed
+
+
+def test_default_factory_uses_current_lowercase_mss_api(monkeypatch):
+    created = []
+
+    def make_mss():
+        instance = FakeMSS()
+        created.append(instance)
+        return instance
+
+    monkeypatch.setitem(sys.modules, "mss", SimpleNamespace(mss=make_mss))
+    assert mss_manager.get_mss() is created[0]
+
+
+def test_default_factory_falls_back_to_legacy_uppercase_api(monkeypatch):
+    created = []
+
+    def make_mss():
+        instance = FakeMSS()
+        created.append(instance)
+        return instance
+
+    monkeypatch.setitem(sys.modules, "mss", SimpleNamespace(MSS=make_mss))
+    assert mss_manager.get_mss() is created[0]
 
 
 def test_isolation_between_threads():

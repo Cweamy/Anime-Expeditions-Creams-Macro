@@ -202,6 +202,7 @@ CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "
 CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
 CHALLENGE_DAILY_CAP = 10  # fixed, not user-editable -- see get_challenge_settings
 CHALLENGE_RESET_SCHEDULE = "utc_midnight_v1"
+BOUNTY_STORY_MAPS = list(CHALLENGE_STORY_MAPS)
 
 
 def _current_challenge_reset_period(now: float = None) -> str:
@@ -468,7 +469,7 @@ class Api:
         self.runner = MacroRunner(
             self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result,
             self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot,
-            self.get_crafting_settings, self.set_crafting_count)
+            self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings)
 
     def _run_stats_snapshot(self) -> dict:
         # Fed to the runner's match-result webhook so it can report the same
@@ -973,6 +974,47 @@ class Api:
         return {"ok": True}
 
     # ── Auto Crafting (see core/runner_crafting.py) ──
+
+    def _default_bounty_settings(self) -> dict:
+        return {
+            "enabled": False,
+            "play_mode": "solo",
+            "maps": {name: {"macro": ""} for name in BOUNTY_STORY_MAPS},
+        }
+
+    def get_bounty_settings(self) -> dict:
+        saved = cfg.load().get("bounty") or {}
+        merged = {**self._default_bounty_settings(), **saved}
+        if merged.get("play_mode") not in ("solo", "matchmaking"):
+            merged["play_mode"] = "solo"
+        saved_maps = saved.get("maps") or {}
+        merged["maps"] = {
+            name: {"macro": (saved_maps.get(name) or {}).get("macro") or ""}
+            for name in BOUNTY_STORY_MAPS
+        }
+        return merged
+
+    def set_bounty_enabled(self, enabled: bool) -> dict:
+        settings = self.get_bounty_settings()
+        settings["enabled"] = bool(enabled)
+        cfg.update({"bounty": settings})
+        return {"ok": True}
+
+    def set_bounty_play_mode(self, play_mode: str) -> dict:
+        if play_mode not in ("solo", "matchmaking"):
+            return {"ok": False, "reason": "bad_play_mode"}
+        settings = self.get_bounty_settings()
+        settings["play_mode"] = play_mode
+        cfg.update({"bounty": settings})
+        return {"ok": True}
+
+    def set_bounty_map_macro(self, map_name: str, macro: str) -> dict:
+        if map_name not in BOUNTY_STORY_MAPS:
+            return {"ok": False, "reason": "bad_map"}
+        settings = self.get_bounty_settings()
+        settings["maps"][map_name]["macro"] = macro or ""
+        cfg.update({"bounty": settings})
+        return {"ok": True}
 
     def _default_crafting_settings(self) -> dict:
         from core.runner_constants import CRAFT_SPRITES, CRAFT_DEFAULT_EVERY

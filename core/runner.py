@@ -30,6 +30,7 @@ from .diagnostics import FailureCategory, RecoveryAction, FailureReport, create_
 from . import window as wm
 from .runner_constants import *  # noqa: F401,F403 -- see runner_constants' docstring
 from .runner_blocks import BlockOps
+from .runner_bounty import BountyOps
 from .runner_challenge import ChallengeOps
 from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
@@ -73,14 +74,14 @@ def _find_team_load_button(frame, expected_y):
     return cx, cy
 
 
-class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
+class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
     active at a time (one physical game window, one macro)."""
 
     def __init__(self, mouse, keyboard, log, set_status=None, record_result=None,
                  get_challenge_settings=None, mark_challenge_stage_played=None, get_run_stats=None,
-                 get_crafting_settings=None, set_crafting_count=None):
+                 get_crafting_settings=None, set_crafting_count=None, get_bounty_settings=None):
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
@@ -131,6 +132,7 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         # avoids core/ reaching back into main.py). None (the default, e.g.
         # in tests/CLI mode) just makes _run_challenges a no-op.
         self._get_challenge_settings = get_challenge_settings
+        self._get_bounty_settings = get_bounty_settings
         self._mark_challenge_stage_played = mark_challenge_stage_played or (lambda *a, **kw: None)
         # Returns a fresh session/all-time win-loss + session_start + version
         # snapshot for the match-result webhook (see _send_result_webhook).
@@ -628,12 +630,20 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
         except vision.TemplateNotFound:
             pass
 
-        # Challenge runs ONCE per Start (not once per task-queue pass, see
+        # Bounty and Challenge run ONCE per Start (not once per task-queue
+        # pass, see
         # the while loop below) -- if it's enabled, every ready stage slot
         # gets attempted before the Task Queue ever starts. Skipped when
         # starting already in-game: its navigation begins at the lobby,
         # which is exactly where we aren't -- ready slots still get their
         # chance at the between-repeats check once the current stage ends.
+        if self._checkpoint(stop_event):
+            return
+        if not self._skip_first_task_setup:
+            bounty_enabled = self._run_bounties(
+                hwnd, stop_event, coords, default_walk_paths, webhook)
+        else:
+            bounty_enabled = False
         if self._checkpoint(stop_event):
             return
         if not self._skip_first_task_setup:
@@ -652,7 +662,10 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             # than keep replaying a stale snapshot from when the run started.
             tasks = get_tasks()
             if not tasks:
-                self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
+                if bounty_enabled:
+                    self._log("[Macro] Auto Bounty pass finished and the Task Queue is empty -- going Idle.")
+                else:
+                    self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
                 self._set_status(action="Idle")
                 return
 
@@ -1123,6 +1136,11 @@ class MacroRunner(ChallengeOps, CraftingOps, ExpeditionOps, BlockOps):
             if self._checkpoint(stop_event):
                 return False
 
+        return self._enter_selected_stage(hwnd, stop_event, task, mode, coords, webhook)
+
+    def _enter_selected_stage(self, hwnd, stop_event: threading.Event, task: dict, mode: str,
+                                coords: dict, webhook: dict = None) -> bool:
+        """Enter a stage whose final map/stage panel is already open."""
         # nav_select_stage is a confirm button that finalizes the stage/
         # difficulty pick -- Start/Enter Matchmaking doesn't actually
         # appear/work until it's pressed, so it needs an actual (verified,

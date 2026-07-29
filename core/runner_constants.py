@@ -205,6 +205,21 @@ EVENT_ACT_IMAGES = {
 EVENT_ACT_SCROLL_FROM_INDEX = 2  # 0-based into EVENT_ACT_ORDER: index 2 == Act "3"
 EVENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Event screen (nav_event / event_gamemode / the Act card) to appear
 
+# Auto Bounty derives all objective clicks from the live board. These values
+# only bound waits and the board's outer scroll gesture.
+BOUNTY_SCREEN_TIMEOUT = 10.0
+BOUNTY_DESTINATION_TIMEOUT = 10.0
+BOUNTY_NAV_CLICK_ATTEMPTS = 3
+BOUNTY_NAV_CLICK_VERIFY_TIMEOUT = 4.0
+BOUNTY_CLICK_FOCUS_SETTLE = 0.2
+BOUNTY_OBJECTIVE_FAILURE_ATTEMPTS = 3
+BOUNTY_MAX_CLAIMS_PER_START = 12
+BOUNTY_SCROLL_HOVER = (720, 650)
+BOUNTY_HORIZONTAL_WHEEL_DELTA = -360
+BOUNTY_HORIZONTAL_SCROLL_STEPS = 8
+BOUNTY_SCROLL_SETTLE = 0.45
+BOUNTY_MAX_OBJECTIVES_PER_START = 10
+
 # Villian Invasion Act 4 ("Crow - Dawn") relic gate. DROP_RELIC_IMAGE is the
 # Crow Relic reward shown on the Victory screen (relics only drop on a win) --
 # spotting it is what triggers a farm task's optional auto-divert to Act 4.
