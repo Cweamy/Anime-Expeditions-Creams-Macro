@@ -209,15 +209,32 @@ class BountyOps:
             self._click_ref(hwnd, claim["cx"], claim["cy"], hold=0.1)
             self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
             reward = None
+            last_frame = None
             deadline = time.time() + BOUNTY_NAV_CLICK_VERIFY_TIMEOUT
             while time.time() < deadline and not self._checkpoint(stop_event):
                 frame = vision.capture_game_bgr(hwnd)
                 if frame is not None:
+                    last_frame = frame
                     reward = bounty.read_reward_overlay(frame)
                     if reward is not None:
                         break
                 time.sleep(0.25)
             if reward is None:
+                # The reward animation can finish before OCR gets a clean
+                # frame. If the original green claim control is now gone,
+                # the click succeeded and the card is already disabled;
+                # retrying its stale coordinates only clicks a dead button.
+                if last_frame is not None:
+                    still_available = any(
+                        abs(button["cx"] - claim["cx"]) <= 30
+                        and abs(button["cy"] - claim["cy"]) <= 30
+                        for button in bounty.detect_claim_buttons(last_frame)
+                    )
+                    if not still_available:
+                        self._log(
+                            "[Macro] Auto Bounty: completed card claimed "
+                            "(claim control is now disabled).")
+                        return True
                 continue
 
             screenshot_path = self._save_debug_screenshot_unconditional(

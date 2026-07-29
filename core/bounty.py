@@ -292,10 +292,20 @@ def detect_claim_buttons(frame_bgr: np.ndarray, cards=None) -> list:
 def read_reward_overlay(frame_bgr: np.ndarray) -> dict:
     """Read the post-claim "Obtained Rewards" overlay and its close target."""
     lines = ocr_windows.ocr_lines(frame_bgr)
-    reward_line = next(
-        (line for line in lines if "reward" in line.get("text", "").lower()),
-        None,
-    )
+    # The board's permanent help text also contains the word "rewards".
+    # Require the centered overlay title instead of accepting that generic
+    # substring, otherwise a successfully claimed (now disabled) card is
+    # mistaken for an overlay that never closes.
+    reward_line = None
+    reward_score = 0.0
+    for line in lines:
+        normalized = re.sub(r"[^a-z]", "", line.get("text", "").lower())
+        score = SequenceMatcher(None, normalized, "obtainedrewards").ratio()
+        if 180 <= int(line.get("cy", 0)) <= 380 and score > reward_score:
+            reward_line = line
+            reward_score = score
+    if reward_score < 0.72:
+        reward_line = None
     if reward_line is None:
         return None
     close_line = next(

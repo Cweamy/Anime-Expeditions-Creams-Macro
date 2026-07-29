@@ -130,6 +130,17 @@ def test_reads_bounty_reward_overlay_and_close_target(monkeypatch):
     assert (reward["close_cx"], reward["close_cy"]) == (577, 466)
 
 
+def test_board_help_text_is_not_mistaken_for_reward_overlay(monkeypatch):
+    frame = _frame()
+    lines = [{
+        "text": "Spend Gold to reroll a bounty's rarity and objectives for better rewards!",
+        "x": 520, "y": 78, "w": 300, "h": 30, "cx": 670, "cy": 93,
+    }]
+    monkeypatch.setattr(bounty.ocr_windows, "ocr_lines", lambda _frame: lines)
+
+    assert bounty.read_reward_overlay(frame) is None
+
+
 def test_detects_cyan_hard_link_using_difficulty_word():
     frame = _frame()
     bx, by, _bw, _bh = bounty.BOARD_REGION

@@ -167,3 +167,24 @@ def test_claim_completed_bounty_verifies_button_disappeared(monkeypatch):
     assert runner.click_details == [(700, 500, 0.1), (576, 465, 0.1)]
     assert any("reward collected and overlay closed" in line for line in runner.logs)
     assert len(runner.webhook_events) == 1
+
+
+def test_claim_completed_bounty_accepts_disabled_claim_after_overlay_is_gone(
+        monkeypatch):
+    runner = _Harness()
+    monkeypatch.setattr(runner_bounty.wm, "activate_window", lambda _hwnd: True)
+    monkeypatch.setattr(runner_bounty, "BOUNTY_NAV_CLICK_VERIFY_TIMEOUT", 0.01)
+    monkeypatch.setattr(runner_bounty.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        runner_bounty.vision, "capture_game_bgr", lambda _hwnd: object())
+    monkeypatch.setattr(
+        runner_bounty.bounty, "read_reward_overlay", lambda _frame: None)
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_claim_buttons", lambda _frame: [])
+    claim = {"cx": 700, "cy": 500}
+
+    assert runner._claim_completed_bounty(
+        123, threading.Event(), claim, {"enabled": True}) is True
+
+    assert runner.click_details == [(700, 500, 0.1)]
+    assert any("claim control is now disabled" in line for line in runner.logs)
