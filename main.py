@@ -521,8 +521,39 @@ class Api:
             "runs_per_hour": self._calculate_runs_per_hour(history),  # Runs per hour rate over rolling window
         }
 
+    def reset_run_status(self, action: str = "Idle") -> None:
+        """Resets all task-specific status fields to default '-' placeholders while setting the action text."""
+        self._run_status = {
+            "current_task": "-",
+            "current_repeat": "-",
+            "map": "-",
+            "action": action,
+            "mode": "-",
+            "stage": "-",
+            "difficulty": "-",
+            "play_mode": "-",
+            "macro": "-",
+        }
+
     def _set_run_status(self, **kwargs) -> None:
-        self._run_status.update(kwargs)
+        action = kwargs.get("action")
+        should_reset = kwargs.pop("reset", False)
+        if should_reset or (action and (action == "Idle" or action.startswith("Stopped") or action.startswith("Completed")) and "current_task" not in kwargs):
+            new_status = {
+                "current_task": "-",
+                "current_repeat": "-",
+                "map": "-",
+                "action": action if action else "Idle",
+                "mode": "-",
+                "stage": "-",
+                "difficulty": "-",
+                "play_mode": "-",
+                "macro": "-",
+            }
+            new_status.update(kwargs)
+            self._run_status = new_status
+        else:
+            self._run_status.update(kwargs)
         self._pending_path_events = None  # stopped-but-not-yet-named recording (see stop_path_capture)
 
     def set_window(self, window):
@@ -1246,8 +1277,10 @@ class Api:
         preflight = self.run_preflight_check()
         if preflight.get("has_blocker", False):
             self.push_log("[Preflight] Start blocked due to environment/configuration issue.")
+            self.reset_run_status("Idle")
             return {"ok": False, "reason": "preflight_blocker", "preflight": preflight}
 
+        self.reset_run_status("Starting macro execution...")
         data = cfg.load()
         scroll_power = data.get("story_scroll_power", 3)
         scroll_nudges = data.get("story_scroll_nudges", 8)
@@ -1267,7 +1300,9 @@ class Api:
         # quit), the watchdog must not helpfully reopen the game and start the
         # run back up behind them.
         self._resume_after_relaunch = False
-        return self.runner.stop()
+        res = self.runner.stop()
+        self.reset_run_status("Idle")
+        return res
 
     def pause_macro(self) -> dict:
         return self.runner.pause()

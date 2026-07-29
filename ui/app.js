@@ -566,8 +566,11 @@ function toggleCompactStrip() {
 }
 
 // ---------------------------------------------------------------------------
-// Status polling
+// Status Polling & UI Synchronization
 // ---------------------------------------------------------------------------
+// Fetches live status dict from the backend every 1.5 seconds and updates all
+// Status Readout DOM elements. When the macro enters Idle/Stopped state, the
+// backend returns reset '-' placeholders for task/map/repeat fields.
 async function refreshStatus() {
   if (!window.pywebview) return;
   try {
@@ -577,6 +580,7 @@ async function refreshStatus() {
     } else {
       showWaiting();
     }
+    // Synchronize live readout fields (Action, Task, Repeat, Map, Mode, etc.)
     document.getElementById('stat-current-task').textContent = status.current_task ?? '-';
     document.getElementById('stat-current-repeat').textContent = status.current_repeat ?? '-';
     document.getElementById('stat-map').textContent = status.map ?? '-';
