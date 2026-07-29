@@ -703,7 +703,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .setting-label { font-size: 13px; font-weight: 700; color: var(--text); }
 .setting-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
-/* Resource automation is a growing list (Crafting, Challenge, Bounty later),
+/* Resource automation is a growing list (Crafting, Challenge, Bounty),
    so each feature owns one collapsed-by-default card instead of contributing
    an always-expanded wall of settings. Native details/summary keeps the
    interaction keyboard-accessible and needs no persisted UI state. */
@@ -731,9 +731,9 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   list-style: none;
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 70px;
-  padding: 12px 14px;
+  gap: 14px;
+  min-height: 84px;
+  padding: 14px 16px;
   cursor: pointer;
   user-select: none;
   background: color-mix(in srgb, var(--bg-surface) 38%, transparent);
@@ -744,8 +744,8 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   outline-offset: -3px;
 }
 .resource-card-icon {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border-radius: 10px;
   flex-shrink: 0;
   display: inline-flex;
@@ -755,7 +755,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   background: color-mix(in srgb, var(--resource-accent) 14%, var(--bg-surface));
   border: 1px solid color-mix(in srgb, var(--resource-accent) 38%, var(--border));
   font-family: 'Sora', 'Inter', sans-serif;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
 }
@@ -764,29 +764,31 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .resource-card-title {
   color: var(--text);
   font-family: 'Sora', 'Inter', sans-serif;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
 }
 .resource-card-desc {
-  color: var(--text-muted);
-  font-size: 11px;
+  color: color-mix(in srgb, var(--resource-accent) 58%, var(--text));
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .resource-card-state {
   flex-shrink: 0;
-  padding: 3px 8px;
+  padding: 4px 10px;
   border-radius: 999px;
   color: var(--text-muted);
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -800,7 +802,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .resource-card-chevron {
   flex-shrink: 0;
   color: var(--text-muted);
-  font-size: 24px;
+  font-size: 26px;
   line-height: 1;
   transform: rotate(0deg);
   transition: transform 0.16s, color 0.16s;
@@ -810,7 +812,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   transform: rotate(90deg);
 }
 .resource-card-body {
-  padding: 0 14px 10px;
+  padding: 0 16px 12px;
   border-top: 1px solid var(--border);
 }
 .resource-card-body .setting-row:last-child { border-bottom: none; }
