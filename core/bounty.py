@@ -391,9 +391,26 @@ def match_story_map(text: str) -> str:
         target = re.sub(r"[^a-z0-9]+", "", name.lower())
         if target in normalized:
             return name
-        scored.append((SequenceMatcher(None, normalized, target).ratio(), name))
+        # OCR returns the entire stage-detail panel, not only its heading.
+        # Comparing that long sentence directly with a short map name makes
+        # one heading typo ("King's Tonb") look far less similar than it is.
+        # Score same-length windows as well, so unrelated surrounding text
+        # does not drown out a strong local map-name match.
+        window_scores = (
+            SequenceMatcher(
+                None,
+                normalized[start:start + len(target)],
+                target,
+            ).ratio()
+            for start in range(max(1, len(normalized) - len(target) + 1))
+        )
+        score = max(
+            SequenceMatcher(None, normalized, target).ratio(),
+            max(window_scores),
+        )
+        scored.append((score, name))
     score, name = max(scored)
-    return name if score >= 0.58 else None
+    return name if score >= 0.72 else None
 
 
 def read_destination_map(frame_bgr: np.ndarray) -> str:
