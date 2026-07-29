@@ -1342,7 +1342,20 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
         self._set_status(action=f"Infinite wave {current} -- leaving after wave {limit}...")
 
         exit_wave = limit + 1
-        if current != exit_wave:
+        if current < exit_wave:
+            # Remember that the requested final wave was genuinely observed.
+            # This is the evidence that lets a later confirmed reading stand
+            # in for an exit-wave frame OCR happened to miss.
+            if current == limit:
+                state["target_wave_seen"] = True
+            state.pop("confirmations", None)
+            state.pop("confirmation_wave", None)
+            return None
+        if current > exit_wave and not state.get("target_wave_seen"):
+            # Do not let an isolated leading-digit hallucination (for
+            # example wave 5 read as 55) end a run early. Exact exit-wave
+            # reads remain valid on their own; an overshoot is accepted only
+            # after the real target wave was seen earlier in this match.
             state.pop("confirmations", None)
             state.pop("confirmation_wave", None)
             return None
@@ -1389,6 +1402,20 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
         while deadline is None or time.time() < deadline:
             if self._checkpoint(stop_event):
                 return None
+
+            # Leaving an Infinite run at its requested wave is a hard task
+            # boundary, so check it before Battle blocks. Upgrade Unit can
+            # spend several seconds waiting for its info panel; putting the
+            # wave check after that work made the narrow exit-wave window
+            # much easier to miss.
+            if infinite_wave_limit is not None:
+                limit_result = self._check_infinite_wave_limit(
+                    hwnd, stop_event, infinite_wave_limit, infinite_wave_state)
+                if limit_result == "wave_limit":
+                    return "wave_limit"
+                if limit_result == "failed":
+                    return None
+
             if battle_blocks:
                 self._run_battle_blocks_tick(hwnd, stop_event, battle_blocks, first_repeat, macro_name)
                 if self._checkpoint(stop_event):
@@ -1427,14 +1454,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
 
             if watch_close_popup:
                 self._click_close_popup_if_found(hwnd)
-
-            if infinite_wave_limit is not None:
-                limit_result = self._check_infinite_wave_limit(
-                    hwnd, stop_event, infinite_wave_limit, infinite_wave_state)
-                if limit_result == "wave_limit":
-                    return "wave_limit"
-                if limit_result == "failed":
-                    return None
 
             if mode == "expedition":
                 result = self._check_expedition_wave_result(hwnd, stop_event)

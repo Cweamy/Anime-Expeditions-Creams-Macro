@@ -57,7 +57,7 @@
 - **Discord webhook reporting** — optional win/loss embeds posted to a Discord channel as the macro runs.
 - **Win/loss history & stats** — session and all-time win/loss counts, win rate, and a recent-run history, all in the Dashboard.
 - **Global hotkeys** — start/stop/pause without touching the mouse, with the bound key shown right on the Dashboard's controls.
-- **Regular Challenge automation** — its own tab: enable/disable each of the 3 stage slots independently, assign a Macro Operation per Story map (Challenge rotates a random map into each slot), and track today's play count against a daily cap. Resets on the same fixed :00/:30 clock every stage shares. Runs before the Task Queue every time you press Start.
+- **Daily + Regular Challenge automation** — configure both from Resource: Daily runs once per shared 00:00 UTC game day, while Regular can enable/disable each of its 3 rotating stage slots independently. Both reuse the same per-Story-map Macro Operations and support Solo or Matchmaking.
 - **Multi-scale image matching** — automatically tries a template at a few scale factors when the exact size misses, absorbing UI that renders slightly bigger/smaller on someone else's setup instead of failing outright.
 - **Replaceable reference images** — if a button still isn't matching reliably on your setup, drop a same-named screenshot into Settings > General > "Open Assets Folder" to override it — no rebuild or reinstall needed (see [`Assets/ui/README.txt`](Assets/ui/README.txt) for the full catalog of what each image is for).
 - **Themes** — an independent Background (Dark, true Black, Slate, or Light) and Accent color pick, mix and match freely, under Settings > General.
