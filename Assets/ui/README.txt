@@ -357,6 +357,11 @@ reconnect/
   Roblox window is currently open, since the deep link's own
   single-instance handling would force-close it.
 
+teleportstuck/
+  LEGACY -- this crop is Roblox's normal black loading screen, not a
+  distinct error state, so it is deliberately not used as a disconnect
+  signal. Slow legitimate teleports use the normal mode-specific timeout.
+
 nav_settings.png / nav_search.png / toggle_true.png / toggle_false.png /
 nav_settings_on.png
   Used by core.runner._open_settings_search/_search_and_set_toggle to

@@ -304,14 +304,6 @@ TELEPORT_IN_TIMEOUT = 30.0
 MATCHMAKING_TELEPORT_TIMEOUT = 300.0
 SOLO_START_RETRY_ATTEMPTS = 3
 SOLO_TELEPORT_PER_ATTEMPT_TIMEOUT = 20.0  # generous per chunk -- a slow teleport shouldn't burn through attempts
-# How long teleportstuck.png (optional -- see Assets/ui/README.txt) must be
-# CONTINUOUSLY visible during a teleport-in wait before the game is treated
-# as broken and needing a rejoin, rather than just a slow loading screen.
-# Roblox's own disconnect prompt (Assets/ui/reconnect/ -- several visual
-# variants incl. the "Retry" wording, all in that one folder) is a DEFINITE
-# signal on its own -- no continuous-visibility wait needed, unlike
-# teleportstuck's spinner which can be a false alarm for a moment.
-TELEPORT_STUCK_TIMEOUT = 10.0
 TELEPORT_POLL_INTERVAL = 0.3
 RECONNECT_IMAGE_NAMES = ("reconnect",)
 

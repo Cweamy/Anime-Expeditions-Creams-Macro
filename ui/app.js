@@ -5003,7 +5003,7 @@ const IMAGE_DESCRIPTIONS = {
   "select upgrade card": "The level-up 'Select an upgrade!' reward-card popup.",
   story: "The Story card on the Play menu.",
   team: "The Team Loadout panel (opened with H).",
-  teleportstuck: "The stuck / spinning loading screen -- flags a hung teleport.",
+  teleportstuck: "Legacy normal-loading reference; no longer used as a disconnect signal.",
   toggle_false: "A Settings toggle in its OFF state.",
   toggle_true: "A Settings toggle in its ON state.",
   unit_exist: "Confirms a unit was actually placed on the field.",
