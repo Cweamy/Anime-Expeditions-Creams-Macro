@@ -484,13 +484,16 @@ def test_open_modal_clicks_the_green_buy_region_without_matching_a_price(monkeyp
     ]
 
 
-def test_max_amount_clicks_the_modal_toggle_without_searching_max_or_min(monkeypatch):
-    """The stable Cancel anchor makes a second template search unnecessary."""
+def test_max_amount_checks_max_and_min_templates_before_clicking(monkeypatch):
+    """Verify that Max toggle checks template states before clicking to avoid buying 1 instead of Max."""
     runner = _runner([])
     cancel = {"x": 579, "y": 420, "w": 181, "h": 28}
     monkeypatch.setattr(
         "core.runner_shop.vision.find_image",
-        lambda *_args, **_kwargs: pytest.fail("Max and Min templates must not be searched"),
+        lambda _hwnd, name, **_kwargs: (
+            {"x": 710, "y": 374, "w": 43, "h": 22}
+            if name == "shop_amount_max" else None
+        ),
     )
     monkeypatch.setattr(
         "core.runner_shop.vision.ref_to_screen",

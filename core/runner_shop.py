@@ -277,7 +277,15 @@ class ShopOps:
         period = self._shop_state_period(state)
         retry = auto_shop.normalize_item_state(state, period)
         if retry["status"] != auto_shop.STATUS_PENDING_VERIFICATION:
-            retry["status"] = auto_shop.STATUS_RETRY_PENDING
+            # Increment attempts to avoid infinite retry loop
+            retry["attempts"] = min(
+                auto_shop.AUTO_SHOP_MAX_ITEM_ATTEMPTS,
+                retry["attempts"] + 1,
+            )
+            if retry["attempts"] >= auto_shop.AUTO_SHOP_MAX_ITEM_ATTEMPTS:
+                retry["status"] = auto_shop.STATUS_FAILED_TODAY
+            else:
+                retry["status"] = auto_shop.STATUS_RETRY_PENDING
             retry["verification"] = None
         return retry
 
@@ -490,6 +498,30 @@ class ShopOps:
             stop_event: threading.Event) -> bool:
         if str(target).lower() == "max":
             region = auto_shop_vision.amount_toggle_region_from_cancel(cancel_match)
+            # Check if Max is already selected before clicking the toggle.
+            # The game displays "Min" when Max is active and vice versa.
+            try:
+                max_match = vision.find_image(
+                    hwnd,
+                    auto_shop.AUTO_SHOP_UI_TEMPLATES["amount_max"],
+                    region=region,
+                )
+            except vision.TemplateNotFound:
+                max_match = None
+            try:
+                min_match = vision.find_image(
+                    hwnd,
+                    auto_shop.AUTO_SHOP_UI_TEMPLATES["amount_min"],
+                    region=region,
+                )
+            except vision.TemplateNotFound:
+                min_match = None
+            action = auto_shop.max_toggle_action(
+                max_visible=max_match is not None,
+                min_visible=min_match is not None,
+            )
+            if action == auto_shop.MAX_TOGGLE_ALREADY_SELECTED:
+                return not self._checkpoint(stop_event)
             x, y, width, height = region
             screen_x, screen_y = vision.ref_to_screen(
                 hwnd,
