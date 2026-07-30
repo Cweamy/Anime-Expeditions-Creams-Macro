@@ -99,6 +99,31 @@ def test_gamemode_click_retries_after_party_overlay(monkeypatch):
     runner._dismiss_party_overlay.assert_called_once()
 
 
+def test_play_click_parks_cursor_before_gamemode_transition(monkeypatch):
+    runner = _runner()
+    runner._set_status = MagicMock()
+    play_match = {"score": 1.0, "cx": 575, "cy": 675}
+
+    monkeypatch.setattr(
+        runner_module.vision,
+        "find_image_any",
+        lambda *_args, **_kwargs: (play_match, "nav_play"),
+    )
+    click_match = MagicMock()
+    monkeypatch.setattr(runner_module.vision, "click_match", click_match)
+    monkeypatch.setattr(runner_module.wm, "activate_window", lambda _hwnd: True)
+    monkeypatch.setattr(
+        runner_module.wm,
+        "get_window_rect_screen",
+        lambda _hwnd: (100, 200, 1252, 956),
+    )
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+
+    assert runner._click_play(123, threading.Event()) is True
+    click_match.assert_called_once_with(runner._mouse, 123, play_match)
+    runner._mouse.move_to.assert_called_once_with(103, 203)
+
+
 def test_invite_decline_variant_survives_small_ui_scale_shift(tmp_path):
     source = Path(vision.UI_ASSETS_DIR, "nav_disband", "nav_disband_invite.png")
     template = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
