@@ -610,21 +610,68 @@ class BlockOps:
         return False
 
     def _run_auto_upgrade_unit_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int) -> bool:
-        """One-shot: click the unit, right-click "priority_upgrade" (found
-        on its info panel) to open its priority menu, click the configured
-        priority row (or Disable for "None"), then a reset click. Always
-        "done" after one try -- setting a priority isn't a repeated action
-        the way Upgrade Unit's clicks are."""
+        """One-shot: select the unit and cycle auto-upgrade to its configured
+        priority, either through the info-panel button or the user's matching
+        in-game hotkey. Always "done" after one try -- setting a priority
+        isn't a repeated action the way Upgrade Unit's clicks are."""
         label = f'Battle block #{block_num} (Auto Upgrade Unit)'
         pos = self._placed_unit_click_point(block, label)
         if pos is None:
             return True
+
+        params = block.get("params", {})
+        priority = str(params.get("priority") or "None")
+        if priority == "None":
+            steps = AUTO_UPGRADE_MAX_PRIORITY + 1
+        else:
+            try:
+                steps = max(1, min(AUTO_UPGRADE_MAX_PRIORITY, int(priority)))
+            except ValueError:
+                steps = 1
 
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._set_status(action="Setting auto-upgrade priority...")
         self._mouse.click(left + pos[0], top + pos[1])
         time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
         if self._checkpoint(stop_event):
+            return True
+
+        if str(params.get("input") or "click").lower() == "hotkey":
+            hotkey = str((self._get_hotkeys() or {}).get("game_auto_upgrade") or "")
+            vk = keys.key_name_to_vk(hotkey)
+            if vk is None:
+                self._log(
+                    f"{label}: Hotkey input selected, but Auto Upgrade is unbound in "
+                    "Settings > Hotkeys -- skipping."
+                )
+                return True
+
+            if priority == "None":
+                self._log(
+                    f"{label}: holding Auto Upgrade hotkey {hotkey.upper()} "
+                    "to clear it back to off."
+                )
+                self._keyboard.key_down(vk)
+                try:
+                    time.sleep(AUTO_UPGRADE_CLEAR_HOLD)
+                finally:
+                    self._keyboard.key_up(vk)
+            else:
+                self._log(
+                    f"{label}: pressing Auto Upgrade hotkey {hotkey.upper()} "
+                    f"{steps}x to set priority {steps}."
+                )
+                for n in range(steps):
+                    self._keyboard.tap(vk)
+                    if n < steps - 1:
+                        time.sleep(AUTO_UPGRADE_STEP_DELAY)
+                    if self._checkpoint(stop_event):
+                        return True
+            time.sleep(AUTO_UPGRADE_CLICK_SETTLE)
+            self._mouse.click(
+                left + self._coords["unit_info_reset_x"],
+                top + self._coords["unit_info_reset_y"],
+            )
             return True
 
         try:
@@ -651,19 +698,15 @@ class BlockOps:
         # What it actually is: each left click advances the priority by one,
         # so priority N is N clicks on the icon itself, and one click past
         # the last priority wraps it back to off.
-        priority = str(block.get("params", {}).get("priority") or "None")
         cx = left + priority_match["cx"]
         cy = top + priority_match["cy"]
 
         if priority == "None":
-            clicks = AUTO_UPGRADE_MAX_PRIORITY + 1
+            clicks = steps
             self._log(f'{label}: found "{priority_name}" (score {priority_match["score"]:.2f}) -- '
                        f'clicking it {clicks}x to cycle back to off.{suffix}')
         else:
-            try:
-                clicks = max(1, min(AUTO_UPGRADE_MAX_PRIORITY, int(priority)))
-            except ValueError:
-                clicks = 1
+            clicks = steps
             self._log(f'{label}: found "{priority_name}" (score {priority_match["score"]:.2f}) -- '
                        f'clicking it {clicks}x for priority {clicks}.{suffix}')
 

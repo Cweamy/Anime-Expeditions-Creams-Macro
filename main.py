@@ -143,6 +143,10 @@ ROBLOX_RELAUNCH_COOLDOWN = 60.0
 HOTKEY_DEFAULTS = {
     "toggle_game": "f4", "skip_waiting": "", "macro_start": "f1", "macro_stop": "f2", "macro_pause": "f5",
     "debug_screenshot": "f3",
+    # Sent to Roblox by an Auto Upgrade Unit block whose Input is set to
+    # Hotkey. This is deliberately not registered as an app-wide shortcut
+    # in _register_hotkeys: it belongs to the game, not the macro UI.
+    "game_auto_upgrade": "",
     # Toggles the Image Manager from anywhere -- capturing a missing crop
     # right when a search fails shouldn't need clicking back through
     # Settings > General first.
@@ -488,7 +492,8 @@ class Api:
         self.runner = MacroRunner(
             self.mouse, self.keyboard, self.push_log, self._set_run_status, self._record_match_result,
             self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot,
-            self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings)
+            self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings,
+            self.get_hotkeys)
 
     def _run_stats_snapshot(self) -> dict:
         # Fed to the runner's match-result webhook so it can report the same

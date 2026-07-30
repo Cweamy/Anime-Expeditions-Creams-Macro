@@ -921,6 +921,16 @@
                 <button id="keybind-toggle_compact" class="keybind-btn" onclick="startRebind('toggle_compact', this)">F7</button>
               </div>
             </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Auto Upgrade (In Game)</div>
+                <div class="setting-desc">Match the Auto Upgrade key configured in the game's settings. Used by Auto Upgrade Unit blocks set to Hotkey.</div>
+              </div>
+              <div class="keybind-group">
+                <button id="keybind-clear-game_auto_upgrade" class="keybind-clear-btn" onclick="clearHotkey('game_auto_upgrade')" title="Reset to default key (press Esc while capturing to unbind)">&times;</button>
+                <button id="keybind-game_auto_upgrade" class="keybind-btn" onclick="startRebind('game_auto_upgrade', this)">Unbound</button>
+              </div>
+            </div>
           </div>
         </section>
       </div>

@@ -276,3 +276,130 @@ def test_run_target_priority_tick():
     assert done is True
     assert any("pressing R to set target priority to Boss" in log for log in runner.logs)
     assert runner._keyboard.tap.called
+
+
+class _AutoUpgradeRunner(BlockOps):
+    def __init__(self, hotkey="g"):
+        self._placed_unit_positions = {1: (100, 200)}
+        self._coords = {"unit_info_reset_x": 10, "unit_info_reset_y": 20}
+        self._mouse = MagicMock()
+        self._keyboard = MagicMock()
+        self._get_hotkeys = lambda: {"game_auto_upgrade": hotkey}
+        self.logs = []
+
+    def _log(self, msg):
+        self.logs.append(msg)
+
+    def _set_status(self, **kw):
+        pass
+
+    def _checkpoint(self, stop_event):
+        return False
+
+    def _debug_save(self, *args):
+        return None
+
+
+def test_auto_upgrade_hotkey_cycles_to_selected_priority(monkeypatch):
+    """Hotkey mode selects the unit, presses the configured game key once per
+    priority step, and never depends on finding the small info-panel button."""
+    from core import runner_blocks
+    import threading
+
+    runner = _AutoUpgradeRunner("g")
+    monkeypatch.setattr(runner_blocks.wm, "get_window_rect_screen",
+                        lambda hwnd: (50, 60, 1202, 816))
+    monkeypatch.setattr(runner_blocks.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runner_blocks.vision,
+        "find_image_any",
+        lambda *a, **k: pytest.fail("hotkey mode should not search for priority_upgrade"),
+    )
+
+    block = {
+        "type": "auto_upgrade_unit",
+        "params": {"index": 1, "priority": 3, "input": "hotkey"},
+    }
+    assert runner._run_auto_upgrade_unit_tick(123, threading.Event(), block, 2) is True
+
+    assert [item.args for item in runner._mouse.click.call_args_list] == [
+        (150, 260),
+        (60, 80),
+    ]
+    assert [item.args for item in runner._keyboard.tap.call_args_list] == [
+        (ord("G"),),
+        (ord("G"),),
+        (ord("G"),),
+    ]
+    assert any("hotkey G 3x" in message for message in runner.logs)
+
+
+def test_auto_upgrade_hotkey_none_holds_to_clear(monkeypatch):
+    from core import runner_blocks
+    import threading
+
+    runner = _AutoUpgradeRunner("f8")
+    monkeypatch.setattr(runner_blocks.wm, "get_window_rect_screen",
+                        lambda hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_blocks.time, "sleep", lambda seconds: None)
+
+    block = {
+        "type": "auto_upgrade_unit",
+        "params": {"index": 1, "priority": "None", "input": "hotkey"},
+    }
+    runner._run_auto_upgrade_unit_tick(123, threading.Event(), block, 1)
+
+    runner._keyboard.tap.assert_not_called()
+    runner._keyboard.key_down.assert_called_once_with(keys.VK_F8)
+    runner._keyboard.key_up.assert_called_once_with(keys.VK_F8)
+    assert any("clear it back to off" in message for message in runner.logs)
+
+
+def test_auto_upgrade_hotkey_unbound_is_actionable_and_safe(monkeypatch):
+    from core import runner_blocks
+    import threading
+
+    runner = _AutoUpgradeRunner("")
+    monkeypatch.setattr(runner_blocks.wm, "get_window_rect_screen",
+                        lambda hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_blocks.time, "sleep", lambda seconds: None)
+
+    block = {
+        "type": "auto_upgrade_unit",
+        "params": {"index": 1, "priority": 1, "input": "hotkey"},
+    }
+    assert runner._run_auto_upgrade_unit_tick(123, threading.Event(), block, 1) is True
+
+    runner._keyboard.tap.assert_not_called()
+    assert any("Settings > Hotkeys" in message for message in runner.logs)
+
+
+def test_legacy_auto_upgrade_block_still_uses_click_mode(monkeypatch):
+    """An existing template has no input field, so missing must continue to
+    mean click rather than silently changing behavior after an update."""
+    from core import runner_blocks
+    import threading
+
+    runner = _AutoUpgradeRunner("g")
+    monkeypatch.setattr(runner_blocks.wm, "get_window_rect_screen",
+                        lambda hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_blocks.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runner_blocks.vision,
+        "find_image_any",
+        lambda *a, **k: (
+            {"cx": 300, "cy": 400, "score": 0.99},
+            "priority_upgrade",
+        ),
+    )
+
+    block = {"type": "auto_upgrade_unit", "params": {"index": 1, "priority": 2}}
+    runner._run_auto_upgrade_unit_tick(123, threading.Event(), block, 1)
+
+    runner._keyboard.tap.assert_not_called()
+    assert [item.args for item in runner._mouse.click.call_args_list] == [
+        (100, 200),
+        (300, 400),
+        (300, 400),
+        (10, 20),
+    ]
