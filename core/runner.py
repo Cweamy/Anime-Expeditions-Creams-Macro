@@ -852,13 +852,14 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                 # navigation (which starts from the lobby) runs.
                 challenge_wants_in = (not is_last_repeat) and self._challenge_has_ready_stage()
                 # Same interleave shape for Auto Crafting: if the win counter
-                # has hit its threshold, force a real Leave Stage this repeat so
-                # the crafting navigation (which starts from the lobby) can run.
-                # Checked BEFORE _handle_match_result, which is where THIS win
-                # gets counted -- so a pass fires on the repeat after the count
-                # reaches N, not the same one (a one-repeat lag, negligible on a
-                # farm and worth keeping the clean Leave-Stage-first ordering).
-                crafting_wants_in = (not is_last_repeat) and self._crafting_wants_in()
+                # reaches its threshold INCLUDING this result, force a real
+                # Leave Stage now so crafting navigation can start from the
+                # lobby. _handle_match_result persists this win immediately
+                # afterward; the projection here only decides Repeat vs Leave.
+                crafting_wants_in = (
+                    (not is_last_repeat)
+                    and self._crafting_wants_in(task, result)
+                )
                 # The bounded-Infinite path and the Leave-at-Minute block
                 # (left_live_match) already left the live match, so there is no
                 # Victory/Defeat screen to process here.
@@ -935,6 +936,18 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                     self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
                     if self._checkpoint(stop_event):
                         return False
+                    # Challenge has priority when both diversions become due
+                    # on the same result. It can also add qualifying wins of
+                    # its own, so honor a now-due crafting pass while already
+                    # in the lobby instead of re-entering the farm for an
+                    # unnecessary extra match first.
+                    if self._crafting_wants_in():
+                        self._log(
+                            "[Macro] Crafting became due during Challenge -- "
+                            "running it before resuming the farm.")
+                        self._run_crafting(hwnd, stop_event)
+                        if self._checkpoint(stop_event):
+                            return False
                     self._log(f'[Macro] Challenge pass finished -- resuming "{map_name}".')
                     # Left the stage entirely for Challenge (repeat=False
                     # above already did Leave Stage + Return to Lobby), so
