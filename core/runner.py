@@ -2613,7 +2613,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         return False
 
     def _click_found_image(self, hwnd, name: str, timeout: float, stop_event: threading.Event = None,
-                            shuffle: bool = False) -> dict:
+                            shuffle: bool = False, threshold: float = vision.DEFAULT_THRESHOLD) -> dict:
         """Shared wait-for-it-then-click for a plain nav button (nav_settings,
         nav_search, ...) -- no per-button quirks like Story/Play have, so one
         helper covers all of them instead of a bespoke method each.
@@ -2630,7 +2630,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         re-searching for the same button a second time.
         """
         try:
-            match = vision.wait_for_image(hwnd, name, timeout=timeout, stop_event=stop_event)
+            match = vision.wait_for_image(hwnd, name, timeout=timeout, threshold=threshold, stop_event=stop_event)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] {exc}")
             return None

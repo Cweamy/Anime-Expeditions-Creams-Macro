@@ -568,6 +568,8 @@ DEFAULT_COORDS = {
     "team_loadout_row_height": TEAM_LOADOUT_ROW_HEIGHT,
     "screen_middle_x": SCREEN_MIDDLE_CLICK[0], "screen_middle_y": SCREEN_MIDDLE_CLICK[1],
     "unit_info_reset_x": UNIT_INFO_RESET_CLICK[0], "unit_info_reset_y": UNIT_INFO_RESET_CLICK[1],
+    "daily_challenge_tab_x": 250, "daily_challenge_tab_y": 315,
+    "daily_challenge_stage_x": 650, "daily_challenge_stage_y": 360,
 }
 
 # Victory/Defeat: no fixed timeout makes sense for "how long can a battle
