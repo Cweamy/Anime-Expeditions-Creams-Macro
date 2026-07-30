@@ -28,6 +28,8 @@ from core.keyboard import Keyboard
 from core.logger import Logger
 from core.runner import MacroRunner
 from core import updater
+from core import auto_shop
+from core.auto_shop import current_auto_shop_period
 
 # Imported at module scope (not inside the darwin branches that use it) so the
 # macOS-only geometry helpers below can be plain module functions. window_mac
@@ -496,7 +498,9 @@ class Api:
             self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot,
             self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings,
             self.set_bounty_remaining, self.get_fuel_settings, self.mark_fuel_refill_result,
-            self.get_hotkeys)
+            self.get_hotkeys,
+            self.get_auto_shop_settings, self._save_auto_shop_item_state,
+            self._save_auto_shop_shop_state)
 
     def _run_stats_snapshot(self) -> dict:
         # Fed to the runner's match-result webhook so it can report the same
@@ -1397,6 +1401,208 @@ class Api:
         data = cfg.load()
         coords = {k: data.get(k, v) for k, v in MACRO_COORD_DEFAULTS.items()}
         return self.runner.start_crafting_test(lambda: self.game_hwnd, coords)
+
+    # -- Auto Shop (see core/auto_shop.py and core/runner_shop.py) --
+
+    @staticmethod
+    def _auto_shop_item_map(items) -> dict:
+        if isinstance(items, dict):
+            return items
+        if isinstance(items, list):
+            return {
+                str(item.get("key")): item
+                for item in items
+                if isinstance(item, dict) and item.get("key")
+            }
+        return {}
+
+    def _canonical_auto_shop_settings(self, source) -> dict:
+        period = current_auto_shop_period()
+        source_shops = source.get("shops") if isinstance(source, dict) else {}
+        source_shops = source_shops if isinstance(source_shops, dict) else {}
+        source_gold = source_shops.get("gold_shop")
+        source_gold = source_gold if isinstance(source_gold, dict) else {}
+        source_items = self._auto_shop_item_map(source_gold.get("items"))
+        normalized = auto_shop.normalize_auto_shop_settings({
+            "enabled": source.get("enabled", False) if isinstance(source, dict) else False,
+            "shops": {
+                "gold_shop": {
+                    **source_gold,
+                    "items": source_items,
+                },
+            },
+        })
+
+        gold_config = normalized["shops"]["gold_shop"]
+        canonical = {
+            "enabled": normalized["enabled"],
+            "shops": {
+                "gold_shop": {
+                    "enabled": gold_config["enabled"],
+                    "state": auto_shop.normalize_shop_state(
+                        source_gold.get("state"),
+                        period,
+                    ),
+                    "items": {},
+                },
+            },
+        }
+        for definition in auto_shop.AUTO_SHOP_ITEMS:
+            item_key = definition["key"]
+            source_item = source_items.get(item_key)
+            source_item = source_item if isinstance(source_item, dict) else {}
+            config_item = gold_config["items"][item_key]
+            canonical["shops"]["gold_shop"]["items"][item_key] = {
+                "enabled": config_item["enabled"],
+                "target": config_item["target"],
+                "state": auto_shop.normalize_item_state(
+                    source_item.get("state"),
+                    period,
+                ),
+            }
+        return canonical
+
+    def _save_auto_shop_settings(self, settings: dict) -> dict:
+        canonical = self._canonical_auto_shop_settings(settings)
+        cfg.update({"auto_shop": canonical})
+        return canonical
+
+    def get_auto_shop_settings(self) -> dict:
+        saved = cfg.load().get("auto_shop") or {}
+        canonical = self._canonical_auto_shop_settings(saved)
+        if canonical != saved:
+            cfg.update({"auto_shop": canonical})
+
+        gold_shop = canonical["shops"]["gold_shop"]
+        return {
+            "enabled": canonical["enabled"],
+            "reset_schedule": auto_shop.AUTO_SHOP_RESET_SCHEDULE,
+            "shops": {
+                "gold_shop": {
+                    "name": "Gold Shop",
+                    "enabled": gold_shop["enabled"],
+                    "state": gold_shop["state"],
+                    "items": [
+                        {
+                            "key": definition["key"],
+                            "name": definition["name"],
+                            "daily_maximum": definition["stock"],
+                            **gold_shop["items"][definition["key"]],
+                        }
+                        for definition in auto_shop.AUTO_SHOP_ITEMS
+                    ],
+                },
+            },
+        }
+
+    def set_auto_shop_enabled(self, enabled: bool) -> dict:
+        settings = self.get_auto_shop_settings()
+        settings["enabled"] = bool(enabled)
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def set_auto_shop_shop_enabled(self, shop_key: str, enabled: bool) -> dict:
+        settings = self.get_auto_shop_settings()
+        if shop_key not in settings["shops"]:
+            return {"ok": False, "reason": "bad_shop"}
+        settings["shops"][shop_key]["enabled"] = bool(enabled)
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def set_auto_shop_item_enabled(
+            self, shop_key: str, item_key: str, enabled: bool) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        item = next(
+            (entry for entry in shop["items"] if entry["key"] == item_key),
+            None,
+        )
+        if item is None:
+            return {"ok": False, "reason": "bad_item"}
+        item["enabled"] = bool(enabled)
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def set_auto_shop_item_target(
+            self, shop_key: str, item_key: str, target) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        item = next(
+            (entry for entry in shop["items"] if entry["key"] == item_key),
+            None,
+        )
+        if item is None:
+            return {"ok": False, "reason": "bad_item"}
+        try:
+            normalized_target = auto_shop.normalize_target(
+                target,
+                item["daily_maximum"],
+            )
+        except ValueError:
+            return {"ok": False, "reason": "bad_target"}
+        previous_target = item["target"]
+        item["target"] = normalized_target
+        if (
+                normalized_target != previous_target
+                and (item.get("state") or {}).get("status")
+                == auto_shop.STATUS_COMPLETED):
+            item["state"]["status"] = auto_shop.STATUS_PENDING
+            item["state"]["verification"] = None
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def reset_auto_shop_item_today(
+            self, shop_key: str, item_key: str) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        item = next(
+            (entry for entry in shop["items"] if entry["key"] == item_key),
+            None,
+        )
+        if item is None:
+            return {"ok": False, "reason": "bad_item"}
+        item["state"] = auto_shop.fresh_item_state(
+            current_auto_shop_period()
+        )
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def _save_auto_shop_shop_state(self, shop_key: str, state: dict) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        shop["state"] = auto_shop.normalize_shop_state(
+            state,
+            current_auto_shop_period(),
+        )
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def _save_auto_shop_item_state(
+            self, shop_key: str, item_key: str, state: dict) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        item = next(
+            (entry for entry in shop["items"] if entry["key"] == item_key),
+            None,
+        )
+        if item is None:
+            return {"ok": False, "reason": "bad_item"}
+        item["state"] = auto_shop.normalize_item_state(
+            state,
+            current_auto_shop_period(),
+        )
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
 
     # ── Auto Fuel (see core/runner_fuel.py) ──
 

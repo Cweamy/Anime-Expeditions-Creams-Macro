@@ -522,7 +522,13 @@ function switchScreen(name) {
 
   if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); }
   if (name === 'task') refreshTaskQueue();
-  if (name === 'resource') { refreshCraftingScreen(); refreshFuelScreen(); refreshChallengeScreen(); refreshBountyScreen(); }
+  if (name === 'resource') {
+    refreshCraftingScreen();
+    refreshFuelScreen();
+    refreshAutoShopScreen();
+    refreshChallengeScreen();
+    refreshBountyScreen();
+  }
   if (name === 'settings') { refreshSavedPaths(); loadMacroCoords(); loadRewardTestMaps(); }
 
   // The Process Log only exists on the Dashboard, and a display:none element
@@ -3375,6 +3381,166 @@ function renderFuelPaths() {
 }
 
 setInterval(renderFuelTimers, 1000);
+
+// ---------------------------------------------------------------------------
+// Auto Shop screen. The backend owns the catalog and daily state; the UI only
+// edits stable shop/item identifiers and their requested daily targets.
+// ---------------------------------------------------------------------------
+let autoShopState = null;
+
+function autoShopStatusLabel(status) {
+  return {
+    completed: 'Complete',
+    out_of_stock: 'Out of stock',
+    max_inventory: 'Max inventory',
+    failed_today: 'Failed today',
+    pending_verification: 'Verifying',
+    retry_pending: 'Retry scheduled',
+    pending: 'Pending',
+  }[status] || 'Pending';
+}
+
+async function refreshAutoShopScreen() {
+  try {
+    autoShopState = await pywebview.api.get_auto_shop_settings();
+  } catch (e) {
+    autoShopState = null;
+  }
+  renderAutoShopScreen();
+}
+
+function renderAutoShopScreen() {
+  const state = autoShopState;
+  const goldShop = state && state.shops ? state.shops.gold_shop : null;
+  const items = (goldShop && goldShop.items) || [];
+  const enabledItems = items.filter(item => item.enabled);
+  const completeItems = enabledItems.filter(
+    item => ['completed', 'out_of_stock', 'max_inventory'].includes(
+      (item.state || {}).status
+    )
+  );
+
+  const summary = document.getElementById('resource-auto-shop-summary');
+  if (summary) {
+    summary.textContent = state && state.enabled ? 'Enabled' : 'Disabled';
+    summary.classList.toggle('active', !!(state && state.enabled));
+  }
+  const details = document.getElementById('resource-auto-shop-details');
+  if (details) {
+    details.textContent = `Gold Shop: ${enabledItems.length} enabled | ${completeItems.length} complete`;
+    details.title = details.textContent;
+  }
+  document.getElementById('toggle-auto-shop-enabled')?.classList.toggle(
+    'on',
+    !!(state && state.enabled)
+  );
+  document.getElementById('toggle-gold-shop-enabled')?.classList.toggle(
+    'on',
+    !!(goldShop && goldShop.enabled)
+  );
+
+  const list = document.getElementById('auto-shop-gold-items');
+  if (!list) return;
+  if (!goldShop) {
+    list.innerHTML = '<div class="rh-empty">Couldn\'t load Auto Shop settings.</div>';
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const isMax = String(item.target).toLowerCase() === 'max';
+    const numericTarget = isMax ? '' : item.target;
+    const runtime = item.state || {};
+    const attempts = Number(runtime.attempts || 0);
+    const status = autoShopStatusLabel(runtime.status);
+    const resetToday = runtime.status && runtime.status !== 'pending'
+      ? `<button type="button" class="seg-btn active"
+                 onclick="resetAutoShopItemToday('gold_shop', '${item.key}')">Reset Today</button>`
+      : '';
+    return `
+      <div class="task-card" data-key="${escapeHtml(item.key)}" style="--tqc: var(--amber); cursor: default;">
+        <div class="tq-text" style="min-width: 0; flex: 1;">
+          <div class="challenge-map-row" style="margin-top: 0;">
+            <button class="toggle-switch ${item.enabled ? 'on' : ''}"
+                    onclick="toggleAutoShopItem('gold_shop', '${item.key}', this)"></button>
+            <div style="min-width: 130px; flex: 1;">
+              <div class="tq-title">${escapeHtml(item.name)}</div>
+              <div class="setting-desc">Daily max: ${item.daily_maximum} | ${status}${attempts ? ` | ${attempts}/3 attempts` : ''}</div>
+            </div>
+            ${resetToday}
+            <div class="seg-toggle" style="width: auto;">
+              <button type="button" value="max" class="seg-btn ${isMax ? 'active' : ''}"
+                      onclick="setAutoShopItemMax('gold_shop', '${item.key}')">Max</button>
+              <button type="button" class="seg-btn ${isMax ? '' : 'active'}"
+                      onclick="setAutoShopItemNumberMode('gold_shop', '${item.key}')">Number</button>
+            </div>
+            <input type="number" class="block-input" min="1" max="${item.daily_maximum}"
+                   style="width: 64px; ${isMax ? 'visibility: hidden;' : ''}"
+                   value="${numericTarget}" placeholder="Qty"
+                   onchange="setAutoShopItemTarget('gold_shop', '${item.key}', this.value, ${item.daily_maximum})">
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function toggleAutoShopEnabled(button) {
+  const enabled = !button.classList.contains('on');
+  button.classList.toggle('on', enabled);
+  bounceToggle(button);
+  try { await pywebview.api.set_auto_shop_enabled(enabled); } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function toggleAutoShopShopEnabled(shopKey, button) {
+  const enabled = !button.classList.contains('on');
+  button.classList.toggle('on', enabled);
+  bounceToggle(button);
+  try { await pywebview.api.set_auto_shop_shop_enabled(shopKey, enabled); } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function toggleAutoShopItem(shopKey, itemKey, button) {
+  const enabled = !button.classList.contains('on');
+  button.classList.toggle('on', enabled);
+  bounceToggle(button);
+  try {
+    await pywebview.api.set_auto_shop_item_enabled(shopKey, itemKey, enabled);
+  } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function setAutoShopItemMax(shopKey, itemKey) {
+  try {
+    await pywebview.api.set_auto_shop_item_target(shopKey, itemKey, 'max');
+  } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function setAutoShopItemNumberMode(shopKey, itemKey) {
+  const shop = autoShopState && autoShopState.shops
+    ? autoShopState.shops[shopKey]
+    : null;
+  const item = ((shop && shop.items) || []).find(entry => entry.key === itemKey);
+  const target = item && String(item.target).toLowerCase() !== 'max' ? item.target : 1;
+  await setAutoShopItemTarget(shopKey, itemKey, target, item ? item.daily_maximum : 1);
+}
+
+async function setAutoShopItemTarget(shopKey, itemKey, value, dailyMaximum) {
+  const target = Math.max(1, Math.min(
+    Number(dailyMaximum) || 1,
+    parseInt(value, 10) || 1
+  ));
+  try {
+    await pywebview.api.set_auto_shop_item_target(shopKey, itemKey, target);
+  } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function resetAutoShopItemToday(shopKey, itemKey) {
+  try {
+    await pywebview.api.reset_auto_shop_item_today(shopKey, itemKey);
+  } catch (e) {}
+  await refreshAutoShopScreen();
+}
 
 // Auto Crafting screen (see core/runner_crafting.py). Interleaved like
 // Challenge: after every N qualifying wins it runs one crafting pass. The

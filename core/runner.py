@@ -36,6 +36,7 @@ from .runner_challenge import ChallengeOps
 from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
 from .runner_fuel import FuelOps
+from .runner_shop import ShopOps
 
 
 def _find_team_load_button(frame, expected_y):
@@ -76,7 +77,7 @@ def _find_team_load_button(frame, expected_y):
     return cx, cy
 
 
-class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, BlockOps):
+class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, ExpeditionOps, BlockOps):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
     active at a time (one physical game window, one macro)."""
@@ -85,7 +86,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
                  get_challenge_settings=None, mark_challenge_stage_played=None, get_run_stats=None,
                  get_crafting_settings=None, set_crafting_count=None, get_bounty_settings=None,
                  set_bounty_remaining=None, get_fuel_settings=None,
-                 mark_fuel_refill_result=None, get_hotkeys=None):
+                 mark_fuel_refill_result=None, get_hotkeys=None,
+                 get_auto_shop_settings=None,
+                 save_auto_shop_item_state=None, save_auto_shop_shop_state=None):
         self._mouse = mouse
         self._keyboard = keyboard
         self._log = log
@@ -158,6 +161,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         # state and reports each station's result.
         self._get_fuel_settings = get_fuel_settings
         self._mark_fuel_refill_result = mark_fuel_refill_result
+        self._get_auto_shop_settings = get_auto_shop_settings
+        self._save_auto_shop_item_state = save_auto_shop_item_state
+        self._save_auto_shop_shop_state = save_auto_shop_shop_state
         self._thread = None
         self._stop_event = None
         self._pause_event = threading.Event()
@@ -718,6 +724,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
             self._run_guarded_phase(
                 "Auto Fuel", hwnd, stop_event,
                 lambda: self._run_fuel_refill_if_due(hwnd, stop_event))
+            self._run_guarded_phase(
+                "Auto Shop", hwnd, stop_event,
+                lambda: self._run_auto_shop_if_due(hwnd, stop_event))
         if self._checkpoint(stop_event):
             return
 
@@ -797,6 +806,13 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
                 self._run_guarded_phase(
                     "Auto Fuel", hwnd, stop_event,
                     lambda: self._run_fuel_refill_if_due(hwnd, stop_event))
+                if self._current_hwnd and wm.is_window(self._current_hwnd):
+                    hwnd = self._current_hwnd
+                if self._checkpoint(stop_event):
+                    return
+                self._run_guarded_phase(
+                    "Auto Shop", hwnd, stop_event,
+                    lambda: self._run_auto_shop_if_due(hwnd, stop_event))
                 if self._current_hwnd and wm.is_window(self._current_hwnd):
                     hwnd = self._current_hwnd
                 if self._checkpoint(stop_event):
@@ -951,6 +967,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
                 # forces Leave Stage now, then the pass runs from the lobby
                 # before this same task is entered again.
                 fuel_wants_in = (not is_last_repeat) and self._fuel_wants_in()
+                # Auto Shop runs last among resource diversions. It uses the
+                # same leave-to-lobby boundary and never interrupts a match.
+                auto_shop_wants_in = (
+                    (not is_last_repeat)
+                    and self._auto_shop_wants_in()
+                )
                 # The bounded-Infinite path and the Leave-at-Minute block
                 # (left_live_match) already left the live match, so there is no
                 # Victory/Defeat screen to process here.
@@ -958,6 +980,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
                         hwnd, stop_event, task, result, duration, webhook,
                         repeat=(not is_last_repeat) and not challenge_wants_in
                         and not crafting_wants_in and not fuel_wants_in
+                        and not auto_shop_wants_in
                         and not restart_needed):
                     if stop_event.is_set():
                         return False
@@ -1090,6 +1113,40 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
                         current_repeat=f"{repeat_index + 1} / {repeat_total}",
                         map=map_name,
                         action="Resuming after Auto Fuel...",
+                        mode=mode,
+                        stage=str(task.get("stage") or "-"),
+                        difficulty=task.get("difficulty") or "-",
+                        play_mode=task.get("play_mode") or "solo",
+                        macro=task.get("macro") or "-",
+                    )
+                    if not self._run_task_setup(
+                            hwnd, stop_event, task, mode, map_name, coords,
+                            scroll_power, scroll_nudges, webhook):
+                        if stop_event.is_set():
+                            return False
+                        task_failed = True
+                        break
+                    fresh_entry = True
+                    continue
+
+                if auto_shop_wants_in:
+                    self._log(
+                        f'[Macro] Auto Shop is due. Pausing "{map_name}" '
+                        "at a safe boundary."
+                    )
+                    self._run_auto_shop(hwnd, stop_event)
+                    if self._checkpoint(stop_event):
+                        return False
+                    if self._current_hwnd and wm.is_window(self._current_hwnd):
+                        hwnd = self._current_hwnd
+                    self._log(
+                        f'[Macro] Auto Shop pass finished. Resuming "{map_name}".'
+                    )
+                    self._set_status(
+                        current_task=f"{task_index} / {task_count}",
+                        current_repeat=f"{repeat_index + 1} / {repeat_total}",
+                        map=map_name,
+                        action="Resuming after Auto Shop...",
                         mode=mode,
                         stage=str(task.get("stage") or "-"),
                         difficulty=task.get("difficulty") or "-",

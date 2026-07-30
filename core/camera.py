@@ -12,18 +12,12 @@ import time
 from . import window as wm
 
 
-def run_camera_setup(mouse, keyboard, hwnd, hold_ms: float = 2000) -> None:
-    """Blocking -- takes ~(1s drag + hold_ms). Caller is responsible for the
-    focus dance (wm.show_window/activate_window) beforehand; this only does
-    the actual drag + zoom-hold, same as every other input-sending routine
-    in core/. hold_ms is how long O is held for the zoom-out -- 2000 by
-    default (the standard macro viewpoint), overridable for Settings >
-    Debug > "Camera Setup 2" to test other hold times.
+def tilt_camera_top_down(mouse, hwnd) -> None:
+    """Pin the Roblox camera pitch without changing its zoom.
 
-    The drag uses *relative* SendInput moves (Mouse.nudge), not absolute
-    repositioning: with right-click held, Roblox rotates the camera from raw
-    mouse deltas and recenters the (locked, hidden) cursor every frame, so an
-    absolute move_to jump wouldn't register as rotation at all.
+    Caller owns the focus dance. Relative moves are required because Roblox
+    consumes raw mouse deltas while the right button is held and recenters the
+    hidden cursor every frame.
     """
     left, top, right, bottom = wm.get_window_rect_screen(hwnd)
     cx, cy = (left + right) // 2, (top + bottom) // 2
@@ -48,10 +42,14 @@ def run_camera_setup(mouse, keyboard, hwnd, hold_ms: float = 2000) -> None:
         # held down for the rest of the run -- every later mouse move would
         # then read to Roblox as an active camera-rotate drag instead of a
         # normal, unlocked cursor move (the same "holding right click keeps
-        # the mouse from locking" symptom this function exists to produce
-        # correctly). Releasing in finally guarantees it's never left stuck.
+        # the mouse from locking" symptom this helper exists to produce).
         mouse.up("right")
     time.sleep(0.15)
+
+
+def run_camera_setup(mouse, keyboard, hwnd, hold_ms: float = 2000) -> None:
+    """Pin the pitch, then hold O for the standard maximum zoom-out."""
+    tilt_camera_top_down(mouse, hwnd)
 
     keyboard.key_down(ord("O"))
     try:
@@ -73,24 +71,7 @@ def run_camera_drag_hold(mouse, keyboard, hwnd, hold_ms: float = 2500, o_tap_ms:
     held-input-released-in-finally safety as run_camera_setup above."""
     from . import keys
 
-    left, top, right, bottom = wm.get_window_rect_screen(hwnd)
-    cx, cy = (left + right) // 2, (top + bottom) // 2
-    mouse.move_to(cx, cy)
-    time.sleep(0.15)
-    mouse.nudge()  # force a real hover event before the click lands
-    time.sleep(0.05)
-
-    mouse.down("right")
-    try:
-        time.sleep(0.08)
-        # Same overshoot-is-free downward travel as run_camera_setup.
-        for _ in range(40):
-            mouse.nudge(0, 80)
-            time.sleep(0.012)
-        time.sleep(0.08)
-    finally:
-        mouse.up("right")
-    time.sleep(0.15)
+    tilt_camera_top_down(mouse, hwnd)
 
     keyboard.key_down(keys.VK_LEFT)
     try:
