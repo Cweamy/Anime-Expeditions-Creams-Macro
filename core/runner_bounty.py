@@ -525,6 +525,19 @@ class BountyOps:
         settings = self._bounty_settings()
         if not settings.get("enabled"):
             return False
+        if settings.get("setup_ready") is False:
+            missing = ", ".join(settings.get("missing_maps") or [])
+            invalid = ", ".join(
+                f'{item.get("map")} ("{item.get("macro")}")'
+                for item in (settings.get("invalid_maps") or []))
+            details = "; ".join(part for part in (
+                f"unassigned: {missing}" if missing else "",
+                f"missing or old macros: {invalid}" if invalid else "",
+            ) if part)
+            self._log(
+                "[Macro] Auto Bounty skipped: every Story map needs a saved "
+                f"Macro Operation before it can run ({details}).")
+            return False
 
         self._log("[Macro] Auto Bounty is enabled -- checking gameplay bounties "
                   "before Challenge and the Task Queue...")
