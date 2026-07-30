@@ -3102,6 +3102,13 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
             self._log("[Macro] Couldn't confirm focus before clicking Play -- click may not register.")
         time.sleep(0.1)
         vision.click_match(self._mouse, hwnd, match)
+        # The gamemode screen replaces the lobby immediately after this
+        # click. Leaving the pointer on Play can put it over a party/invite
+        # control in the new layout and open an unrelated overlay. Move to
+        # the existing user-calibratable empty corner before the transition.
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        park_x, park_y = self._cxy("unit_info_reset")
+        self._mouse.move_to(left + park_x, top + park_y)
         return True
 
     def _reach_map_selected(self, hwnd, stop_event: threading.Event, map_name: str, mode: str,
