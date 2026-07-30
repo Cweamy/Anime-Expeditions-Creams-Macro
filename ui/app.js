@@ -2150,6 +2150,7 @@ let enteringTaskIds = new Set();
 let taskTemplates = [];  // Macro Manager template names, for the Macro Operation picker
 let taskSaveTimer = null;
 const DEFAULT_INFINITE_WAVE_LIMIT = 20;
+const MAX_EXTRACT_AFTER = 9999;
 
 function newTaskId() {
   return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -2168,6 +2169,17 @@ function defaultTask() {
     // nothing like Acts 1-3). See runner._run_act4_diversion.
     act4_on_drop: false, act4_mode: 'once', act4_macro: '',
   };
+}
+
+function normalizeExtractAfter(value) {
+  // Number inputs serialize absurd values in scientific notation. Treat them
+  // as "run as far as supported" instead of saving a value Python's int parser
+  // cannot read when battle begins.
+  const text = String(value ?? '').trim();
+  if (!text) return '1';
+  const number = Number(text);
+  if (!Number.isFinite(number) || !Number.isInteger(number) || number < 0) return '1';
+  return String(Math.min(number, MAX_EXTRACT_AFTER));
 }
 
 function findTask(id) { return taskCards.find(t => t.id === id); }
@@ -2365,6 +2377,7 @@ async function importTasks() {
   let added = 0;
   for (const t of data.tasks) {
     const newTask = { ...defaultTask(), ...t, id: newTaskId() };
+    newTask.extract_after = normalizeExtractAfter(newTask.extract_after);
     taskCards.push(newTask);
     enteringTaskIds.add(newTask.id);
     added++;
@@ -2453,7 +2466,10 @@ async function loadTaskPreset() {
            + `entries) -- the queue was left as it was.`);
     return;
   }
-  usable.forEach(t => { t.stage = String(t.stage); });
+  usable.forEach(t => {
+    t.stage = String(t.stage);
+    t.extract_after = normalizeExtractAfter(t.extract_after);
+  });
 
   // Replaces the queue rather than appending -- Import appends (you're
   // merging someone else's tasks into yours), but loading a preset means
@@ -2716,8 +2732,9 @@ function renderTaskBuilder() {
   }
 
   if (t.mode === 'expedition') {
-    fields.push(field('Extract After', `<input type="number" class="block-input" min="0" value="${t.extract_after}"
-      oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`, 'Number of extraction prompts to decline before extracting'));
+    fields.push(field('Extract After', `<input type="number" class="block-input" min="0" max="${MAX_EXTRACT_AFTER}" step="1" value="${t.extract_after}"
+      onchange="this.value = normalizeExtractAfter(this.value); setTaskProp('${t.id}', 'extract_after', this.value)">`,
+      `Number of extraction prompts to decline before extracting (maximum ${MAX_EXTRACT_AFTER})`));
   }
 
   // Tournament has no Solo/Matchmaking choice -- "Solo Tournament" is already
@@ -2814,9 +2831,15 @@ async function refreshTaskQueue() {
     // undefined and throw, which aborts renderTaskList() mid-map and leaves
     // the whole list blank while the header still shows a count.
     const dropped = rawTasks.filter(t => !TASK_DATA[t.mode]).length;
+    let repairedExtractAfter = 0;
     taskCards = rawTasks.filter(t => TASK_DATA[t.mode]).map(saved => {
       const t = { ...defaultTask(), ...saved };
       if (t.team == null) t.team = '';
+      const normalizedExtractAfter = normalizeExtractAfter(t.extract_after);
+      if (String(t.extract_after ?? '').trim() !== normalizedExtractAfter) {
+        repairedExtractAfter++;
+      }
+      t.extract_after = normalizedExtractAfter;
       t.stage = String(t.stage);
       if (t.difficulty === 'Infinite' || t.difficulty === 'Mastery') {
         t.stage = t.difficulty;
@@ -2824,8 +2847,13 @@ async function refreshTaskQueue() {
       }
       return t;
     });
-    if (dropped) {
-      addLog(`[Task] Removed ${dropped} task(s) with an unrecognized mode (e.g. old Challenge/Bounty entries).`);
+    if (dropped || repairedExtractAfter) {
+      if (dropped) {
+        addLog(`[Task] Removed ${dropped} task(s) with an unrecognized mode (e.g. old Challenge/Bounty entries).`);
+      }
+      if (repairedExtractAfter) {
+        addLog(`[Task] Adjusted invalid or oversized Expedition "Extract After" value(s) to the supported range.`);
+      }
       saveTaskQueue();
     }
   } catch (e) {

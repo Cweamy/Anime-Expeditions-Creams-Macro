@@ -17,6 +17,7 @@ import os
 import threading
 import time
 import traceback
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 
 import cv2
@@ -36,6 +37,31 @@ from .runner_challenge import ChallengeOps
 from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
 from .runner_fuel import FuelOps
+
+
+MAX_EXTRACT_AFTER = 9999
+
+
+def _parse_extract_after(value, default=1):
+    """Return a safe Expedition extraction count.
+
+    Task files and presets are user-editable JSON, so this value cannot be
+    trusted to have passed through the number input in the UI. Python integers
+    can hold an arbitrarily large integer, but the browser starts serializing
+    absurd values in scientific notation. Preserve the user's intent to run
+    for as long as possible by clamping valid oversized values to 9,999.
+    """
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return default
+    if not parsed.is_finite() or parsed < 0 or parsed != parsed.to_integral_value():
+        return default
+    if parsed > MAX_EXTRACT_AFTER:
+        return MAX_EXTRACT_AFTER
+    return int(parsed)
 
 
 def _find_team_load_button(frame, expected_y):
@@ -1441,7 +1467,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         # "exp_extract_continue" choice on this same screen) every sighting
         # up to extract_after, only accept the one right after that.
         self._expedition_extract_count = 0
-        self._expedition_extract_accept_at = max(0, int(task.get("extract_after") or 0)) + 1
+        self._expedition_extract_accept_at = _parse_extract_after(
+            task.get("extract_after")) + 1
         self._exp_last_sighting_at = 0.0  # fresh match, fresh sighting-debounce clock (see EXP_COLOR_SIGHTING_DEBOUNCE)
         # Spirit City Act 3's boss/cutscene "Click anywhere to close" popup
         # (see _click_close_popup_if_found) only ever shows up there.

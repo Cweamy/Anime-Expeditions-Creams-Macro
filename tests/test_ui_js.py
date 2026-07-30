@@ -69,6 +69,28 @@ def test_new_tasks_have_a_bounded_infinite_wave_default(tmp_path):
     assert out["infinite_wave_limit"] == 20
 
 
+def test_extract_after_normalization_preserves_decimal_strings_and_repairs_scientific_notation(
+        tmp_path):
+    out = run_js("""
+        const MAX_EXTRACT_AFTER = 9999;
+        eval(extract('normalizeExtractAfter'));
+        console.log(JSON.stringify([
+          normalizeExtractAfter('25'),
+          normalizeExtractAfter('999999999999999999999999999999999999999999'),
+          normalizeExtractAfter('2.3434734346743343e+43'),
+          normalizeExtractAfter(-1),
+          normalizeExtractAfter(null)
+        ]));
+    """, tmp_path)
+    assert out == [
+        "25",
+        "9999",
+        "9999",
+        "1",
+        "1",
+    ]
+
+
 def test_infinite_task_summary_shows_its_exit_wave(tmp_path):
     out = run_js("""
         const TASK_DATA = { story: { label: 'Story' } };
@@ -182,6 +204,7 @@ def test_remove_block_still_works_one_at_a_time(tmp_path):
 _IMPORT_HARNESS = """
 const world = (data) => new Function('data', `
   const saved = []; const restoredPaths = []; const logs = []; let taskCards = [];
+  const MAX_EXTRACT_AFTER = 9999;
   const enteringTaskIds = new Set();
   function addLog(m) { logs.push(m); }
   function newTaskId() { return 't' + saved.length + Math.random(); }
@@ -200,6 +223,7 @@ const world = (data) => new Function('data', `
     save_tasks: async () => ({ ok: true }),
   } };
   ${extract('importCustomPaths')}
+  ${extract('normalizeExtractAfter')}
   ${extract('importTasks')}
   return { importTasks, saved, restoredPaths, logs, cards: () => taskCards };
 `)(data);
@@ -503,6 +527,7 @@ def test_export_stops_when_a_referenced_macro_no_longer_exists(tmp_path):
 
 _TASK_IMPORT_WORLD = """
 const logs = []; const saved = {}; let confirmAnswer = %s;
+const MAX_EXTRACT_AFTER = 9999;
 global.addLog = m => logs.push(m);
 global.confirm = () => confirmAnswer;
 global.importCustomPaths = async () => 0;
@@ -521,6 +546,7 @@ global.pywebview = { api: {
   list_templates: async () => %s,
   save_template: async (n, b) => { saved[n] = b; },
 }};
+eval(extract('normalizeExtractAfter'));
 eval(extract('importTasks'));
 importTasks().then(() => console.log(JSON.stringify({
   macrosSaved: Object.keys(saved), tasks: taskCards.length,
