@@ -5602,9 +5602,10 @@ function renderCreationLoadout() {
   const el = document.getElementById('creation-loadout');
   if (!el) return;
   const teams = ['', '1', '2', '3', '4', '5', '6', '7', '8'];
+  // Ensure string conversion so numeric values (e.g. 2) match dropdown option strings
   const teamSel = `
     <select class="task-select" onchange="creationTeam = this.value; renderCreationLoadout()">
-      ${teams.map(v => `<option value="${v}" ${v === creationTeam ? 'selected' : ''}>${v === '' ? 'No Team' : 'Team ' + v}</option>`).join('')}
+      ${teams.map(v => `<option value="${v}" ${v === String(creationTeam) ? 'selected' : ''}>${v === '' ? 'No Team' : 'Team ' + v}</option>`).join('')}
     </select>`;
   const eqSeg = creationTeam === '' ? '' : `
     <span class="palette-group-label" style="margin: 0; white-space: nowrap; flex-shrink: 0;">Equipment :</span>

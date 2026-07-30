@@ -1968,7 +1968,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
         blocks = data.get("blocks") or {}
         if isinstance(blocks, list):
             return True  # old-format template -- same as _run_prestart_blocks
-        team = blocks.get("team") or ""
+        # Read team setting from template blocks or task fallback (handling int/str types)
+        raw_team = blocks.get("team") if blocks.get("team") is not None and blocks.get("team") != "" else task.get("team")
+        team = str(raw_team).strip() if raw_team is not None else ""
         if not team:
             return True
         equipment = blocks.get("equipment") if blocks.get("equipment") in ("include", "exclude") else "include"
@@ -2049,8 +2051,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                 frame = vision.capture_game_bgr(hwnd)
                 text = ocr_windows.ocr_image(frame) if frame is not None else ""
                 normalized = "".join((text or "").lower().split())
-                if "unitteams" in normalized:
-                    loadout_open = {"detector": "windows_ocr", "text": "Unit Teams"}
+                # Check for multiple possible OCR texts corresponding to the team loadout screen
+                if any(k in normalized for k in ("unitteams", "loadteam", "teamloadout", "teams", "team", "loadout")):
+                    loadout_open = {"detector": "windows_ocr", "text": text or "Unit Teams"}
             if loadout_open is not None:
                 break
             if stop_event.is_set():
@@ -2061,7 +2064,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
             self._save_debug_screenshot_unconditional(hwnd, "team_loadout_open_failed")
             return False
         if loadout_open.get("detector") == "windows_ocr":
-            self._log('[Macro] Load Team list open (confirmed by Windows OCR: "Unit Teams").')
+            self._log(f'[Macro] Load Team list open (confirmed by Windows OCR: "{loadout_open.get("text")}").')
         else:
             self._log(f'[Macro] Load Team list open (score {loadout_open["score"]:.2f}).')
         # The title arrives before the row animation has completely settled.
