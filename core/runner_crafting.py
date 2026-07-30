@@ -29,6 +29,22 @@ from .runner_constants import *  # noqa: F401,F403 -- the shared constants names
 
 
 class CraftingOps:
+    def _crafting_has_selected_item(self, settings: dict) -> bool:
+        selected = any(
+            it.get("enabled") for it in settings.get("items", []))
+        if selected:
+            self._crafting_invalid_logged = False
+            return True
+        if int(settings.get("count", 0)):
+            self._set_crafting_count(0)
+            settings["count"] = 0
+        if not getattr(self, "_crafting_invalid_logged", False):
+            self._log(
+                "[Craft] Invalid Auto Crafting setup -- no sprites are selected. "
+                "Skipping Auto Crafting until at least one sprite is enabled.")
+            self._crafting_invalid_logged = True
+        return False
+
     def _crafting_win_qualifies(self, task: dict, result: str) -> bool:
         """Whether this finished match counts toward the crafting trigger:
         only WINS, and only on the Mastery Story stage or in Challenge (the
@@ -57,16 +73,24 @@ class CraftingOps:
             return
         if not self._crafting_win_qualifies(task, result):
             return
+        if not self._crafting_has_selected_item(settings):
+            return
         count = int(settings.get("count", 0)) + 1
         self._set_crafting_count(count)
         every = max(CRAFT_EVERY_MIN, int(settings.get("every", CRAFT_DEFAULT_EVERY)))
         self._log(f"[Craft] Qualifying win {count}/{every} toward the next crafting pass.")
 
-    def _crafting_wants_in(self) -> bool:
-        """Side-effect-free check for whether a crafting pass is due right now
+    def _crafting_wants_in(self, task: dict = None, result: str = None) -> bool:
+        """Check whether a crafting pass is due right now
         -- enabled, at least one item enabled, and the win counter has reached
         the 'every N' threshold. Mirrors _challenge_has_ready_stage; used by
-        _run_task's repeat loop to decide whether to pause the queue."""
+        _run_task's repeat loop to decide whether to pause the queue.
+
+        When ``task`` and ``result`` are supplied, include the match that just
+        finished in the projection. The actual counter is persisted moments
+        later by _handle_match_result; projecting it here lets that same result
+        click Leave Stage instead of unnecessarily starting one more repeat.
+        An invalid no-sprite setup also clears stale progress immediately."""
         if self._get_crafting_settings is None:
             return False
         try:
@@ -75,10 +99,13 @@ class CraftingOps:
             return False
         if not settings.get("enabled"):
             return False
-        if not any(it.get("enabled") for it in settings.get("items", [])):
+        if not self._crafting_has_selected_item(settings):
             return False
         every = max(CRAFT_EVERY_MIN, int(settings.get("every", CRAFT_DEFAULT_EVERY)))
-        return int(settings.get("count", 0)) >= every
+        count = int(settings.get("count", 0))
+        if task is not None and result is not None and self._crafting_win_qualifies(task, result):
+            count += 1
+        return count >= every
 
     def _run_crafting(self, hwnd, stop_event: threading.Event, force: bool = False) -> None:
         """One full crafting pass: lobby -> Area -> Crafting -> wait for the
