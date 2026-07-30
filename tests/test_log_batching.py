@@ -73,6 +73,34 @@ def test_empty_queue_flush_is_a_noop():
     assert win.calls == []
 
 
+def test_clear_logs_calls_view_only_helper_without_reentering_api():
+    api = _make_api()
+    main_win, log_win = _Win(), _Win()
+    api._window, api._log_window = main_win, log_win
+    api._log_history = ["old"]
+    api._log_queue.put("queued")
+
+    api.clear_logs()
+
+    assert api._log_history == []
+    assert api._log_queue.empty()
+    assert main_win.calls == [
+        "window.clearLogView && window.clearLogView()"
+    ]
+    assert log_win.calls == [
+        "window.clearLogView && window.clearLogView()"
+    ]
+    assert all("clearLogs()" not in call for call in main_win.calls)
+
+    api._log_queue.put("new after clear")
+    api._flush_log_queue()
+
+    assert len(main_win.calls) == 2
+    assert "appendLogBatch" in main_win.calls[-1]
+    assert "new after clear" in main_win.calls[-1]
+    assert len(log_win.calls) == 2
+
+
 def test_is_critical_log_detection():
     assert main._is_critical_log("Something failed badly")
     assert main._is_critical_log("[Update] ERROR: boom")
