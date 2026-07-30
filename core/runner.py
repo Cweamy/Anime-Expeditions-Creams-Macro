@@ -605,6 +605,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                         f"{phase} lobby recovery", recovery_exc)
             return False, None
 
+    def _run_crafting_if_due(self, hwnd, stop_event: threading.Event) -> None:
+        if self._crafting_wants_in():
+            self._run_crafting(hwnd, stop_event)
+
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,
               webhook: dict = None) -> None:
@@ -691,10 +695,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                 "Challenge", hwnd, stop_event,
                 lambda: self._run_challenges(
                     hwnd, stop_event, coords, default_walk_paths, webhook))
-            if self._crafting_wants_in():
-                self._run_guarded_phase(
-                    "Auto Crafting", hwnd, stop_event,
-                    lambda: self._run_crafting(hwnd, stop_event))
+            self._run_guarded_phase(
+                "Auto Crafting", hwnd, stop_event,
+                lambda: self._run_crafting_if_due(hwnd, stop_event))
         if self._checkpoint(stop_event):
             return
 
@@ -764,14 +767,13 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, ExpeditionOps, BlockOps)
                 # in-task hook is gated by `not is_last_repeat`). Without this,
                 # a reached threshold just sat until the next Start -- the exact
                 # "task finished, came back to lobby, no craft" report.
-                if self._crafting_wants_in():
-                    self._run_guarded_phase(
-                        "Auto Crafting", hwnd, stop_event,
-                        lambda: self._run_crafting(hwnd, stop_event))
-                    if self._current_hwnd and wm.is_window(self._current_hwnd):
-                        hwnd = self._current_hwnd
-                    if self._checkpoint(stop_event):
-                        return
+                self._run_guarded_phase(
+                    "Auto Crafting", hwnd, stop_event,
+                    lambda: self._run_crafting_if_due(hwnd, stop_event))
+                if self._current_hwnd and wm.is_window(self._current_hwnd):
+                    hwnd = self._current_hwnd
+                if self._checkpoint(stop_event):
+                    return
 
             # The queue always loops back to task 1 once it finishes rather
             # than going Idle -- Stop (F2) is the only way to actually end
