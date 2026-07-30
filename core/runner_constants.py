@@ -205,6 +205,26 @@ EVENT_ACT_IMAGES = {
 EVENT_ACT_SCROLL_FROM_INDEX = 2  # 0-based into EVENT_ACT_ORDER: index 2 == Act "3"
 EVENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Event screen (nav_event / event_gamemode / the Act card) to appear
 
+# Tournament mode: reached through Play like Story/Raid -- its nav_tournament
+# button sits on the same gamemode menu (picked instead of Story), NOT via its
+# own lobby entry the way Event's nav_event is. After nav_tournament comes a
+# type card, then the nav_entertournament confirm and the shared solo Start/
+# teleport tail (nav_start). There's no map carousel and no difficulty picker --
+# picking the type IS the whole selection. The chosen type string is stored in the task's
+# `map` field (mirrors TASK_DATA.tournament.maps in ui/app.js), so it also
+# shows verbatim in the logs, Status Readout, and match webhook. Each type maps
+# to its own on-screen button image; add a new (type -> image) pair here and
+# the matching entry to TASK_DATA.tournament.maps to offer another type. The
+# image folder names ship under Assets/ui/ exactly as written below.
+TOURNAMENT_TYPE_ORDER = ["Solo Tournament"]
+# Values are a tuple of candidate crops per type (any match wins), same shape
+# as EVENT_ACT_IMAGES, so a card shown in more than one visual state can still
+# be matched.
+TOURNAMENT_TYPE_IMAGES = {
+    "Solo Tournament": ("solo_tournament",),
+}
+TOURNAMENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Tournament screen (nav_tournament / the type card / nav_entertournament) to appear
+
 # Auto Bounty derives all objective clicks from the live board. These values
 # only bound waits and the board's outer scroll gesture.
 BOUNTY_SCREEN_TIMEOUT = 10.0

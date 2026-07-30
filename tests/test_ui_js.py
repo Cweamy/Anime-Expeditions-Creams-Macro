@@ -82,6 +82,28 @@ def test_infinite_task_summary_shows_its_exit_wave(tmp_path):
     assert "Stop after wave 50" in out["meta"]
 
 
+def test_tournament_task_summary_names_its_type_and_hides_play_mode(tmp_path):
+    out = run_js("""
+        const TASK_DATA = { tournament: { label: 'Tournament' } };
+        const DEFAULT_INFINITE_WAVE_LIMIT = 20;
+        eval(extract('taskSummary'));
+        console.log(JSON.stringify(taskSummary({
+          mode: 'tournament', map: 'Solo Tournament', stage: '-',
+          repeat: 3, play_mode: 'solo', macro: 'Boss Rush'
+        })));
+    """, tmp_path)
+    # Substring checks rather than an exact match on the whole string: the
+    # summary joins on a middle-dot that doesn't survive node's stdout under
+    # every Windows locale encoding (the other summary tests dodge it the same
+    # way).
+    assert out["title"].startswith("Tournament") and out["title"].endswith("Solo Tournament")
+    assert "3" in out["meta"]
+    # "Solo Tournament" already carries the play mode, so the row must not tack
+    # on a redundant "Solo"/"Matchmaking" the way the other modes do.
+    assert "Solo" not in out["meta"] and "Matchmaking" not in out["meta"]
+    assert "Boss Rush" in out["meta"]
+
+
 # ---------------------------------------------------------------------------
 # removeBlock: the deferred splice must not use a stale index
 # ---------------------------------------------------------------------------

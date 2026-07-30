@@ -1222,6 +1222,32 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
                 return False
             if self._checkpoint(stop_event):
                 return False
+        elif mode == "tournament":
+            # Tournament goes through Play like Story/Raid (nav_tournament sits
+            # on the gamemode menu, picked instead of Story), but has no map
+            # carousel and no difficulty -- picking the type card IS the whole
+            # selection. It then rejoins the shared confirm + solo Start tail
+            # below (its confirm button is nav_entertournament). Same retried-
+            # from-the-lobby loop as the map/event paths, since a failed attempt
+            # leaves nothing safe to assume about where we ended up.
+            reached_tournament = False
+            for attempt in range(1, MAP_SELECT_RETRY_ATTEMPTS + 1):
+                if self._checkpoint(stop_event):
+                    return False
+                if attempt > 1:
+                    self._log(f"[Macro] Retrying Tournament entry from the lobby "
+                               f"(attempt {attempt}/{MAP_SELECT_RETRY_ATTEMPTS})...")
+                if self._reach_tournament_selected(hwnd, stop_event, map_name):
+                    reached_tournament = True
+                    break
+                if stop_event.is_set():
+                    return False
+            if not reached_tournament:
+                self._log(f'[Macro] Couldn\'t reach the Tournament screen after '
+                           f'{MAP_SELECT_RETRY_ATTEMPTS} attempts -- stopping.')
+                return False
+            if self._checkpoint(stop_event):
+                return False
         else:
             # Lobby -> Play -> Story/Raid -> map search, retried wholesale from
             # the lobby if the map search fails and backing out succeeds (see
@@ -1285,7 +1311,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         # straight to Enter Matchmaking instead, since this doesn't
         # reliably show up the same way for it.
         if task.get("play_mode") != "matchmaking":
-            confirm_image = "exp_select_stage" if mode == "expedition" else "nav_select_stage"
+            if mode == "tournament":
+                confirm_image = "nav_entertournament"
+            elif mode == "expedition":
+                confirm_image = "exp_select_stage"
+            else:
+                confirm_image = "nav_select_stage"
             self._set_status(action="Clicking Select Stage...")
             if not self._click_and_verify_gone(hwnd, stop_event, confirm_image, STAGE_SCREEN_TIMEOUT):
                 self._log(f'[Macro] "{confirm_image}" never showed up -- stopping.')
@@ -1908,7 +1939,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         # no difficulty at all.
         if mode == "raid" or raw_stage in SPECIAL_STAGES_NO_DIFFICULTY:
             difficulty = "Hard"
-        elif mode == "event":
+        elif mode in ("event", "tournament"):
             difficulty = "-"
         else:
             difficulty = task.get("difficulty") or "-"
@@ -3352,6 +3383,69 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         # Let the stage/Enter-Matchmaking screen finish animating in before
         # the shared tail searches for its confirm button (same reason
         # _select_stage settles after its own click).
+        time.sleep(SETTLE_DELAY)
+        return not self._checkpoint(stop_event)
+
+    def _reach_tournament_selected(self, hwnd, stop_event: threading.Event, tournament_type: str) -> bool:
+        """Lobby -> Play -> Tournament -> type card, as one restartable unit --
+        Tournament's equivalent of _reach_map_selected. Tournament is reached
+        through Play just like Story/Raid (its nav_tournament button sits on the
+        same gamemode menu, picked instead of Story), NOT via its own lobby
+        entry the way Event is -- so this clicks Play first, then nav_tournament,
+        then the chosen type's card (e.g. Solo Tournament). There's no map
+        carousel or difficulty picker: picking the type IS the whole selection.
+        On any failure it backs out to the lobby (_spam_back_until_gone) so the
+        next attempt starts clean, same as the map/event paths do. The
+        nav_entertournament confirm + solo Start tail is shared (see
+        _enter_selected_stage)."""
+        type_images = TOURNAMENT_TYPE_IMAGES.get(tournament_type)
+        if type_images is None:
+            self._log(f'[Macro] Unknown Tournament type "{tournament_type}" -- '
+                       f'expected one of {TOURNAMENT_TYPE_ORDER}.')
+            return False
+        if isinstance(type_images, str):
+            type_images = (type_images,)
+
+        # Same "gamemode menu already open" shortcut as _reach_map_selected: if
+        # nav_back is on screen the menu's already up, so checking for the lobby
+        # and clicking Play would just burn LOBBY_CHECK_TIMEOUT waiting for a
+        # Play button that doesn't exist there. Skip straight to nav_tournament.
+        try:
+            already_open = vision.find_image(hwnd, "nav_back") is not None
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] {exc}")
+            return False
+        if already_open:
+            self._log("[Macro] Already on the gamemode menu -- skipping the lobby and Play.")
+        else:
+            if not self._ensure_lobby(hwnd, stop_event):
+                return False
+            if self._checkpoint(stop_event):
+                return False
+            if not self._click_play(hwnd, stop_event):
+                return False
+            if self._checkpoint(stop_event):
+                return False
+
+        # nav_tournament: the Tournament button on the gamemode menu (picked in
+        # place of Story), then its type card. Both clicks are wait-then-click
+        # with a focus-safe verify via _click_found_image, and each screen
+        # animates in, so a short settle follows before searching the next one.
+        self._set_status(action="Clicking Tournament...")
+        if self._click_found_image(hwnd, "nav_tournament", TOURNAMENT_SCREEN_TIMEOUT, stop_event) is None:
+            self._spam_back_until_gone(hwnd, stop_event)
+            return False
+        if self._checkpoint(stop_event):
+            return False
+        time.sleep(SETTLE_DELAY)
+
+        self._set_status(action=f"Selecting {tournament_type}...")
+        if self._click_found_image(hwnd, type_images[0], TOURNAMENT_SCREEN_TIMEOUT, stop_event) is None:
+            self._spam_back_until_gone(hwnd, stop_event)
+            return False
+        # Let the Enter Tournament screen finish animating in before the shared
+        # tail searches for nav_entertournament (same reason the event/map
+        # paths settle after their final click).
         time.sleep(SETTLE_DELAY)
         return not self._checkpoint(stop_event)
 

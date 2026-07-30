@@ -2125,6 +2125,18 @@ const TASK_DATA = {
     stages: ['1', '2', '3', '4'],
     isEvent: true,
   },
+  tournament: {
+    label: 'Tournament',
+    // Tournament has its own lobby entry (nav_tournament -> a type card ->
+    // nav_entertournament -> Start), no map carousel and no difficulty picker.
+    // The "maps" list here IS the type picker -- each entry maps to its own
+    // on-screen button image (see runner_constants' TOURNAMENT_TYPE_IMAGES,
+    // hand-synced with this list). The chosen type is stored in the task's
+    // `map` field, so it reads straight through to logs/status/webhook. Solo/
+    // Matchmaking isn't offered: "Solo Tournament" already is the mode.
+    maps: ['Solo Tournament'],
+    isTournament: true,
+  },
 };
 
 let taskCards = [];
@@ -2560,6 +2572,11 @@ function setTaskProp(id, key, value) {
     if (d.stages) t.stage = d.stages[0];
     if (d.difficulties) t.difficulty = d.difficulties[0];
     if (d.extractAfter) t.extract_after = '1';
+    // Tournament has no Solo/Matchmaking toggle -- "Solo Tournament" already
+    // is the mode, and the runner's solo Start tail only runs when this isn't
+    // 'matchmaking'. Force it so switching from a matchmaking task can't leave
+    // Tournament silently waiting on an Enter Matchmaking button.
+    if (d.isTournament) t.play_mode = 'solo';
   }
   if (key === 'stage' && value === 'Infinite' && !Number.isInteger(Number(t.infinite_wave_limit))) {
     t.infinite_wave_limit = DEFAULT_INFINITE_WAVE_LIMIT;
@@ -2574,7 +2591,7 @@ function taskOpts(list, current, fmt) {
 }
 
 // One accent per mode so the queue scans by color before you even read it.
-const TASK_MODE_COLORS = { story: 'var(--brand)', raid: 'var(--rose)', expedition: 'var(--teal)', event: 'var(--amber)' };
+const TASK_MODE_COLORS = { story: 'var(--brand)', raid: 'var(--rose)', expedition: 'var(--teal)', event: 'var(--amber)', tournament: 'var(--lilac)' };
 
 // The two text lines a queue row shows for a task -- where it goes, then how
 // it runs. All editing happens in the Builder, rows are read-only summaries.
@@ -2583,7 +2600,7 @@ function taskSummary(t) {
   let title = d.label;
   if (t.mode === 'story' || t.mode === 'raid') {
     title += ` · ${t.map} · ${/^\d+$/.test(t.stage) ? 'Stage ' + t.stage : t.stage}`;
-  } else if (t.mode === 'expedition') {
+  } else if (t.mode === 'expedition' || t.mode === 'tournament') {
     title += ` · ${t.map}`;
   } else if (t.mode === 'event') {
     title += ` · Act ${t.stage}`;
@@ -2596,7 +2613,7 @@ function taskSummary(t) {
     diff,
     t.mode === 'story' && t.stage === 'Infinite'
       ? `Stop after wave ${t.infinite_wave_limit || DEFAULT_INFINITE_WAVE_LIMIT}` : '',
-    t.play_mode === 'matchmaking' ? 'Matchmaking' : 'Solo',
+    t.mode === 'tournament' ? '' : (t.play_mode === 'matchmaking' ? 'Matchmaking' : 'Solo'),
     t.macro ? `▸ ${t.macro}` : '',
     (t.mode === 'event' && t.stage !== '4' && t.act4_on_drop)
       ? `⮡ Act 4 on drop${t.act4_mode === 'until_locked' ? ' (until locked)' : ''}` : '',
@@ -2680,6 +2697,8 @@ function renderTaskBuilder() {
     fields.push(field('Expedition', sel('map', d.maps, null, 'Select Expedition map')));
   } else if (t.mode === 'event') {
     fields.push(field('Act', sel('stage', d.stages, s => 'Act ' + s, 'Select Event Act 1-4'), 'Select Event Act 1-4'));
+  } else if (t.mode === 'tournament') {
+    fields.push(field('Type', sel('map', d.maps, null, 'Select the Tournament type to enter'), 'Select the Tournament type to enter'));
   }
 
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
@@ -2701,12 +2720,17 @@ function renderTaskBuilder() {
       oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`, 'Number of extraction prompts to decline before extracting'));
   }
 
-  const playSeg = `
-    <div class="seg-toggle" data-tooltip="Select Solo or Matchmaking / Party mode">
-      <button type="button" class="seg-btn ${t.play_mode === 'solo' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'solo'); renderTaskBuilder()">Solo</button>
-      <button type="button" class="seg-btn ${t.play_mode === 'matchmaking' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'matchmaking'); renderTaskBuilder()">Matchmaking</button>
-    </div>`;
-  fields.push(field('Play Mode', playSeg, 'Select Solo or Matchmaking / Party mode'));
+  // Tournament has no Solo/Matchmaking choice -- "Solo Tournament" is already
+  // the mode, and the runner forces the solo Start tail for it (see
+  // setTaskProp's mode switch), so the toggle would be a no-op here.
+  if (t.mode !== 'tournament') {
+    const playSeg = `
+      <div class="seg-toggle" data-tooltip="Select Solo or Matchmaking / Party mode">
+        <button type="button" class="seg-btn ${t.play_mode === 'solo' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'solo'); renderTaskBuilder()">Solo</button>
+        <button type="button" class="seg-btn ${t.play_mode === 'matchmaking' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'matchmaking'); renderTaskBuilder()">Matchmaking</button>
+      </div>`;
+    fields.push(field('Play Mode', playSeg, 'Select Solo or Matchmaking / Party mode'));
+  }
 
   // Team Loadout rides with the chosen template (see the Macro Manager tab), so the
   // macro picker is the only loadout-related control left on a task.
@@ -2782,12 +2806,15 @@ async function refreshTaskQueue() {
     // Infinite/Mastery lived in the difficulty dropdown before they moved
     // into the Stage picker.
     const rawTasks = await pywebview.api.get_tasks();
-    // "Challenge" used to be a Task Queue mode -- it never actually ran
-    // (no runner support ever existed for it) and is now the dedicated
-    // Challenge tab instead, so any leftover task saved under that mode
-    // is dropped rather than migrated into a guessed-wrong Story task.
-    const droppedChallenge = rawTasks.filter(t => t.mode === 'challenge').length;
-    taskCards = rawTasks.filter(t => t.mode !== 'challenge').map(saved => {
+    // Drop any task whose mode the queue no longer recognizes rather than
+    // trying to render it. "Challenge" used to be a Task Queue mode (it never
+    // ran and is now its own tab); "bounty" can leak in from Auto Bounty,
+    // which is its own Resource-tab screen, not a queue mode. Either way an
+    // unknown mode makes taskSummary() read TASK_DATA[mode].label off
+    // undefined and throw, which aborts renderTaskList() mid-map and leaves
+    // the whole list blank while the header still shows a count.
+    const dropped = rawTasks.filter(t => !TASK_DATA[t.mode]).length;
+    taskCards = rawTasks.filter(t => TASK_DATA[t.mode]).map(saved => {
       const t = { ...defaultTask(), ...saved };
       if (t.team == null) t.team = '';
       t.stage = String(t.stage);
@@ -2797,8 +2824,8 @@ async function refreshTaskQueue() {
       }
       return t;
     });
-    if (droppedChallenge) {
-      addLog(`[Task] Removed ${droppedChallenge} old "Challenge" task(s) -- use the Challenge tab instead.`);
+    if (dropped) {
+      addLog(`[Task] Removed ${dropped} task(s) with an unrecognized mode (e.g. old Challenge/Bounty entries).`);
       saveTaskQueue();
     }
   } catch (e) {
