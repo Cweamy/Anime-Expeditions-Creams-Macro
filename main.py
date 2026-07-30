@@ -1046,6 +1046,47 @@ class Api:
             "maps": {name: {"macro": ""} for name in BOUNTY_STORY_MAPS},
         }
 
+    @staticmethod
+    def _bounty_macro_setup(settings: dict) -> dict:
+        """Whether every possible Story destination has a usable macro.
+
+        Auto Bounty does not know which map the board will request until
+        after it opens that objective. Starting with only some maps
+        configured therefore guarantees that a later objective can enter a
+        battle with no Pre Start blocks and no units. Treat the five-map
+        assignment as one required setup instead of discovering the hole
+        after teleporting.
+        """
+        maps = settings.get("maps") or {}
+        missing_maps = []
+        invalid_maps = []
+        for map_name in BOUNTY_STORY_MAPS:
+            macro_name = str((maps.get(map_name) or {}).get("macro") or "").strip()
+            if not macro_name:
+                missing_maps.append(map_name)
+                continue
+            if not tpl.template_exists(macro_name):
+                invalid_maps.append({"map": map_name, "macro": macro_name})
+                continue
+            data = tpl.load_template(macro_name)
+            if not isinstance(data.get("blocks"), dict):
+                invalid_maps.append({"map": map_name, "macro": macro_name})
+        return {
+            "setup_ready": not missing_maps and not invalid_maps,
+            "missing_maps": missing_maps,
+            "invalid_maps": invalid_maps,
+        }
+
+    @staticmethod
+    def _save_bounty_settings(settings: dict) -> None:
+        """Persist only settings, not the computed setup-status fields."""
+        cfg.update({"bounty": {
+            "enabled": bool(settings.get("enabled")),
+            "play_mode": settings.get("play_mode") or "solo",
+            "summon_banner": settings.get("summon_banner") or "standard",
+            "maps": settings.get("maps") or {},
+        }})
+
     def get_bounty_settings(self) -> dict:
         saved = cfg.load().get("bounty") or {}
         merged = {**self._default_bounty_settings(), **saved}
@@ -1058,12 +1099,33 @@ class Api:
             name: {"macro": (saved_maps.get(name) or {}).get("macro") or ""}
             for name in BOUNTY_STORY_MAPS
         }
+        merged.update(self._bounty_macro_setup(merged))
         return merged
 
     def set_bounty_enabled(self, enabled: bool) -> dict:
         settings = self.get_bounty_settings()
+        if enabled and not settings["setup_ready"]:
+            settings["enabled"] = False
+            self._save_bounty_settings(settings)
+            missing = ", ".join(settings["missing_maps"])
+            invalid = ", ".join(
+                f'{item["map"]} ("{item["macro"]}")'
+                for item in settings["invalid_maps"])
+            details = "; ".join(part for part in (
+                f"unassigned: {missing}" if missing else "",
+                f"missing or old macros: {invalid}" if invalid else "",
+            ) if part)
+            self.push_log(
+                "[Macro] Auto Bounty was not enabled. Assign a saved Macro Operation "
+                f"to every Story map first ({details}).")
+            return {
+                "ok": False,
+                "reason": "incomplete_bounty_maps",
+                "missing_maps": settings["missing_maps"],
+                "invalid_maps": settings["invalid_maps"],
+            }
         settings["enabled"] = bool(enabled)
-        cfg.update({"bounty": settings})
+        self._save_bounty_settings(settings)
         return {"ok": True}
 
     def set_bounty_play_mode(self, play_mode: str) -> dict:
@@ -1071,7 +1133,7 @@ class Api:
             return {"ok": False, "reason": "bad_play_mode"}
         settings = self.get_bounty_settings()
         settings["play_mode"] = play_mode
-        cfg.update({"bounty": settings})
+        self._save_bounty_settings(settings)
         return {"ok": True}
 
     def set_bounty_summon_banner(self, banner: str) -> dict:
@@ -1079,7 +1141,7 @@ class Api:
             return {"ok": False, "reason": "bad_banner"}
         settings = self.get_bounty_settings()
         settings["summon_banner"] = banner
-        cfg.update({"bounty": settings})
+        self._save_bounty_settings(settings)
         return {"ok": True}
 
     def set_bounty_map_macro(self, map_name: str, macro: str) -> dict:
@@ -1087,8 +1149,15 @@ class Api:
             return {"ok": False, "reason": "bad_map"}
         settings = self.get_bounty_settings()
         settings["maps"][map_name]["macro"] = macro or ""
-        cfg.update({"bounty": settings})
-        return {"ok": True}
+        setup = self._bounty_macro_setup(settings)
+        auto_disabled = bool(settings.get("enabled") and not setup["setup_ready"])
+        if auto_disabled:
+            settings["enabled"] = False
+            self.push_log(
+                f'[Macro] Auto Bounty was disabled because "{map_name}" no longer '
+                "has a usable Macro Operation.")
+        self._save_bounty_settings(settings)
+        return {"ok": True, "auto_disabled": auto_disabled, **setup}
 
     def _default_crafting_settings(self) -> dict:
         from core.runner_constants import CRAFT_SPRITES, CRAFT_DEFAULT_EVERY

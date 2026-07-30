@@ -95,6 +95,24 @@ def test_failed_objective_click_is_retried_before_runner_moves_on(monkeypatch):
     assert any("giving up on this objective after 3 attempts" in line for line in runner.logs)
 
 
+def test_incomplete_map_setup_skips_board_entirely():
+    runner = _Harness()
+    runner._get_bounty_settings = lambda: {
+        "enabled": True,
+        "setup_ready": False,
+        "missing_maps": ["Flower Forest"],
+        "invalid_maps": [],
+    }
+
+    assert runner._run_bounties(
+        123, threading.Event(), {}, {}, {}) is False
+
+    assert runner.board_opens == 0
+    assert any(
+        "every Story map needs a saved Macro Operation" in line
+        for line in runner.logs)
+
+
 def test_missed_click_uses_all_three_attempts_while_board_remains_open(monkeypatch):
     monkeypatch.setattr(runner_bounty.wm, "activate_window", lambda _hwnd: True)
     runner = _Harness()

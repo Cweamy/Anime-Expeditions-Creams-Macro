@@ -3060,7 +3060,8 @@ async function refreshBountyScreen() {
 
 function renderBountyScreen() {
   const s = bountyState;
-  document.getElementById('toggle-bounty-enabled')?.classList.toggle('on', !!(s && s.enabled));
+  document.getElementById('toggle-bounty-enabled')?.classList.toggle(
+    'on', !!(s && s.enabled && s.setup_ready));
   const playMode = (s && s.play_mode) || 'solo';
   document.getElementById('bounty-mode-solo')?.classList.toggle('active', playMode === 'solo');
   document.getElementById('bounty-mode-matchmaking')?.classList.toggle('active', playMode === 'matchmaking');
@@ -3073,6 +3074,21 @@ function renderBountyScreen() {
   if (!s) {
     list.innerHTML = '<div class="rh-empty">Couldn\'t load Auto Bounty settings.</div>';
     return;
+  }
+  const warning = document.getElementById('bounty-setup-warning');
+  if (warning) {
+    const missing = s.missing_maps || [];
+    const invalid = s.invalid_maps || [];
+    const problems = [];
+    if (missing.length) problems.push(`Assign: ${missing.map(escapeHtml).join(', ')}`);
+    if (invalid.length) {
+      problems.push(`Repair: ${invalid.map(item =>
+        `${escapeHtml(item.map)} (${escapeHtml(item.macro)})`).join(', ')}`);
+    }
+    warning.innerHTML = s.setup_ready
+      ? ''
+      : `<strong>Setup required:</strong> Auto Bounty needs a saved Macro Operation for every Story map. ${problems.join('. ')}.`;
+    warning.style.display = s.setup_ready ? 'none' : '';
   }
   const macroOpts = current => `<option value="">No Macro</option>` +
     taskTemplates.map(name =>
@@ -3096,9 +3112,14 @@ function renderBountyScreen() {
 
 async function toggleBountyEnabled(btn) {
   const isOn = !btn.classList.contains('on');
-  btn.classList.toggle('on', isOn);
   bounceToggle(btn);
-  try { await pywebview.api.set_bounty_enabled(isOn); } catch (e) {}
+  try {
+    const result = await pywebview.api.set_bounty_enabled(isOn);
+    if (!result.ok && result.reason === 'incomplete_bounty_maps') {
+      addLog('[Macro] Auto Bounty needs a saved Macro Operation for every Story map before it can be enabled.');
+    }
+  } catch (e) {}
+  await refreshBountyScreen();
 }
 
 async function setBountyPlayMode(playMode) {
@@ -3112,7 +3133,13 @@ async function setBountySummonBanner(banner) {
 }
 
 async function setBountyMapMacro(map, macro) {
-  try { await pywebview.api.set_bounty_map_macro(map, macro); } catch (e) {}
+  try {
+    const result = await pywebview.api.set_bounty_map_macro(map, macro);
+    if (result.auto_disabled) {
+      addLog(`[Macro] Auto Bounty disabled: ${map} no longer has a usable Macro Operation.`);
+    }
+  } catch (e) {}
+  await refreshBountyScreen();
 }
 
 // ---------------------------------------------------------------------------
