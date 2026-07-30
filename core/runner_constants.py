@@ -595,3 +595,24 @@ CRAFT_ITEM_TIMEOUT = 4.0           # a sprite icon / Max / input / Craft button 
 CRAFT_INSUFFICIENT_TIMEOUT = 2.0   # how long to watch for the insufficient-items warning after clicking Craft
 
 
+# Auto Fuel is clock-driven rather than win-driven. Each resource keeps its
+# own successful-refill timestamp so one failed station never makes the other
+# repeat early or wait another full cycle.
+FUEL_RESOURCES = ("resource_drill", "gold_mine")
+FUEL_PATH_KEYS = (
+    "hub_to_resource_drill",
+    "hub_to_gold_mine",
+    "resource_drill_to_gold_mine",
+)
+FUEL_INTERVAL_SECONDS = 8 * 60 * 60
+FUEL_RETRY_SECONDS = 15 * 60
+FUEL_AMOUNT_MAX = 100
+FUEL_AREA_TIMEOUT = 10.0
+FUEL_LOAD_TIMEOUT = 60.0
+FUEL_LOAD_SETTLE = 1.5
+FUEL_CLICK_DELAY = 1.2
+FUEL_ACTION_TIMEOUT = 15.0
+FUEL_CONFIRM_TIMEOUT = 20.0
+FUEL_CLOSE_TIMEOUT = 2.0
+
+

@@ -192,7 +192,7 @@ function isBlockingOverlayOpen() {
     return el && el.style.display !== 'none' && el.style.display !== '';
   };
   if (['update-modal', 'scale-warning-modal', 'onboarding-modal', 'subscribe-modal', 'faq-modal', 'share-code-modal'].some(isOpen)) return true;
-  if (!captureDanceActive && ['im-modal', 'pu-modal', 'path-name-modal'].some(isOpen)) return true;
+  if (!captureDanceActive && ['im-modal', 'pu-modal', 'path-name-modal', 'fuel-paths-modal'].some(isOpen)) return true;
   return false;
 }
 
@@ -522,7 +522,7 @@ function switchScreen(name) {
 
   if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); }
   if (name === 'task') refreshTaskQueue();
-  if (name === 'resource') { refreshCraftingScreen(); refreshChallengeScreen(); refreshBountyScreen(); }
+  if (name === 'resource') { refreshCraftingScreen(); refreshFuelScreen(); refreshChallengeScreen(); refreshBountyScreen(); }
   if (name === 'settings') { refreshSavedPaths(); loadMacroCoords(); loadRewardTestMaps(); }
 
   // The Process Log only exists on the Dashboard, and a display:none element
@@ -2923,6 +2923,26 @@ function renderChallengeScreen() {
   const dailyCount = document.getElementById('daily-challenge-count');
   if (dailyCount) dailyCount.value = daily.ready ? 0 : 1;
 
+  const summary = document.getElementById('resource-challenge-summary');
+  if (summary) {
+    const enabled = !!(daily.enabled || (s && s.enabled));
+    summary.textContent = enabled ? 'Enabled' : 'Disabled';
+    summary.classList.toggle('active', enabled);
+  }
+  const details = document.getElementById('resource-challenge-details');
+  if (details) {
+    const dailyText = daily.enabled
+      ? `Daily: ${daily.ready ? 'Ready' : 'Complete'}`
+      : 'Daily: Off';
+    const regularText = s && s.enabled
+      ? `Regular: ${CHALLENGE_STAGE_SLOTS.map(slot => {
+          const info = (s.stages && s.stages[slot]) || {};
+          return info.enabled ? `#${slot} ${info.count || 0}/${s.cap}` : `#${slot} Off`;
+        }).join(', ')}`
+      : 'Regular: Off';
+    details.textContent = `${dailyText} | ${regularText}`;
+    details.title = details.textContent;
+  }
   const enabledBtn = document.getElementById('toggle-challenge-enabled');
   if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
   const playMode = (s && s.play_mode) || 'solo';
@@ -3001,6 +3021,7 @@ async function toggleChallengeEnabled(btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_challenge_enabled(isOn); } catch (e) {}
+  await refreshChallengeScreen();
 }
 
 async function setChallengePlayMode(playMode) {
@@ -3013,6 +3034,7 @@ async function toggleDailyChallengeEnabled(btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_daily_challenge_enabled(isOn); } catch (e) {}
+  await refreshChallengeScreen();
 }
 
 async function setDailyChallengeCount(value) {
@@ -3026,6 +3048,7 @@ async function toggleChallengeStage(stage, btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_challenge_stage_enabled(stage, isOn); } catch (e) {}
+  await refreshChallengeScreen();
 }
 
 async function setChallengeMapMacro(map, value) {
@@ -3066,6 +3089,14 @@ async function refreshBountyScreen() {
 
 function renderBountyScreen() {
   const s = bountyState;
+  const summary = document.getElementById('resource-bounty-summary');
+  if (summary) {
+    const remaining = s ? `${s.remaining}/${s.total} left` : '';
+    summary.textContent = s
+      ? `${s.enabled ? 'Enabled' : 'Disabled'} | ${remaining}`
+      : 'Disabled';
+    summary.classList.toggle('active', !!(s && s.enabled));
+  }
   document.getElementById('toggle-bounty-enabled')?.classList.toggle(
     'on', !!(s && s.enabled && s.setup_ready));
   const playMode = (s && s.play_mode) || 'solo';
@@ -3074,6 +3105,10 @@ function renderBountyScreen() {
   const summonBanner = (s && s.summon_banner) || 'standard';
   document.getElementById('bounty-banner-standard')?.classList.toggle('active', summonBanner === 'standard');
   document.getElementById('bounty-banner-villain')?.classList.toggle('active', summonBanner === 'villain');
+  const remaining = document.getElementById('bounty-remaining');
+  if (remaining && s) {
+    remaining.textContent = `${s.remaining} / ${s.total}`;
+  }
 
   const list = document.getElementById('bounty-map-list');
   if (!list) return;
@@ -3148,7 +3183,172 @@ async function setBountyMapMacro(map, macro) {
   await refreshBountyScreen();
 }
 
+async function resetBountyRemaining() {
+  try { await pywebview.api.reset_bounty_remaining(); } catch (e) {}
+  await refreshBountyScreen();
+}
+
 // ---------------------------------------------------------------------------
+// Auto Fuel screen (see core/runner_fuel.py). The runner only checks it at
+// safe queue boundaries, so these controls never trigger a live run directly.
+const FUEL_RESOURCE_LABELS = {
+  resource_drill: 'Resource Drill',
+  gold_mine: 'Gold Mine',
+};
+const FUEL_PATH_LABELS = {
+  hub_to_resource_drill: 'Hub to Resource Drill',
+  hub_to_gold_mine: 'Hub to Gold Mine',
+  resource_drill_to_gold_mine: 'Resource Drill to Gold Mine',
+};
+let fuelState = null;
+
+function formatFuelCountdown(seconds) {
+  const total = Math.max(0, Math.ceil(Number(seconds) || 0));
+  if (total === 0) return 'Ready now';
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function renderFuelTimers() {
+  if (!fuelState) return;
+  const now = Date.now() / 1000;
+  const cardDetails = [];
+  for (const key of Object.keys(FUEL_RESOURCE_LABELS)) {
+    const state = fuelState.resources[key];
+    const enabled = fuelState.enabled && state.enabled;
+    const remaining = Math.max(0, Number(state.next_due_at || 0) - now);
+    const timer = document.getElementById(`fuel-${key.replaceAll('_', '-')}-timer`);
+    const status = document.getElementById(`fuel-${key.replaceAll('_', '-')}-status`);
+    if (timer) timer.textContent = enabled ? formatFuelCountdown(remaining) : 'Disabled';
+    if (status) status.textContent = !enabled ? 'Disabled' : (remaining <= 0 ? 'Ready' : 'Waiting');
+    cardDetails.push(
+      `${FUEL_RESOURCE_LABELS[key]}: ${!enabled ? 'Off' : (remaining <= 0 ? 'Ready' : formatFuelCountdown(remaining))}`
+    );
+  }
+  const summary = document.getElementById('fuel-summary-status');
+  if (summary) {
+    const enabledResources = Object.values(fuelState.resources).filter(x => x.enabled);
+    const anyReady = fuelState.enabled && enabledResources.some(x => Number(x.next_due_at || 0) <= now);
+    summary.textContent = !fuelState.enabled ? 'Disabled' : (!enabledResources.length ? 'No resources' : (anyReady ? 'Ready' : 'Waiting'));
+  }
+  const cardSummary = document.getElementById('resource-fuel-summary');
+  if (cardSummary) {
+    cardSummary.textContent = fuelState.enabled ? 'Enabled' : 'Disabled';
+    cardSummary.classList.toggle('active', !!fuelState.enabled);
+  }
+  const details = document.getElementById('resource-fuel-details');
+  if (details) {
+    details.textContent = cardDetails.join(' | ');
+    details.title = details.textContent;
+  }
+}
+
+async function refreshFuelScreen() {
+  try {
+    fuelState = await pywebview.api.get_fuel_settings();
+  } catch (e) {
+    return;
+  }
+  const enabledToggle = document.getElementById('toggle-fuel-enabled');
+  if (enabledToggle) enabledToggle.classList.toggle('on', !!fuelState.enabled);
+  for (const key of Object.keys(FUEL_RESOURCE_LABELS)) {
+    const state = fuelState.resources[key];
+    const id = key.replaceAll('_', '-');
+    const checkbox = document.getElementById(`fuel-${id}-enabled`);
+    const maxButton = document.getElementById(`fuel-${id}-max`);
+    const numberButton = document.getElementById(`fuel-${id}-number`);
+    const amountInput = document.getElementById(`fuel-${id}-amount`);
+    const isMax = String(state.amount).toLowerCase() === 'max';
+    if (checkbox) checkbox.classList.toggle('on', !!state.enabled);
+    if (maxButton) maxButton.classList.toggle('active', isMax);
+    if (numberButton) numberButton.classList.toggle('active', !isMax);
+    if (amountInput) {
+      amountInput.value = isMax ? 1 : state.amount;
+      amountInput.style.visibility = isMax ? 'hidden' : 'visible';
+    }
+  }
+  renderFuelTimers();
+  renderFuelPaths();
+}
+
+async function toggleFuelEnabled(btn) {
+  const enabled = !btn.classList.contains('on');
+  btn.classList.toggle('on', enabled);
+  bounceToggle(btn);
+  try { await pywebview.api.set_fuel_enabled(enabled); } catch (e) {}
+  await refreshFuelScreen();
+}
+
+async function toggleFuelResourceEnabled(resource, button) {
+  const enabled = !button.classList.contains('on');
+  button.classList.toggle('on', enabled);
+  bounceToggle(button);
+  try { await pywebview.api.set_fuel_resource_enabled(resource, enabled); } catch (e) {}
+  await refreshFuelScreen();
+}
+
+async function setFuelAmountMode(resource, mode) {
+  const state = fuelState && fuelState.resources[resource];
+  const amount = mode === 'max' ? 'max' : (
+    state && String(state.amount).toLowerCase() !== 'max' ? state.amount : 1
+  );
+  await setFuelResourceAmount(resource, amount);
+}
+
+async function setFuelResourceAmount(resource, amount) {
+  const normalized = String(amount).toLowerCase() === 'max'
+    ? 'max'
+    : Math.max(1, Math.min(100, parseInt(amount, 10) || 1));
+  try { await pywebview.api.set_fuel_resource_amount(resource, normalized); } catch (e) {}
+  await refreshFuelScreen();
+}
+
+async function resetFuelTimer() {
+  try { await pywebview.api.reset_fuel_timer(); } catch (e) {}
+  await refreshFuelScreen();
+}
+
+async function setFuelPath(pathKey, pathName) {
+  try { await pywebview.api.set_fuel_path(pathKey, pathName); } catch (e) {}
+  await refreshFuelScreen();
+}
+
+async function openFuelPaths() {
+  await refreshSavedPaths();
+  await refreshFuelScreen();
+  const modal = document.getElementById('fuel-paths-modal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeFuelPaths() {
+  const modal = document.getElementById('fuel-paths-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function renderFuelPaths() {
+  const list = document.getElementById('fuel-path-list');
+  if (!list || !fuelState) return;
+  list.innerHTML = Object.entries(FUEL_PATH_LABELS).map(([key, label]) => {
+    const current = fuelState.paths[key] || '';
+    const options = ['<option value="">Not assigned</option>'].concat(
+      savedPaths.map(name => `<option value="${escapeHtml(name)}" ${name === current ? 'selected' : ''}>${escapeHtml(name)}</option>`)
+    ).join('');
+    const recording = typeof recordingFuelPathKey !== 'undefined' && recordingFuelPathKey === key;
+    return `<div class="fuel-path-row">
+      <div>
+        <div class="setting-label">${escapeHtml(label)}</div>
+        <div class="setting-desc">${current ? 'Path assigned' : 'Recording required'}</div>
+      </div>
+      <select class="task-select" onchange="setFuelPath('${key}', this.value)">${options}</select>
+      <button class="task-toolbar-btn ${recording ? 'danger' : ''}" onclick="toggleRecordFuelPath('${key}')">${recording ? 'Stop' : 'Record'}</button>
+    </div>`;
+  }).join('');
+}
+
+setInterval(renderFuelTimers, 1000);
+
 // Auto Crafting screen (see core/runner_crafting.py). Interleaved like
 // Challenge: after every N qualifying wins it runs one crafting pass. The
 // label map mirrors CRAFT_SPRITE_LABELS in core/runner_constants.py -- same
@@ -3171,6 +3371,23 @@ async function refreshCraftingScreen() {
 
 function renderCraftingScreen() {
   const s = craftingState;
+  const summary = document.getElementById('resource-crafting-summary');
+  if (summary) {
+    summary.textContent = s && s.enabled ? 'Enabled' : 'Disabled';
+    summary.classList.toggle('active', !!(s && s.enabled));
+  }
+  const details = document.getElementById('resource-crafting-details');
+  if (details) {
+    const selected = ((s && s.items) || []).filter(item => item.enabled);
+    const labels = selected.map(item => {
+      const label = CRAFT_SPRITE_LABELS[item.key] || item.key;
+      return `${label} (${String(item.amount).toLowerCase() === 'max' ? 'Max' : item.amount})`;
+    });
+    const spriteText = labels.length ? labels.join(', ') : 'No sprites selected';
+    const progressText = s ? `${s.count}/${s.every} wins` : 'progress unavailable';
+    details.textContent = `${spriteText} | ${progressText}`;
+    details.title = details.textContent;
+  }
   const enabledBtn = document.getElementById('toggle-crafting-enabled');
   if (enabledBtn) enabledBtn.classList.toggle('on', !!(s && s.enabled));
   const everyInput = document.getElementById('crafting-every');
@@ -3300,6 +3517,7 @@ async function toggleCraftingEnabled(btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_crafting_enabled(isOn); } catch (e) {}
+  await refreshCraftingScreen();
 }
 
 async function setCraftingEvery(value) {
@@ -3313,6 +3531,7 @@ async function toggleCraftingItem(key, btn) {
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
   try { await pywebview.api.set_crafting_item_enabled(key, isOn); } catch (e) {}
+  await refreshCraftingScreen();
 }
 
 async function setCraftingItemMax(key) {
@@ -3374,6 +3593,17 @@ function closeChallengeMaps() {
   if (m) m.style.display = 'none';
 }
 
+function openBountyMaps() {
+  const m = document.getElementById('bounty-maps-modal');
+  if (m) m.style.display = 'flex';
+  refreshBountyScreen();  // (re)populate Auto Bounty's independent map assignments
+}
+
+function closeBountyMaps() {
+  const m = document.getElementById('bounty-maps-modal');
+  if (m) m.style.display = 'none';
+}
+
 async function testCrafting() {
   let res = null;
   try { res = await pywebview.api.test_crafting(); } catch (e) {}
@@ -3384,6 +3614,21 @@ async function testCrafting() {
     addLog('[Craft] Can\'t test -- the macro is already running. Stop it first (F8).');
   } else {
     addLog('[Craft] Couldn\'t start the crafting test (is Roblox docked?).');
+  }
+}
+
+async function testFuel() {
+  let result = null;
+  try { result = await pywebview.api.test_fuel(); } catch (e) {}
+  if (result && result.ok) {
+    addLog('[Fuel] Running a test Auto Fuel pass now -- watch the log.');
+    switchScreen('dashboard');
+  } else if (result && result.reason === 'already_running') {
+    addLog('[Fuel] Can\'t test -- the macro is already running. Stop it first (F8).');
+  } else if (result && result.reason === 'no_resources') {
+    addLog('[Fuel] Can\'t test -- enable Resource Drill or Gold Mine first.');
+  } else {
+    addLog('[Fuel] Couldn\'t start the Auto Fuel test (is Roblox docked?).');
   }
 }
 
@@ -3471,6 +3716,7 @@ const PHASE_ALLOWED = {
 let creationPhases = { prestart: [], battle: [], loop_a: [], loop_b: [] };
 let phaseCollapsed = { prestart: false, battle: false, loop_a: false, loop_b: false };
 let recordingBlockId = null;
+let recordingFuelPathKey = null;
 let savedPaths = [];
 
 // renderPhases() rebuilds the ENTIRE block list via innerHTML on nearly every
@@ -3846,66 +4092,78 @@ async function saveMatchmakingRegionDebug(btn) {
   setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1600);
 }
 
-// Click once to start (Python polls WASD via start_path_recording), click
-// again to stop -- naming happens *after* recording, at save time, so the
-// player isn't stuck typing a name before they've even walked the path.
-// Where the freshly saved path name should land once the player names it in
-// the modal: whichever block's Record button started this (a Walk Path
-// block sets mode/pathName on itself, a plain Walk block sets its own path
-// param -- see savePathName). Survives the gap between Stop and Save, which
-// recordingBlockId (nulled on Stop) doesn't.
+// A recording target keeps both its owner and return screen. Macro Manager
+// blocks and Auto Fuel routes share the same recorder and naming flow.
 let pendingRecordingTarget = null;
 
 function stopActiveRecording() {
   if (recordingBlockId) toggleRecordPath(recordingBlockId);
+  else if (recordingFuelPathKey) toggleRecordFuelPath(recordingFuelPathKey);
 }
 
-async function toggleRecordPath(blockId) {
-  if (recordingBlockId === blockId) {
-    pendingRecordingTarget = blockId;
-    recordingBlockId = null;
-    document.getElementById('rec-popout').style.display = 'none';
-    // Kill the WASD poll FIRST (stop_path_capture), then ask for a name: the
-    // poll reads physical keys regardless of focus, so typing a name that
-    // contains w/a/s/d would otherwise tack phantom movement onto the path.
-    let stopRes = null;
-    try { stopRes = await pywebview.api.stop_path_capture(); } catch (e) {}
-    renderPhases();
-    // Back to Macro Manager BEFORE showing the naming dialog: the docked Roblox
-    // window paints over all DOM on the Dashboard, so a dialog there sits
-    // invisibly behind the game. Macro Manager hides Roblox entirely.
-    switchScreen('creation');
-    if (!stopRes || !stopRes.count) {
-      addLog('[Macro Manager] Nothing recorded -- no movement detected.');
-      try { await pywebview.api.discard_pending_path(); } catch (e) {}
-      return;
-    }
-    const input = document.getElementById('path-name-input');
-    input.value = '';
-    document.getElementById('path-name-modal').style.display = 'flex';
-    setTimeout(() => input.focus(), 50);
-    return;
-  }
-  if (recordingBlockId) return;  // already recording
-  // The game-slot layout (where the docked Roblox window actually sits) only
-  // exists on the Dashboard screen -- Macro Manager hides Roblox entirely (see
-  // switchScreen()), so recording has to switch there first or there'd be
-  // nothing visible to walk in. start_path_recording() then hands Roblox
-  // real OS focus so the player's WASD actually reaches the game instead of
-  // this panel.
+async function startRecordingTarget(target) {
+  if (recordingBlockId || recordingFuelPathKey) return;
+  closeFuelPaths();
   switchScreen('dashboard');
   await new Promise(resolve => setTimeout(resolve, 200));
   try {
     const result = await pywebview.api.start_path_recording();
     if (result.ok) {
-      recordingBlockId = blockId;
+      if (target.kind === 'fuel') recordingFuelPathKey = target.pathKey;
+      else recordingBlockId = target.blockId;
       document.getElementById('rec-popout').style.display = 'flex';
-      addLog('[Macro Manager] Recording path -- walk with WASD (I/O also recorded, timer starts on your first key), click Stop Recording when done.');
+      addLog(`[${target.kind === 'fuel' ? 'Fuel' : 'Macro Manager'}] Recording path -- walk with WASD (I/O also recorded, timer starts on your first key), then click Stop Recording.`);
     } else {
-      addLog(`[Macro Manager] Couldn't start recording: ${result.reason || 'error'}`);
+      addLog(`[Path Recorder] Couldn't start recording: ${result.reason || 'error'}`);
     }
   } catch (e) {}
   renderPhases();
+  renderFuelPaths();
+}
+
+async function stopRecordingTarget(target) {
+  pendingRecordingTarget = target;
+  recordingBlockId = null;
+  recordingFuelPathKey = null;
+  document.getElementById('rec-popout').style.display = 'none';
+  // Stop the physical-key poll before opening the name field, otherwise
+  // typing WASD into the field would append fake movement to the route.
+  let stopResult = null;
+  try { stopResult = await pywebview.api.stop_path_capture(); } catch (e) {}
+  renderPhases();
+  switchScreen(target.returnScreen);
+  if (!stopResult || !stopResult.count) {
+    addLog('[Path Recorder] Nothing recorded -- no movement detected.');
+    try { await pywebview.api.discard_pending_path(); } catch (e) {}
+    pendingRecordingTarget = null;
+    return;
+  }
+  const input = document.getElementById('path-name-input');
+  input.value = target.suggestedName || '';
+  document.getElementById('path-name-modal').style.display = 'flex';
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+
+async function toggleRecordPath(blockId) {
+  if (recordingBlockId === blockId) {
+    await stopRecordingTarget({ kind: 'block', blockId, returnScreen: 'creation' });
+    return;
+  }
+  await startRecordingTarget({ kind: 'block', blockId, returnScreen: 'creation' });
+}
+
+async function toggleRecordFuelPath(pathKey) {
+  if (!FUEL_PATH_LABELS[pathKey]) return;
+  if (recordingFuelPathKey === pathKey) {
+    await stopRecordingTarget({
+      kind: 'fuel',
+      pathKey,
+      returnScreen: 'resource',
+      suggestedName: `Auto Fuel - ${FUEL_PATH_LABELS[pathKey]}`,
+    });
+    return;
+  }
+  await startRecordingTarget({ kind: 'fuel', pathKey, returnScreen: 'resource' });
 }
 
 // "Save Recorded Path" modal (#path-name-modal): Save persists the
@@ -3920,15 +4178,22 @@ async function savePathName() {
     const result = await pywebview.api.save_pending_path(name);
     if (result.ok) {
       await refreshSavedPaths();
-      const loc = pendingRecordingTarget ? findBlockLocation(pendingRecordingTarget) : null;
-      if (loc) {
-        const block = loc.container[loc.idx];
-        if (block.type === 'walk_path') { block.mode = 'custom'; block.pathName = result.name; }
-        else block.params.path = result.name;
+      if (pendingRecordingTarget && pendingRecordingTarget.kind === 'fuel') {
+        await pywebview.api.set_fuel_path(pendingRecordingTarget.pathKey, result.name);
+        await refreshFuelScreen();
+        addLog(`[Fuel] Saved and assigned path "${result.name}".`);
+      } else {
+        const blockId = pendingRecordingTarget && pendingRecordingTarget.blockId;
+        const loc = blockId ? findBlockLocation(blockId) : null;
+        if (loc) {
+          const block = loc.container[loc.idx];
+          if (block.type === 'walk_path') { block.mode = 'custom'; block.pathName = result.name; }
+          else block.params.path = result.name;
+        }
+        addLog(`[Macro Manager] Saved path "${result.name}".`);
       }
-      addLog(`[Macro Manager] Saved path "${result.name}".`);
     } else {
-      addLog(`[Macro Manager] Couldn't save path: ${result.reason || 'error'}`);
+      addLog(`[Path Recorder] Couldn't save path: ${result.reason || 'error'}`);
     }
   } catch (e) {}
   pendingRecordingTarget = null;
@@ -3940,7 +4205,7 @@ async function discardPathRecording() {
   restoreGameIfDashboard();
   try { await pywebview.api.discard_pending_path(); } catch (e) {}
   pendingRecordingTarget = null;
-  addLog('[Macro Manager] Recording discarded.');
+  addLog('[Path Recorder] Recording discarded.');
   renderPhases();
 }
 

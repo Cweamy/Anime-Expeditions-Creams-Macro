@@ -538,6 +538,11 @@ class BountyOps:
                 "[Macro] Auto Bounty skipped: every Story map needs a saved "
                 f"Macro Operation before it can run ({details}).")
             return False
+        if settings.get("remaining") == 0:
+            self._log(
+                "[Macro] Auto Bounty: 0 bounties remain for this game day "
+                "-- skipping the Bounty Board.")
+            return True
 
         self._log("[Macro] Auto Bounty is enabled -- checking gameplay bounties "
                   "before Challenge and the Task Queue...")
@@ -566,6 +571,7 @@ class BountyOps:
                 )
                 if remaining is not None:
                     left, total = remaining
+                    self._set_bounty_remaining(left, total)
                     if left:
                         self._log(
                             f"[Macro] Auto Bounty: {left}/{total} bounties remain, "

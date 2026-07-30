@@ -1000,6 +1000,10 @@ def test_render_crafting_screen_has_drag_grip(tmp_path):
     global.CRAFT_SPRITE_LABELS = { sprite_rainbow: 'Rainbow', sprite_red: 'Red' };
 
     const mockElements = {
+      'resource-crafting-summary': {
+        textContent: '', classList: { toggle: () => {} }
+      },
+      'resource-crafting-details': { textContent: '', title: '' },
       'toggle-crafting-enabled': { classList: { toggle: () => {} } },
       'crafting-every': { value: '' },
       'crafting-progress': { textContent: '' },
@@ -1016,11 +1020,90 @@ def test_render_crafting_screen_has_drag_grip(tmp_path):
     console.log(JSON.stringify({
       hasCraftingGrip: html.includes('crafting-grip'),
       hasDataKeyRainbow: html.includes('data-key="sprite_rainbow"'),
-      hasDataKeyRed: html.includes('data-key="sprite_red"')
+      hasDataKeyRed: html.includes('data-key="sprite_red"'),
+      summary: mockElements['resource-crafting-summary'].textContent,
+      details: mockElements['resource-crafting-details'].textContent
     }));
     """
     out = run_js(body, tmp_path)
     assert out["hasCraftingGrip"] is True
     assert out["hasDataKeyRainbow"] is True
     assert out["hasDataKeyRed"] is True
+    assert out["summary"] == "Enabled"
+    assert out["details"] == "Rainbow (Max) | 2/5 wins"
+
+
+def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
+    body = """
+    global.challengeState = {
+      enabled: true, cap: 10, play_mode: 'solo', last_reset_date: '2026-07-29',
+      daily: { enabled: true, ready: false },
+      stages: {
+        '1': { enabled: true, ready: true, count: 0 },
+        '2': { enabled: true, ready: false, count: 1 },
+        '3': { enabled: true, ready: true, count: 10 }
+      },
+      maps: {}
+    };
+    global.CHALLENGE_STAGE_SLOTS = ['1', '2', '3'];
+    const mockElements = {
+      'resource-challenge-summary': {
+        textContent: '', classList: { toggle: () => {} }
+      },
+      'resource-challenge-details': { textContent: '', title: '' }
+    };
+    global.document = { getElementById: id => mockElements[id] || null };
+
+    eval(extract('renderChallengeScreen'));
+    renderChallengeScreen();
+
+    console.log(JSON.stringify({
+      summary: mockElements['resource-challenge-summary'].textContent,
+      details: mockElements['resource-challenge-details'].textContent
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out == {
+        "summary": "Enabled",
+        "details": "Daily: Complete | Regular: #1 0/10, #2 1/10, #3 10/10",
+    }
+
+
+def test_fuel_card_summarizes_enabled_resources(tmp_path):
+    body = """
+    global.fuelState = {
+      enabled: true,
+      resources: {
+        resource_drill: { enabled: true, next_due_at: 0 },
+        gold_mine: { enabled: false, next_due_at: 0 }
+      }
+    };
+    global.FUEL_RESOURCE_LABELS = {
+      resource_drill: 'Resource Drill',
+      gold_mine: 'Gold Mine'
+    };
+    Date.now = () => 1000;
+    const mockElements = {
+      'resource-fuel-summary': {
+        textContent: '', classList: { toggle: () => {} }
+      },
+      'resource-fuel-details': { textContent: '', title: '' },
+      'fuel-summary-status': { textContent: '' }
+    };
+    global.document = { getElementById: id => mockElements[id] || null };
+
+    eval(extract('formatFuelCountdown'));
+    eval(extract('renderFuelTimers'));
+    renderFuelTimers();
+
+    console.log(JSON.stringify({
+      summary: mockElements['resource-fuel-summary'].textContent,
+      details: mockElements['resource-fuel-details'].textContent
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out == {
+        "summary": "Enabled",
+        "details": "Resource Drill: Ready | Gold Mine: Off",
+    }
 

@@ -713,6 +713,120 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .setting-label { font-size: 13px; font-weight: 700; color: var(--text); }
 .setting-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
+/* Resource automation is a growing list (Crafting, Challenge, Bounty),
+   so each feature owns one collapsed-by-default card instead of contributing
+   an always-expanded wall of settings. Native details/summary keeps the
+   interaction keyboard-accessible and needs no persisted UI state. */
+.resource-card {
+  --resource-accent: var(--brand);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--resource-accent) 5%, var(--bg-card)),
+    var(--bg-card) 48%
+  );
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+.resource-card:hover,
+.resource-card[open] {
+  border-color: color-mix(in srgb, var(--resource-accent) 42%, var(--border));
+}
+.resource-card[open] {
+  box-shadow: 0 10px 28px -24px color-mix(in srgb, var(--resource-accent) 60%, transparent);
+}
+.resource-card-head {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 84px;
+  padding: 14px 16px;
+  cursor: pointer;
+  user-select: none;
+  background: color-mix(in srgb, var(--bg-surface) 38%, transparent);
+}
+.resource-card-head::-webkit-details-marker { display: none; }
+.resource-card-head:focus-visible {
+  outline: 2px solid var(--resource-accent);
+  outline-offset: -3px;
+}
+.resource-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--resource-accent);
+  background: color-mix(in srgb, var(--resource-accent) 14%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--resource-accent) 38%, var(--border));
+  font-family: 'Sora', 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.resource-card-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.resource-card-title {
+  color: var(--text);
+  font-family: 'Sora', 'Inter', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+}
+.resource-card-desc {
+  color: color-mix(in srgb, var(--resource-accent) 58%, var(--text));
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.resource-card-state {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+.resource-card-state.active {
+  color: var(--resource-accent);
+  background: color-mix(in srgb, var(--resource-accent) 11%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--resource-accent) 34%, var(--border));
+}
+.resource-card-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 26px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 0.16s, color 0.16s;
+}
+.resource-card[open] .resource-card-chevron {
+  color: var(--resource-accent);
+  transform: rotate(90deg);
+}
+.resource-card-body {
+  padding: 0 16px 12px;
+  border-top: 1px solid var(--border);
+}
+.resource-card-body .setting-row:last-child { border-bottom: none; }
+
 /* Toggle: a small square that's rose-with-cross off / teal-with-check on,
    with a springy overshoot bounce on every flip (see the .bounce class
    toggleSetting()/toggleWebhookField() briefly add in app.js). Styled in the
@@ -1080,6 +1194,30 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
   color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
 }
+.fuel-resource-controls {
+  display: flex; align-items: stretch; justify-content: flex-end; gap: 14px; flex-wrap: wrap;
+}
+.fuel-enable-control {
+  display: flex; align-items: center; gap: 9px; min-width: 132px;
+}
+.fuel-amount-control {
+  display: flex; flex-direction: column; justify-content: center; gap: 5px;
+}
+.fuel-control-title {
+  color: var(--text-dim); font-size: 11px; font-weight: 700; line-height: 1.15;
+}
+.fuel-control-hint {
+  color: var(--text-muted); font-size: 9px; line-height: 1.15; margin-top: 3px;
+}
+.fuel-control-divider {
+  width: 1px; min-height: 36px; background: var(--border);
+}
+.fuel-path-row {
+  display: grid; grid-template-columns: minmax(170px, 1fr) minmax(180px, 1.15fr) auto;
+  align-items: center; gap: 10px; padding: 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card);
+}
+.fuel-path-row .task-select { min-width: 0; width: 100%; }
 
 /* Builder panel: labeled fields in a 2-up grid (labels come from .task-field). */
 .task-builder-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }

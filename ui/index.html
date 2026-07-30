@@ -576,7 +576,17 @@
         <div class="p-3 flex flex-col gap-3 overflow-y-auto" style="min-height: 0;">
 
           <!-- ── Auto Crafting ── -->
-          <div class="rp-head-tag" style="--rp-tag: var(--teal); align-self: flex-start;">Auto Crafting</div>
+          <details id="resource-card-crafting" class="resource-card">
+            <summary class="resource-card-head">
+              <span class="resource-card-icon">C</span>
+              <span class="resource-card-copy">
+                <span class="resource-card-title">Auto Crafting</span>
+                <span id="resource-crafting-details" class="resource-card-desc">No sprites selected.</span>
+              </span>
+              <span id="resource-crafting-summary" class="resource-card-state">Disabled</span>
+              <span class="resource-card-chevron">&#8250;</span>
+            </summary>
+            <div class="resource-card-body">
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
@@ -612,9 +622,118 @@
             </div>
             <button class="task-toolbar-btn danger" onclick="resetCraftingCount()">Reset</button>
           </div>
+            </div>
+          </details>
+
+          <!-- Auto Fuel -->
+          <details id="resource-card-fuel" class="resource-card">
+            <summary class="resource-card-head">
+              <span class="resource-card-icon">F</span>
+              <span class="resource-card-copy">
+                <span class="resource-card-title">Auto Fuel</span>
+                <span id="resource-fuel-details" class="resource-card-desc">Resource Drill: Off | Gold Mine: Off</span>
+              </span>
+              <span id="resource-fuel-summary" class="resource-card-state">Disabled</span>
+              <span class="resource-card-chevron">&#8250;</span>
+            </summary>
+            <div class="resource-card-body">
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Enable Auto Fuel <span id="fuel-summary-status" class="challenge-ready-chip">Disabled</span></div>
+              <div class="setting-desc">Refills enabled Expedition Hub resources every 8 hours at safe Task Queue boundaries.</div>
+            </div>
+            <button id="toggle-fuel-enabled" class="toggle-switch" onclick="toggleFuelEnabled(this)"></button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Resource Drill <span id="fuel-resource-drill-status" class="challenge-ready-chip">Disabled</span></div>
+              <div class="setting-desc">Next refill: <span id="fuel-resource-drill-timer">Disabled</span>.</div>
+            </div>
+            <div class="fuel-resource-controls">
+              <div class="fuel-enable-control">
+                <button id="fuel-resource-drill-enabled" class="toggle-switch"
+                        onclick="toggleFuelResourceEnabled('resource_drill', this)"></button>
+                <div>
+                  <div class="fuel-control-title">Refill this resource</div>
+                  <div class="fuel-control-hint">Include in Auto Fuel</div>
+                </div>
+              </div>
+              <div class="fuel-control-divider"></div>
+              <div class="fuel-amount-control">
+                <div class="fuel-control-title">Fuel amount</div>
+                <div class="flex items-center gap-2">
+                  <div class="seg-toggle" style="width: auto;">
+                    <button type="button" id="fuel-resource-drill-max" class="seg-btn" onclick="setFuelAmountMode('resource_drill', 'max')">Max</button>
+                    <button type="button" id="fuel-resource-drill-number" class="seg-btn" onclick="setFuelAmountMode('resource_drill', 'number')">Number</button>
+                  </div>
+                  <input id="fuel-resource-drill-amount" type="number" class="block-input" min="1" max="100" style="width: 72px;"
+                         onchange="setFuelResourceAmount('resource_drill', this.value)">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Gold Mine <span id="fuel-gold-mine-status" class="challenge-ready-chip">Disabled</span></div>
+              <div class="setting-desc">Next refill: <span id="fuel-gold-mine-timer">Disabled</span>.</div>
+            </div>
+            <div class="fuel-resource-controls">
+              <div class="fuel-enable-control">
+                <button id="fuel-gold-mine-enabled" class="toggle-switch"
+                        onclick="toggleFuelResourceEnabled('gold_mine', this)"></button>
+                <div>
+                  <div class="fuel-control-title">Refill this resource</div>
+                  <div class="fuel-control-hint">Include in Auto Fuel</div>
+                </div>
+              </div>
+              <div class="fuel-control-divider"></div>
+              <div class="fuel-amount-control">
+                <div class="fuel-control-title">Fuel amount</div>
+                <div class="flex items-center gap-2">
+                  <div class="seg-toggle" style="width: auto;">
+                    <button type="button" id="fuel-gold-mine-max" class="seg-btn" onclick="setFuelAmountMode('gold_mine', 'max')">Max</button>
+                    <button type="button" id="fuel-gold-mine-number" class="seg-btn" onclick="setFuelAmountMode('gold_mine', 'number')">Number</button>
+                  </div>
+                  <input id="fuel-gold-mine-amount" type="number" class="block-input" min="1" max="100" style="width: 72px;"
+                         onchange="setFuelResourceAmount('gold_mine', this.value)">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Walking Paths</div>
+              <div class="setting-desc">Record and assign the three routes used inside Expedition Hub.</div>
+            </div>
+            <button class="task-toolbar-btn" onclick="openFuelPaths()">Configure paths</button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Reset Fuel Timer</div>
+              <div class="setting-desc">Makes every enabled resource ready for an immediate refill.</div>
+            </div>
+            <button class="task-toolbar-btn danger" onclick="resetFuelTimer()">Reset</button>
+          </div>
+            </div>
+          </details>
 
           <!-- ── Auto Challenge ── -->
-          <div class="rp-head-tag" style="--rp-tag: var(--amber); align-self: flex-start; margin-top: 6px;">Auto Challenge</div>
+          <details id="resource-card-challenge" class="resource-card">
+            <summary class="resource-card-head">
+              <span class="resource-card-icon">CH</span>
+              <span class="resource-card-copy">
+                <span class="resource-card-title">Auto Challenge</span>
+                <span id="resource-challenge-details" class="resource-card-desc">Daily: Off | Regular: Off</span>
+              </span>
+              <span id="resource-challenge-summary" class="resource-card-state">Disabled</span>
+              <span class="resource-card-chevron">&#8250;</span>
+            </summary>
+            <div class="resource-card-body">
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
@@ -666,24 +785,25 @@
             </div>
           </div>
 
-          <div class="setting-row" style="padding: 10px 0;">
-            <div>
-              <div class="setting-label">Summon Banner</div>
-              <div class="setting-desc">Currency source for Summon bounties. Standard uses Gems; Villain uses Villain Coins.</div>
-            </div>
-            <div class="seg-toggle" style="width: auto;">
-              <button type="button" id="bounty-banner-standard" class="seg-btn" onclick="setBountySummonBanner('standard')">Standard</button>
-              <button type="button" id="bounty-banner-villain" class="seg-btn" onclick="setBountySummonBanner('villain')">Villain</button>
-            </div>
-          </div>
-
           <div>
             <div class="wh-hint" style="margin-bottom: 6px;">Resets every :00 / :30 -- pick which of the 3 stage slots to attempt below.</div>
             <div id="challenge-stage-list" class="flex flex-col gap-1.5"></div>
           </div>
+            </div>
+          </details>
 
           <!-- Auto Bounty -->
-          <div class="rp-head-tag" style="--rp-tag: var(--lilac); align-self: flex-start; margin-top: 6px;">Auto Bounty</div>
+          <details id="resource-card-bounty" class="resource-card">
+            <summary class="resource-card-head">
+              <span class="resource-card-icon">B</span>
+              <span class="resource-card-copy">
+                <span class="resource-card-title">Auto Bounty</span>
+                <span class="resource-card-desc">Complete supported Bounty Board objectives before other automation.</span>
+              </span>
+              <span id="resource-bounty-summary" class="resource-card-state">Disabled</span>
+              <span class="resource-card-chevron">&#8250;</span>
+            </summary>
+            <div class="resource-card-body">
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
@@ -704,11 +824,37 @@
             </div>
           </div>
 
-          <div>
-            <div class="wh-hint" style="margin-bottom: 6px;">Assign the Macro Operation Auto Bounty should use for each Story destination.</div>
-            <div id="bounty-setup-warning" class="bounty-setup-warning" style="display: none;"></div>
-            <div id="bounty-map-list" class="flex flex-col gap-1.5"></div>
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Summon Banner</div>
+              <div class="setting-desc">Currency source for Summon bounties. Standard uses Gems; Villain uses Villain Coins.</div>
+            </div>
+            <div class="seg-toggle" style="width: auto;">
+              <button type="button" id="bounty-banner-standard" class="seg-btn" onclick="setBountySummonBanner('standard')">Standard</button>
+              <button type="button" id="bounty-banner-villain" class="seg-btn" onclick="setBountySummonBanner('villain')">Villain</button>
+            </div>
           </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Bounties Remaining</div>
+              <div class="setting-desc">Updated from the Bounty Board. At 0, Auto Bounty skips until the 00:00 UTC reset or a manual reset.</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="bounty-remaining" class="challenge-ready-chip">10 / 10</span>
+              <button class="task-toolbar-btn danger" onclick="resetBountyRemaining()">Reset</button>
+            </div>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Story Map Setup</div>
+              <div class="setting-desc">Assign the Macro Operation Auto Bounty should use for each Story destination.</div>
+            </div>
+            <button class="task-toolbar-btn" onclick="openBountyMaps()">Story maps</button>
+          </div>
+            </div>
+          </details>
 
           <!-- Future resource sections (Auto Fuel, Gold, Geode, ...) go here. -->
 
@@ -1196,6 +1342,14 @@
               <div class="setting-desc">Runs one crafting pass now on the docked Roblox window &mdash; ignores the win threshold and the Resource &gt; Auto Crafting Enable toggle. Counts as a real run, so F8/Stop cancels it. Switches to the Dashboard so you can watch the <b>[Craft]</b> log.</div>
             </div>
             <button id="btn-debug-test-crafting" onclick="testCrafting()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Run Now</button>
+          </div>
+
+          <div class="setting-row" style="padding: 14px;">
+            <div>
+              <div class="setting-label">Test Auto Refuel</div>
+              <div class="setting-desc">Refills the resources checked under Resource &gt; Auto Fuel now, ignoring the master toggle and timer. Uses the real paths and amounts, updates successful timers, and can be cancelled with F8/Stop.</div>
+            </div>
+            <button id="btn-debug-test-fuel" onclick="testFuel()" class="text-xs font-semibold px-3 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);">Run Now</button>
           </div>
         </section>
       </div>
@@ -1777,6 +1931,20 @@
     </div>
   </div>
 
+  <!-- ============ Auto Fuel walking paths (Resource > Auto Fuel) ============ -->
+  <div id="fuel-paths-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) closeFuelPaths()">
+    <div class="modal-panel" style="width: 620px; max-width: 94vw;">
+      <div class="modal-head">
+        <span class="modal-title">Auto Fuel Walking Paths</span>
+        <span class="modal-close" onclick="closeFuelPaths()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="wh-hint" style="margin-bottom: 10px;">Start each recording at the route's first location. Stop at the destination, then save the path with any name.</div>
+        <div id="fuel-path-list" class="flex flex-col gap-2"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============ Challenge Story Maps (Resource > Auto Challenge) ============
        Per-map Macro Operation assignment; kept in a modal to keep the Resource
        screen clean. Rows rendered by renderChallengeScreen() into #challenge-map-list. -->
@@ -1789,6 +1957,23 @@
       <div class="modal-body">
         <div class="wh-hint" style="margin-bottom: 8px;">Regular Challenge rotates one of the 5 Story maps through each slot &mdash; assign the Macro Operation to run for each.</div>
         <div id="challenge-map-list" style="max-height: 60vh; overflow-y: auto;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Bounty Story Maps (Resource > Auto Bounty) ============
+       Uses the same compact map-assignment flow as Auto Challenge while
+       retaining Auto Bounty's independent per-map Macro Operations. -->
+  <div id="bounty-maps-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) closeBountyMaps()">
+    <div class="modal-panel" style="width: 520px; max-width: 94vw;">
+      <div class="modal-head">
+        <span class="modal-title">Bounty Story Maps</span>
+        <span class="modal-close" onclick="closeBountyMaps()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="wh-hint" style="margin-bottom: 8px;">Assign the Macro Operation Auto Bounty should run for each Story destination.</div>
+        <div id="bounty-setup-warning" class="bounty-setup-warning" style="display: none;"></div>
+        <div id="bounty-map-list" style="max-height: 60vh; overflow-y: auto;"></div>
       </div>
     </div>
   </div>

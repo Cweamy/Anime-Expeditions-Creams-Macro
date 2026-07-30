@@ -18,6 +18,10 @@ class _Harness(BountyOps):
         self.board_stays_open = False
         self.webhook_events = []
         self.keyboard_taps = []
+        self.saved_remaining = []
+        self._set_bounty_remaining = (
+            lambda remaining, total=None:
+                self.saved_remaining.append((remaining, total)))
         self._keyboard = type(
             "_Keyboard", (), {
                 "tap": lambda keyboard, key, hold=0.03:
@@ -518,6 +522,7 @@ def test_run_bounties_reports_unsupported_remaining_count_and_moves_on(monkeypat
         123, threading.Event(), {}, {}, {}) is True
 
     assert runner.board_leaves == 1
+    assert runner.saved_remaining == [(2, 10)]
     assert any(
         "2/10 bounties remain, but none can currently be completed" in line
         for line in runner.logs
@@ -526,6 +531,20 @@ def test_run_bounties_reports_unsupported_remaining_count_and_moves_on(monkeypat
         "moving on to Challenge and the Task Queue" in line
         for line in runner.logs
     )
+
+
+def test_run_bounties_skips_board_when_tracker_is_zero():
+    runner = _Harness()
+    runner._get_bounty_settings = lambda: {
+        "enabled": True, "remaining": 0, "total": 10,
+        "play_mode": "solo", "summon_banner": "standard", "maps": {},
+    }
+
+    assert runner._run_bounties(
+        123, threading.Event(), {}, {}, {}) is True
+
+    assert runner.board_opens == 0
+    assert any("0 bounties remain" in line for line in runner.logs)
 
 
 def test_leave_bounty_board_returns_to_lobby_without_removed_region(monkeypatch):
