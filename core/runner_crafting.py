@@ -107,7 +107,8 @@ class CraftingOps:
             count += 1
         return count >= every
 
-    def _run_crafting(self, hwnd, stop_event: threading.Event, force: bool = False) -> None:
+    def _run_crafting(self, hwnd, stop_event: threading.Event, force: bool = False,
+                      webhook: dict = None) -> None:
         """One full crafting pass: lobby -> Area -> Crafting -> wait for the
         area to load -> E to open the menu -> craft each enabled sprite in
         priority order -> back to the lobby. Resets the win counter on the way
@@ -217,6 +218,11 @@ class CraftingOps:
         reset()
         if not stop_event.is_set():
             self._log("[Craft] Crafting pass finished -- returning to the lobby.")
+            if webhook and webhook.get("enabled"):
+                self._send_event_webhook(
+                    webhook, {"mode": "crafting"}, "\U0001F6E0 Auto Crafting Completed",
+                    "Auto Crafting pass finished in the lobby.", 0x3FBF6F
+                )
             self._keyboard.tap(ord("E"))  # close the menu
             time.sleep(SETTLE_DELAY)
             self._recover_to_lobby(hwnd, stop_event)
@@ -302,11 +308,8 @@ class CraftingOps:
         while time.time() < deadline:
             if stop_event is not None and stop_event.is_set():
                 return False
-            try:
-                if vision.find_image(hwnd, name) is not None:
-                    return True
-            except vision.TemplateNotFound:
-                return False  # no failsafe image supplied -- treat as "no warning"
+            if self._crafting_find(hwnd, name, 0.2, stop_event) is not None:
+                return True
             time.sleep(0.2)
         return False
 

@@ -1958,22 +1958,31 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         session_rate = f"{round(sw / (sw + sl) * 100)}%" if (sw + sl) else "-"
         all_time_rate = f"{round(aw / (aw + al) * 100)}%" if (aw + al) else "-"
         tuc = snap.get("time_until_challenge", "-")
+        fuel_left = snap.get("fuel_left", "-")
         runs_per_hour = snap.get("runs_per_hour", "-")
+        is_bounty = bool(task.get("is_bounty") or mode == "bounty")
 
         # Inline, tree-style fields (bold labels, code values) side by side --
         # Match / Session / All Time. The visual win/loss tiles + activity
         # grid live in the separate status-card image below.
+        match_rows = [
+            ("Result", "Victory \U0001F3C6" if is_win else "Defeat \U0001F480"),
+            ("Duration", duration or "-"),
+        ]
+        if is_bounty:
+            match_rows.append(("Type", "Bounty"))
+        if where:
+            match_rows.append(("Stage", where))
+
         fields = [
-            {"name": "⚔️ Match", "value": self._tree_rows([
-                ("Result", "Victory \U0001F3C6" if is_win else "Defeat \U0001F480"),
-                ("Duration", duration or "-"),
-            ] + ([("Stage", where)] if where else [])), "inline": True},
+            {"name": "⚔️ Match", "value": self._tree_rows(match_rows), "inline": True},
             {"name": "\U0001F4CA Session", "value": self._tree_rows([
                 ("Elapsed", session_time),
                 ("Record", f"{sw}W · {sl}L"),
                 ("Rate", session_rate),
                 ("Runs/h", runs_per_hour),
                 ("Challenge", tuc),
+                ("Fuel Left", fuel_left),
             ]), "inline": True},
             {"name": "\U0001F3C6 All Time", "value": self._tree_rows([
                 ("Record", f"{aw}W · {al}L"),
@@ -1987,14 +1996,20 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
                  f"[\U0001F4FA YouTube]({YOUTUBE_URL})   •   "
                  f"[\U00002B50 GitHub]({GITHUB_REPO_URL})")
         fields.append({"name": "\U0001F517 Links", "value": links, "inline": False})
-        result_word = "Victory" if is_win else "Defeat"
+        if is_bounty:
+            result_word = "Bounty Victory" if is_win else "Bounty Defeat"
+            title = "\U0001F3AF Bounty Victory! \U0001F3C6" if is_win else "\U0001F3AF Bounty Defeat \U0001F480"
+        else:
+            result_word = "Victory" if is_win else "Defeat"
+            title = "Victory! \U0001F3C6" if is_win else "Defeat \U0001F480"
+
         description = (f"{result_word} on **{where}** — session match **#{sw + sl}**."
                        if where else f"{result_word} — session match **#{sw + sl}**.")
 
         version = snap.get("version")
         footer = "Cream's Macro | Anime Expeditions" + (f" · v{version}" if version else "")
         main_embed = {
-            "title": "Victory! \U0001F3C6" if is_win else "Defeat \U0001F480",
+            "title": title,
             "color": 0x3FBF6F if is_win else 0xE05A6D,
             "description": description,
             "fields": fields,

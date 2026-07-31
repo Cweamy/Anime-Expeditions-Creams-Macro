@@ -301,6 +301,45 @@ def _time_until_challenge_ready(challenge: dict) -> str:
     return f"{hours:02d}:{mins:02d}:{secs:02d}" if hours else f"{mins:02d}:{secs:02d}"
 
 
+def _time_until_fuel_refill(fuel: dict) -> str:
+    """Format remaining time until the next scheduled Auto Refuel pass.
+
+    Returns "Due Now" if at least one resource is due, "Disabled" if disabled,
+    or formatted remaining time (e.g., "03h 45m" or "12m 30s").
+    """
+    if not fuel or not fuel.get("enabled"):
+        return "Disabled"
+
+    resources = fuel.get("resources", {})
+    now = time.time()
+    waits = []
+
+    for key, info in resources.items():
+        if not isinstance(info, dict) or not info.get("enabled"):
+            continue
+        if info.get("due"):
+            return "Due Now"
+        next_attempt = float(info.get("next_attempt_at") or 0)
+        if next_attempt > 0:
+            remaining = next_attempt - now
+            if remaining <= 0:
+                return "Due Now"
+            waits.append(remaining)
+
+    if not waits:
+        return "Disabled"
+
+    shortest = min(waits)
+    h = int(shortest // 3600)
+    m = int((shortest % 3600) // 60)
+    s = int(shortest % 60)
+    if h > 0:
+        return f"{h:02d}h {m:02d}m"
+    if m > 0:
+        return f"{m:02d}m {s:02d}s"
+    return f"{s:02d}s"
+
+
 def _get_build_info() -> str:
     """A "sub-version" for the startup log line, below the granularity of
     VERSION (which only bumps on tagged releases) -- the exact git commit
@@ -513,6 +552,11 @@ class Api:
                                      if challenge_enabled else "Disabled")
         except Exception:
             time_until_challenge = "Disabled"
+        try:
+            fuel = self.get_fuel_settings()
+            fuel_left = _time_until_fuel_refill(fuel)
+        except Exception:
+            fuel_left = "Disabled"
         # run_history is newest-first (see _record_match_result) -- reversed to
         # oldest->newest booleans so the card's activity grid reads left (old)
         # to right (recent), GitHub-contribution style.
@@ -525,6 +569,7 @@ class Api:
             "session_start": self.session_start,
             "version": updater.get_current_version(),
             "time_until_challenge": time_until_challenge,
+            "fuel_left": fuel_left,
             "results": [h.get("result") == "win" for h in reversed(history)],
             "runs_per_hour": self._calculate_runs_per_hour(history),  # Runs per hour rate over rolling window
         }

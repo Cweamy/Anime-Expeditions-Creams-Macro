@@ -181,7 +181,8 @@ class FuelOps:
         return not self._checkpoint(stop_event)
 
     def _run_fuel_refill(
-            self, hwnd, stop_event: threading.Event, force: bool = False) -> None:
+            self, hwnd, stop_event: threading.Event, force: bool = False,
+            webhook: dict = None) -> None:
         """Run every resource that is due, preserving per-resource timers."""
         if self._get_fuel_settings is None:
             return
@@ -232,11 +233,14 @@ class FuelOps:
         paths = settings.get("paths") or {}
         resources = settings.get("resources") or {}
         both_due = all(key in due for key in FUEL_RESOURCES)
+        results = {}
 
         if both_due:
             if not self._fuel_run_path(
                     paths.get("hub_to_resource_drill", ""), stop_event):
                 self._fuel_mark_failed(due, stop_event)
+                results["resource_drill"] = False
+                results["gold_mine"] = False
             else:
                 drill_ok = self._fuel_refill_station(
                     hwnd,
@@ -246,6 +250,7 @@ class FuelOps:
                 )
                 if not stop_event.is_set():
                     self._fuel_mark_result("resource_drill", drill_ok)
+                    results["resource_drill"] = drill_ok
 
                 if self._fuel_run_path(
                         paths.get("resource_drill_to_gold_mine", ""), stop_event):
@@ -257,8 +262,10 @@ class FuelOps:
                     )
                     if not stop_event.is_set():
                         self._fuel_mark_result("gold_mine", gold_ok)
+                        results["gold_mine"] = gold_ok
                 elif not stop_event.is_set():
                     self._fuel_mark_result("gold_mine", False)
+                    results["gold_mine"] = False
         else:
             resource = due[0]
             path_key = (
@@ -275,11 +282,29 @@ class FuelOps:
                 )
                 if not stop_event.is_set():
                     self._fuel_mark_result(resource, succeeded)
+                    results[resource] = succeeded
             elif not stop_event.is_set():
                 self._fuel_mark_result(resource, False)
+                results[resource] = False
 
         if not stop_event.is_set():
             self._log("[Fuel] Auto Fuel pass finished. Returning to the lobby.")
+            if webhook and webhook.get("enabled"):
+                succeeded_names = [k.replace("_", " ").title() for k, ok in results.items() if ok]
+                failed_names = [k.replace("_", " ").title() for k, ok in results.items() if not ok]
+                if succeeded_names:
+                    msg = f"Refilled: {', '.join(succeeded_names)}"
+                    if failed_names:
+                        msg += f" (Failed: {', '.join(failed_names)})"
+                    self._send_event_webhook(
+                        webhook, {"mode": "fuel"}, "\U000026FD Auto Refuel Completed",
+                        msg, 0x3FBF6F
+                    )
+                elif failed_names:
+                    self._send_event_webhook(
+                        webhook, {"mode": "fuel"}, "\U000026FD Auto Refuel Failed",
+                        f"Failed to refill: {', '.join(failed_names)}", 0xE05A6D
+                    )
             self._recover_to_lobby(hwnd, stop_event)
 
     def start_fuel_test(self, hwnd_getter) -> dict:

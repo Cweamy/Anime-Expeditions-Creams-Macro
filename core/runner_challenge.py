@@ -204,6 +204,19 @@ class ChallengeOps:
                 return
             if result == "win":
                 self._mark_challenge_stage_played(slot)
+                try:
+                    updated_settings = self._get_challenge_settings()
+                    updated_info = (updated_settings.get("stages") or {}).get(slot) or {}
+                    new_count = updated_info.get("count", 0)
+                    if cap and new_count >= cap and webhook and webhook.get("enabled"):
+                        self._send_event_webhook(
+                            webhook, {"mode": "challenge"},
+                            f"\U0001F3AF Challenge #{slot} Completed",
+                            f"Challenge #{slot} reached target cap ({new_count}/{cap} runs finished).",
+                            0x3FBF6F
+                        )
+                except Exception as exc:
+                    self._log(f"[Macro] Couldn't check Challenge #{slot} cap webhook status: {exc}")
             elif result == "loss":
                 # A loss starts the same until-next-window cooldown a win
                 # does -- the slot's rotated-in stage won't have changed

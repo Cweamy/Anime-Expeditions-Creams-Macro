@@ -564,7 +564,10 @@ class BountyOps:
 
             objective = self._find_next_bounty(hwnd, stop_event, attempted)
             if objective is None:
-                frame = vision.capture_game_bgr(hwnd)
+                try:
+                    frame = vision.capture_game_bgr(hwnd)
+                except Exception:
+                    frame = None
                 remaining = (
                     bounty.read_bounties_left(frame)
                     if frame is not None else None
