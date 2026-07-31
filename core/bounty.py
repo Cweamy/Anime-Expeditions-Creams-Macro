@@ -17,6 +17,15 @@ from . import vision
 
 STORY_MAPS = ("School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest")
 BOARD_REGION = (170, 150, 970, 470)
+# These names intentionally match folders in Assets/ui and the Image Manager.
+# The actual crops are rendering-specific and can be added as variants from
+# Settings > General > Image Manager.
+BOUNTY_BOARD_IMAGE = "bounty_board"
+BOUNTY_BOARD_SCROLL_IMAGE = "bounty_board_scroll"
+BOUNTY_CARD_SCROLL_IMAGE = "bounty_card_scroll"
+BOUNTY_IMAGE_THRESHOLD = 0.90
+BOUNTY_IMAGE_SCALE_FACTORS = (1.0, 0.92, 1.08, 0.85, 1.15)
+_BOARD_REGION_FROM_ANCHOR = (-35, 65, 1030, 470)
 _GREEN_LO = np.array((35, 105, 75), dtype=np.uint8)
 _GREEN_HI = np.array((90, 255, 255), dtype=np.uint8)
 _CYAN_LO = np.array((82, 90, 70), dtype=np.uint8)
@@ -41,6 +50,34 @@ def _word_similarity(word: str, wanted: str) -> float:
         re.sub(r"[^a-z]", "", (word or "").lower()),
         wanted,
     ).ratio()
+
+
+def _extract_wave_targets(reads: list) -> list:
+    """Extract wave numbers from clean and common Windows-OCR variants.
+
+    The live board has produced strings such as ``CI_euWave.30`` for
+    ``Clear Wave 30``. Requiring the literal word ``clear`` drops the whole
+    first card even though the colored destination and wave number are clear.
+    Anchor the number to a fuzzy ``wave`` token instead of trusting the exact
+    spelling of the preceding word.
+    """
+    targets = []
+    for raw in reads:
+        raw = str(raw or "")
+        words = list(re.finditer(r"[A-Za-z]{2,14}", raw))
+        for match in words:
+            word = match.group()
+            normalized = re.sub(r"[^a-z]", "", word.lower())
+            if "wave" not in normalized and _word_similarity(word, "wave") < 0.55:
+                continue
+            tail = raw[match.end():match.end() + 18]
+            numbers = re.findall(r"\d{1,3}", tail)
+            for number in numbers:
+                value = int(number)
+                if 1 <= value <= 100:
+                    targets.append(value)
+                    break
+    return targets
 
 
 def _extract_summon_targets(texts: list) -> list:
@@ -147,6 +184,35 @@ def read_bounties_left(frame_bgr: np.ndarray):
         if 0 <= remaining <= total:
             return remaining, total
     return None
+
+
+def board_region_from_frame(frame_bgr: np.ndarray, anchor=None) -> tuple:
+    """Return the board content crop, anchored to live board artwork.
+
+    The fixed region remains a compatibility fallback until the user captures
+    ``bounty_board`` through Image Manager. With that crop present, objective
+    reading follows the board wherever Roblox rendered it.
+    """
+    if anchor is None:
+        try:
+            anchor = vision.find_frame_image(
+                frame_bgr,
+                BOUNTY_BOARD_IMAGE,
+                threshold=BOUNTY_IMAGE_THRESHOLD,
+                scale_factors=BOUNTY_IMAGE_SCALE_FACTORS,
+            )
+        except vision.TemplateNotFound:
+            anchor = None
+    if anchor is None:
+        return BOARD_REGION
+    ax, ay = int(anchor["x"]), int(anchor["y"])
+    ah = int(anchor["h"])
+    rx, ry, rw, rh = _BOARD_REGION_FROM_ANCHOR
+    x = max(0, ax + rx)
+    y = max(0, ay + ah + ry)
+    w = min(rw, frame_bgr.shape[1] - x)
+    h = min(rh, frame_bgr.shape[0] - y)
+    return x, y, max(0, w), max(0, h)
 
 
 def detect_summon_objectives(
@@ -432,9 +498,9 @@ def _colored_components(board_bgr: np.ndarray, lower, upper, kind: str) -> list:
     return found
 
 
-def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
+def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None, board_region=None) -> list:
     """Return supported, incomplete visible objectives in reference coordinates."""
-    bx, by, bw, bh = BOARD_REGION
+    bx, by, bw, bh = board_region or board_region_from_frame(frame_bgr)
     board = frame_bgr[by:by + bh, bx:bx + bw]
     if board.size == 0:
         return []
@@ -454,8 +520,11 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
         # filled progress strip directly under the objective and a broad
         # green check button near the card footer. Include both without
         # relying on the check's exact fixed coordinate (cards scroll).
-        y2 = min(board.shape[0], y1 + 90)
+        # Keep this local to the current row: the next objective's green map
+        # link can sit about 30-40px lower and must not count as completion.
+        y2 = min(board.shape[0], y1 + 30)
         below = green_mask[y1:y2, x1:x2]
+        completed = False
         if below.size:
             count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(below)
             completed = any(
@@ -463,8 +532,23 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
                 and int(stats[i, cv2.CC_STAT_HEIGHT]) >= 3
                 for i in range(1, count)
             )
-            if completed:
-                continue
+        # The broad green claim/check control lives farther down in the
+        # card footer. Keep it as a separate check and require a tall filled
+        # component so the next objective's thin green map link is ignored.
+        if not completed:
+            footer = green_mask[
+                min(board.shape[0], y1 + 32):min(board.shape[0], y1 + 90),
+                x1:x2,
+            ]
+            if footer.size:
+                count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(footer)
+                completed = any(
+                    int(stats[i, cv2.CC_STAT_WIDTH]) >= max(50, int(link["w"] * 0.7))
+                    and int(stats[i, cv2.CC_STAT_HEIGHT]) >= 15
+                    for i in range(1, count)
+                )
+        if completed:
+            continue
 
         # Individual 0/1 objectives render their completed progress as a
         # long saturated amber/red fill. The empty state is a black track.
@@ -569,14 +653,13 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
 
         wave_value = None
         if link["kind"] == "infinite":
-            votes = []
-            for read in local_texts:
-                numbers = re.findall(r"\d{1,3}", read)
-                if numbers:
-                    votes.append(int(numbers[-1]))
+            reads = [text, *local_texts]
+            votes = _extract_wave_targets(reads)
             clean = re.findall(r"clear\s*\W*(?:w(?:ave|ave|ve|e))?\s*(\d+)", text, re.I)
             votes.extend(int(value) for value in clean)
-            if not votes and "clear" in text.lower():
+            if not votes and any(
+                    _word_similarity(word, "clear") >= 0.5
+                    for word in re.findall(r"[A-Za-z]{3,12}", text)):
                 votes.extend(int(value) for value in re.findall(r"\d{1,3}", text))
             if votes:
                 counts = Counter(votes)
@@ -605,8 +688,179 @@ def same_signature(left: tuple, right: tuple) -> bool:
     return (int(left[2]) ^ int(right[2])).bit_count() <= 3
 
 
-def detect_card_scrolls(frame_bgr: np.ndarray) -> list:
-    """Locate visible parchment cards and derive their internal scrollbar drags."""
+def _looks_like_bounty_card(card_bgr: np.ndarray) -> bool:
+    """Require objective-like structure before accepting parchment as a card.
+
+    Decorative parchment elsewhere on the Events screen can satisfy the
+    color/size test used to locate cards. A real bounty has several dark,
+    horizontal objective/progress rows and either colored destination text or
+    multiple progress bars. This stays OCR-independent so it remains useful
+    on systems where Windows OCR is unavailable.
+    """
+    if card_bgr is None or card_bgr.size == 0:
+        return False
+    height, width = card_bgr.shape[:2]
+    gray = cv2.cvtColor(card_bgr, cv2.COLOR_BGR2GRAY)
+    dark = cv2.inRange(gray, 0, 100)
+    row_activity = (dark.mean(axis=1) > 0.18).sum()
+    if row_activity < max(18, int(height * 0.08)):
+        return False
+
+    horizontal = cv2.morphologyEx(
+        dark,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(12, width // 4), 1)),
+    )
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(horizontal)
+    horizontal_rows = sum(
+        1 for index in range(1, count)
+        if int(stats[index, cv2.CC_STAT_AREA]) >= max(20, width // 3)
+    )
+    colored = (
+        _colored_components(card_bgr, _GREEN_LO, _GREEN_HI, "infinite")
+        + _colored_components(card_bgr, _CYAN_LO, _CYAN_HI, "hard")
+    )
+    # A summon-only bounty may have no destination color, so two or more
+    # objective/progress rows are sufficient in that case.
+    return bool(horizontal_rows >= 2 and (colored or horizontal_rows >= 3))
+
+
+def refine_board_scroll_match(frame_bgr: np.ndarray, match: dict) -> dict:
+    """Move a board-scroll match onto the live scrollbar line.
+
+    The Image Manager crop intentionally includes the whole scrollbar band,
+    but the interactive orange line is only a few pixels tall inside it. Its
+    center can therefore be below the hit target even when the image match is
+    correct. Keep the image-derived x position and refine only y from the
+    saturated orange pixels; fall back to the template center if the theme is
+    not currently showing that line.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return match
+    x, y, w, h = (int(match.get(key, 0)) for key in ("x", "y", "w", "h"))
+    roi = frame_bgr[max(0, y):y + h, max(0, x):x + w]
+    if roi.size == 0:
+        return match
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    orange = (
+        (((hsv[:, :, 0] <= 25) | (hsv[:, :, 0] >= 170))
+         & (hsv[:, :, 1] >= 80) & (hsv[:, :, 2] >= 60))
+    )
+    row_counts = orange.sum(axis=1)
+    rows = np.flatnonzero(row_counts >= max(8, int(w * 0.45)))
+    if rows.size == 0:
+        return match
+    refined = dict(match)
+    refined["cy"] = y + int(round(float(rows.mean())))
+    return refined
+
+
+def refine_card_scroll_match(frame_bgr: np.ndarray, match: dict) -> dict:
+    """Move an inner-scroll match onto the gray draggable thumb.
+
+    The crop also contains the card's right edge, which can be a taller gray
+    component than the actual thumb. The Image Manager crop places the
+    draggable band at roughly 38% of the crop width; use that stable x anchor
+    and only infer the thumb's y center from the live pixels.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return match
+    x, y, w, h = (int(match.get(key, 0)) for key in ("x", "y", "w", "h"))
+    roi = frame_bgr[max(0, y):y + h, max(0, x):x + w]
+    if roi.size == 0:
+        return match
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    gray_thumb = (
+        (hsv[:, :, 1] < 100)
+        & (hsv[:, :, 2] >= 55)
+        & (hsv[:, :, 2] <= 180)
+    ).astype(np.uint8) * 255
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(gray_thumb)
+    candidates = []
+    for index in range(1, count):
+        bx, by, bw, bh, area = (int(value) for value in stats[index])
+        if bh >= 15 and bh >= bw * 2 and area >= 40:
+            candidates.append((bh, area, bx, by, bw, bh))
+    if not candidates:
+        return match
+    expected_x = int(round(w * 0.38))
+    _height, _area, bx, by, bw, bh = min(
+        candidates,
+        key=lambda item: (
+            abs((item[2] + item[4] // 2) - expected_x),
+            -item[0],
+            -item[1],
+        ),
+    )
+    refined = dict(match)
+    refined["cx"] = x + bx + bw // 2
+    refined["cy"] = y + by + bh // 2
+    # The match crop contains the full live track. Keep the thumb height and
+    # its center-to-track endpoints so callers can prove both ends were
+    # inspected without assuming a fixed card size or screen coordinate.
+    refined["thumb_h"] = bh
+    refined["track_top"] = y + bh // 2
+    refined["track_bottom"] = y + h - bh // 2
+    return refined
+
+
+def _heuristic_card_scroll_match(
+        frame_bgr: np.ndarray, card: tuple[int, int, int, int]):
+    """Find a live thumb when the rendering-specific crop misses.
+
+    The thumb is a narrow, tall low-value component inside the right side of
+    the current card.  This is card-relative geometry, not a screen
+    coordinate, and is deliberately stricter than a generic dark-edge test so
+    progress bars/buttons cannot become drag targets.
+    """
+    x, y, w, h = (int(value) for value in card)
+    region_x, region_y = x + w - 55, y + 20
+    region_w, region_h = 50, max(1, h - 40)
+    roi = frame_bgr[region_y:region_y + region_h, region_x:region_x + region_w]
+    if roi.size == 0:
+        return None
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    mask = (
+        (hsv[:, :, 1] < 120)
+        & (hsv[:, :, 2] >= 55)
+        & (hsv[:, :, 2] <= 140)
+    ).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(
+        mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(mask)
+    candidates = []
+    for index in range(1, count):
+        bx, by, bw, bh, area = (int(value) for value in stats[index])
+        if bh < 15 or bh < bw * 2 or area < 40:
+            continue
+        candidates.append((
+            abs((bx + bw // 2) - int(round(region_w * 0.38))),
+            bx, by, bw, bh, area,
+        ))
+    if not candidates:
+        return None
+    _distance, bx, by, bw, bh, area = min(candidates, key=lambda item: (item[0], -item[3], -item[4]))
+    return {
+        "x": region_x, "y": region_y, "w": region_w, "h": region_h,
+        "cx": region_x + bx + bw // 2,
+        "cy": region_y + by + bh // 2,
+        # Structural confidence is kept at the same floor as the template
+        # search; this is not a relaxed 0.75 match.
+        "score": BOUNTY_IMAGE_THRESHOLD,
+        "detector": "card_relative_thumb_heuristic",
+        "thumb_h": bh,
+        "track_top": region_y + bh // 2,
+        "track_bottom": region_y + region_h - bh // 2,
+    }
+
+
+def detect_card_scrolls(frame_bgr: np.ndarray, scrollbar_matches=None) -> list:
+    """Locate visible cards and pair them with Image Manager scrollbar matches.
+
+    ``scrollbar_matches`` is tri-state: ``None`` means the caller has no
+    template yet and enables the old pixel heuristic for compatibility; an
+    empty list means the template exists but no scrollbar is visible.
+    """
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     parchment = cv2.inRange(
         hsv, np.array((5, 25, 90), np.uint8), np.array((30, 180, 255), np.uint8))
@@ -620,30 +874,67 @@ def detect_card_scrolls(frame_bgr: np.ndarray) -> list:
             continue
         if not (165 <= w <= 220 and 175 <= h <= 245 and area >= 15000):
             continue
-        # Some bounty cards fit all objectives and render no private
-        # scrollbar at all. The track, when present, is a narrow dark
-        # vertical run just inside the card's right edge. Mark its presence
-        # so callers do not repeatedly drag plain parchment on barless cards.
-        edge = cv2.cvtColor(
-            frame_bgr[y + 50:y + h - 70, x + w - 45:x + w - 20],
-            cv2.COLOR_BGR2HSV,
-        )
-        has_scrollbar = False
-        if edge.size:
-            dark_columns = (edge[:, :, 2] < 155).mean(axis=0) > 0.55
-            has_scrollbar = bool(
-                np.convolve(
-                    dark_columns.astype(np.uint8),
-                    np.ones(5, dtype=np.uint8),
-                    mode="valid",
-                ).max(initial=0) >= 5
+        card_crop = frame_bgr[y:y + h, x:x + w]
+        if not _looks_like_bounty_card(card_crop):
+            continue
+        match = None
+        if scrollbar_matches is not None:
+            candidates = [
+                item for item in scrollbar_matches
+                if x - 12 <= int(item.get("cx", -999)) <= x + w + 12
+                and y + 25 <= int(item.get("cy", -999)) <= y + h - 25
+            ]
+            if candidates:
+                match = max(candidates, key=lambda item: item.get("score", 0.0))
+                match = refine_card_scroll_match(frame_bgr, match)
+            else:
+                # The crop can miss a theme/layout variant even when the
+                # actual thumb is plainly present. Recover it from the live
+                # card-relative component before declaring the card flat.
+                match = _heuristic_card_scroll_match(frame_bgr, (x, y, w, h))
+            has_scrollbar = match is not None
+        else:
+            # Compatibility path for older installations before the crop has
+            # been captured through Image Manager.
+            edge = cv2.cvtColor(
+                frame_bgr[y + 50:y + h - 70, x + w - 45:x + w - 20],
+                cv2.COLOR_BGR2HSV,
             )
+            has_scrollbar = False
+            if edge.size:
+                dark_columns = (edge[:, :, 2] < 155).mean(axis=0) > 0.55
+                has_scrollbar = bool(
+                    np.convolve(
+                        dark_columns.astype(np.uint8),
+                        np.ones(5, dtype=np.uint8),
+                        mode="valid",
+                    ).max(initial=0) >= 5
+                )
+        if match is not None:
+            drag_x = int(match["cx"])
+            drag_from = int(match["cy"])
+            drag_top = int(match.get("track_top", match["y"] + 4))
+            drag_bottom = int(
+                match.get("track_bottom", match["y"] + match["h"] - 4))
+            if int(match.get("h", 0)) >= h // 2:
+                drag_to = min(y + h - 8, drag_bottom)
+            else:
+                drag_to = y + h - 58
+        else:
+            drag_x = x + w - 31
+            drag_from = y + 58
+            drag_top = y + 58
+            drag_to = y + h - 58
+            drag_bottom = drag_to
         drags.append({
-            "x": x + w - 31,
-            "from_y": y + 58,
-            "to_y": y + h - 58,
+            "x": drag_x,
+            "from_y": drag_from,
+            "to_y": drag_to,
+            "top_y": drag_top,
+            "bottom_y": drag_bottom,
             "card": (x, y, w, h),
             "has_scrollbar": has_scrollbar,
+            "scrollbar_match": match,
         })
     return sorted(drags, key=lambda item: item["x"])
 

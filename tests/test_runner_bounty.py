@@ -1,5 +1,7 @@
 import threading
 
+import numpy as np
+
 from core import runner_bounty
 from core.runner_bounty import BountyOps
 
@@ -151,8 +153,10 @@ def test_find_next_bounty_finishes_current_card_before_later_card(monkeypatch):
 
     runner._mouse = _Mouse()
     cards = [
-        {"x": 290, "from_y": 180, "to_y": 260, "card": (100, 100, 200, 250)},
-        {"x": 590, "from_y": 180, "to_y": 260, "card": (400, 100, 200, 250)},
+        {"x": 290, "from_y": 180, "to_y": 260,
+         "card": (100, 100, 200, 250), "has_scrollbar": True},
+        {"x": 590, "from_y": 180, "to_y": 260,
+         "card": (400, 100, 200, 250), "has_scrollbar": True},
     ]
     first_card_objective = {
         "cx": 200, "cy": 220, "signature": ("infinite", 15, 111)}
@@ -178,11 +182,34 @@ def test_find_next_bounty_finishes_current_card_before_later_card(monkeypatch):
             [first_card_objective, later_card_objective]
             if state["first_card_scrolled"] else [later_card_objective]),
     )
+    monkeypatch.setattr(
+        runner, "_refresh_card_drag", lambda _frame, _card: cards[0])
 
     found = BountyOps._find_next_bounty(
         runner, 123, threading.Event(), attempted=[])
 
     assert found is first_card_objective
+
+
+def test_inner_scrollbar_state_rechecks_card_relative_thumb(monkeypatch):
+    runner = _Harness()
+    runner._card_scroll_matches = lambda _frame: []
+    expected = {
+        "cx": 881, "cy": 377, "thumb_h": 74,
+        "detector": "card_relative_thumb_heuristic",
+    }
+    monkeypatch.setattr(
+        runner_bounty.bounty,
+        "_heuristic_card_scroll_match",
+        lambda _frame, _card: expected,
+    )
+
+    result = runner._inner_scrollbar_state(
+        np.zeros((756, 1152, 3), dtype=np.uint8),
+        {"card": (723, 286, 196, 207)},
+    )
+
+    assert result is expected
 
 
 def test_find_next_bounty_does_not_drag_a_card_without_scrollbar(monkeypatch):

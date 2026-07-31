@@ -238,6 +238,10 @@ BOUNTY_SCROLL_HOVER = (720, 650)
 BOUNTY_HORIZONTAL_WHEEL_DELTA = -360
 BOUNTY_HORIZONTAL_SCROLL_STEPS = 8
 BOUNTY_SCROLL_SETTLE = 0.45
+# A card is re-captured after every successful private-scroll drag. This is a
+# safety bound for malformed captures/animations; normal cards stop earlier
+# when the thumb reaches the end or a drag produces no visual movement.
+BOUNTY_MAX_INNER_CARD_PASSES = 4
 BOUNTY_MAX_OBJECTIVES_PER_START = 10
 BOUNTY_SUMMON_BATCH_SIZE = 50
 BOUNTY_SUMMON_MAX_BATCHES_PER_START = 20

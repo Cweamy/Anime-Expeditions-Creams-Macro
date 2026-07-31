@@ -376,6 +376,21 @@ restart_btn/
   deleted in case that flow ever comes back, but nothing currently
   searches for either of these.
 
+bounty_board/
+  The Bounty Board entry on the Events screen and its stable heading once the
+  board opens. Capture a tight crop of the shared label/art; variants are
+  allowed because Roblox can render the same label at different scales.
+
+bounty_board_scroll/
+  The board's outer horizontal scrollbar or thumb. Auto Bounty searches for
+  this in the live frame before every carousel scroll instead of hovering a
+  fixed screen coordinate.
+
+bounty_card_scroll/
+  The private scrollbar/thumb inside a bounty card. Auto Bounty associates
+  each match with the card it is inside and drags that live match to expose
+  hidden objectives.
+
 Add more <name>.png files here as new macro steps need to recognize other
 buttons/screens -- core.vision.find_image(hwnd, "<name>", ...) will pick
 up any file added under this folder automatically, no code change needed

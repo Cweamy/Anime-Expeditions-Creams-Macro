@@ -739,7 +739,8 @@ def _scaled_templates(name: str, template_dir: str, scale: float) -> list:
 
 
 def find_in_gray_multiscale(haystack_gray: np.ndarray, name: str, template_dir: str = UI_ASSETS_DIR,
-                             threshold: float = DEFAULT_THRESHOLD) -> dict:
+                             threshold: float = DEFAULT_THRESHOLD,
+                             scale_factors: tuple = None) -> dict:
     """find_in_gray, but tries EVERY variant image in the name's folder (see
     template_variant_paths) and each of them at a handful of scale factors
     around 1x (see SCALE_FACTORS) instead of one image at its exact captured
@@ -756,6 +757,96 @@ def find_in_gray_multiscale(haystack_gray: np.ndarray, name: str, template_dir: 
             if match is not None:
                 return match
     return None
+
+
+def _find_all_in_gray(haystack_gray: np.ndarray, name: str,
+                      template_dir: str = UI_ASSETS_DIR,
+                      threshold: float = DEFAULT_THRESHOLD,
+                      max_results: int = 50,
+                      scale_factors: tuple = None) -> list:
+    """Return non-overlapping matches for a template in an existing frame."""
+    threshold = _effective_threshold(name, threshold)
+    hits = []
+    for scale in (SCALE_FACTORS if scale_factors is None else scale_factors):
+        for template_gray, mask in _scaled_templates(name, template_dir, scale):
+            th, tw = template_gray.shape[:2]
+            hh, hw = haystack_gray.shape[:2]
+            if th > hh or tw > hw:
+                continue
+            if mask is not None:
+                result = cv2.matchTemplate(
+                    haystack_gray, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
+            else:
+                result = cv2.matchTemplate(
+                    haystack_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+            result[~np.isfinite(result)] = -1
+            ys, xs = np.where(result >= threshold)
+            if len(ys) == 0:
+                continue
+            order = np.argsort(result[ys, xs])[::-1]
+            min_dist_sq = (max(tw, th) * 0.5) ** 2
+            for index in order:
+                y, x = int(ys[index]), int(xs[index])
+                if any(
+                        (x - item["x"]) ** 2 + (y - item["y"]) ** 2
+                        < min_dist_sq for item in hits):
+                    continue
+                hits.append({
+                    "x": x, "y": y, "w": tw, "h": th,
+                    "cx": x + tw // 2, "cy": y + th // 2,
+                    "score": float(result[y, x]),
+                })
+                if len(hits) >= max_results:
+                    return sorted(hits, key=lambda item: item["score"], reverse=True)
+    return sorted(hits, key=lambda item: item["score"], reverse=True)
+
+
+def find_frame_image(frame_bgr: np.ndarray, name: str, region: tuple = None,
+                     threshold: float = DEFAULT_THRESHOLD,
+                     template_dir: str = UI_ASSETS_DIR,
+                     scale_factors: tuple = None) -> dict:
+    """Match an Image Manager template against an already captured BGR frame."""
+    if frame_bgr is None or not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+        return None
+    load_template_grays(name, template_dir)
+    haystack = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    if region is not None:
+        x, y, w, h = (int(value) for value in region)
+        haystack = haystack[y:y + h, x:x + w]
+    match = find_in_gray_multiscale(
+        haystack, name, template_dir, _effective_threshold(name, threshold),
+        scale_factors)
+    if match is not None and region is not None:
+        match["x"] += int(region[0])
+        match["y"] += int(region[1])
+        match["cx"] += int(region[0])
+        match["cy"] += int(region[1])
+    return match
+
+
+def find_frame_images(frame_bgr: np.ndarray, name: str, region: tuple = None,
+                      threshold: float = DEFAULT_THRESHOLD,
+                      template_dir: str = UI_ASSETS_DIR,
+                      max_results: int = 50,
+                      scale_factors: tuple = None) -> list:
+    """Find all distinct matches for an Image Manager template in a frame."""
+    if frame_bgr is None or not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+        return []
+    load_template_grays(name, template_dir)
+    haystack = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    if region is not None:
+        x, y, w, h = (int(value) for value in region)
+        haystack = haystack[y:y + h, x:x + w]
+    matches = _find_all_in_gray(
+        haystack, name, template_dir, _effective_threshold(name, threshold), max_results,
+        scale_factors)
+    if region is not None:
+        for match in matches:
+            match["x"] += int(region[0])
+            match["y"] += int(region[1])
+            match["cx"] += int(region[0])
+            match["cy"] += int(region[1])
+    return matches
 
 
 DEBUG_DIR = os.path.join(constants.APP_DIR, "debug")
@@ -829,7 +920,8 @@ def save_region_debug(hwnd: int, name: str, region: tuple) -> str:
 
 
 def find_image(hwnd: int, name: str, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
-                template_dir: str = UI_ASSETS_DIR) -> dict:
+                template_dir: str = UI_ASSETS_DIR,
+                scale_factors: tuple = None) -> dict:
     """One-shot: capture + match. Returned x/y/cx/cy are in the SAME space as
     `region` -- region-local if a region was passed, full-window client
     coords otherwise. See click_match to turn that into an actual click."""
@@ -837,7 +929,8 @@ def find_image(hwnd: int, name: str, region: tuple = None, threshold: float = DE
     haystack = capture_game_gray(hwnd, region)
     if haystack is None:
         return None
-    match = find_in_gray_multiscale(haystack, name, template_dir, _effective_threshold(name, threshold))
+    match = find_in_gray_multiscale(
+        haystack, name, template_dir, _effective_threshold(name, threshold), scale_factors)
     if match is None:
         return None
     if region is not None:
@@ -958,7 +1051,8 @@ def find_image_all(hwnd: int, name: str, region: tuple = None, threshold: float 
 
 def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
                     timeout: float = 8.0, interval: float = 0.3, stop_event: threading.Event = None,
-                    template_dir: str = UI_ASSETS_DIR) -> dict:
+                    template_dir: str = UI_ASSETS_DIR,
+                    scale_factors: tuple = None) -> dict:
     """Polls find_image until it hits, timeout elapses, or stop_event fires
     (checked between polls so a Stop click during a long wait cuts in
     promptly instead of running the full timeout out). Returns the match
@@ -968,7 +1062,7 @@ def wait_for_image(hwnd: int, name: str, region: tuple = None, threshold: float 
     while time.time() < deadline:
         if stop_event is not None and stop_event.is_set():
             return None
-        match = find_image(hwnd, name, region, threshold, template_dir)
+        match = find_image(hwnd, name, region, threshold, template_dir, scale_factors)
         if match is not None:
             return match
         if stop_event is not None:

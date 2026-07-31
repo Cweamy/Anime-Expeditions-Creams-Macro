@@ -1072,6 +1072,8 @@ async function loadSettingsUI() {
     if (actionDelayEl) actionDelayEl.value = s.action_delay_ms || 0;
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
     if (debugScreenshotsEl) debugScreenshotsEl.classList.toggle('on', !!s.debug_screenshots);
+    const bountyAuditEl = document.getElementById('toggle-bounty-audit');
+    if (bountyAuditEl) bountyAuditEl.classList.toggle('on', !!s.bounty_audit);
     const looseTeamOcrEl = document.getElementById('toggle-loose-team-ocr-match');
     if (looseTeamOcrEl) looseTeamOcrEl.classList.toggle('on', !!s.loose_team_ocr_match);
     const expColorEl = document.getElementById('toggle-expedition-color');
@@ -5504,6 +5506,9 @@ const IMAGE_DESCRIPTIONS = {
   defeat: "The Defeat result screen -- how the macro knows a run was lost.",
   enter_matchmaking: "The 'Enter Matchmaking' button (Story/Raid/Event).",
   event_gamemode: "The Event's gamemode card, clicked after the lobby Event button.",
+  bounty_board: "The Event Bounty Board entry/heading used to open and recognize the board.",
+  bounty_board_scroll: "The Bounty Board's outer horizontal scrollbar or thumb, used to scan cards.",
+  bounty_card_scroll: "A private bounty card's scrollbar/thumb, used to reveal hidden objectives.",
   exclude: "The Exclude-equipment option in the Team Loadout panel.",
   exp_continue: "Expedition's 'Continue' button at a wave checkpoint.",
   exp_enter_matchmaking: "Expedition's Enter Matchmaking button.",

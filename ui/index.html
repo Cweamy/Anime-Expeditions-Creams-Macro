@@ -1203,6 +1203,14 @@
             <button id="toggle-debug-screenshots" class="toggle-switch" onclick="toggleSetting('debug_screenshots', this)"></button>
           </div>
 
+          <div class="setting-row" style="padding: 14px;">
+            <div>
+              <div class="setting-label">Auto Bounty Audit Trace</div>
+              <div class="setting-desc">Records bounty OCR, confidence, detected bounds, mouse paths, verification results, and board frames under audit/bounty. Turn on only while reproducing an issue.</div>
+            </div>
+            <button id="toggle-bounty-audit" class="toggle-switch" onclick="toggleSetting('bounty_audit', this)"></button>
+          </div>
+
           <!-- Off by default: the strict OCR check ("unitteams", no space)
                is correct for most setups and confirms the Load Team list
                specifically. This loosens it to also accept "teams"/"team"/

@@ -772,6 +772,7 @@ class Api:
             "story_scroll_power": data.get("story_scroll_power", 3),
             "story_scroll_nudges": data.get("story_scroll_nudges", 8),
             "debug_screenshots": data.get("debug_screenshots", False),
+            "bounty_audit": data.get("bounty_audit", False),
             "action_delay_ms": data.get("action_delay_ms", 0),
             "expedition_color_buttons": data.get("expedition_color_buttons", True),
             "expedition_camera_o_ms": data.get("expedition_camera_o_ms", 100),
@@ -1846,7 +1847,8 @@ class Api:
             default_walk_paths, webhook_settings,
             expedition_color_buttons=data.get("expedition_color_buttons", True),
             expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100),
-            loose_team_ocr_match=data.get("loose_team_ocr_match", False))
+            loose_team_ocr_match=data.get("loose_team_ocr_match", False),
+            bounty_audit=data.get("bounty_audit", False))
 
     def stop_macro(self) -> dict:
         # An explicit Stop cancels any pending auto-reopen/auto-restart -- if

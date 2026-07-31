@@ -21,6 +21,99 @@ def test_reads_remaining_bounty_counter_from_orange_mask(monkeypatch):
     assert bounty.read_bounties_left(frame) == (2, 10)
 
 
+def test_board_region_follows_image_anchor(monkeypatch):
+    frame = _frame()
+    monkeypatch.setattr(
+        bounty.vision, "find_frame_image",
+        lambda _frame, _name, **_kwargs: {"x": 500, "y": 100, "w": 120, "h": 24},
+    )
+
+    assert bounty.board_region_from_frame(frame) == (465, 189, 687, 470)
+
+
+def test_board_scroll_match_refines_to_the_thin_live_line():
+    frame = _frame()
+    frame[647:654, 320:975] = (0, 140, 255)
+    match = {"x": 320, "y": 644, "w": 655, "h": 22, "cx": 647, "cy": 655}
+
+    refined = bounty.refine_board_scroll_match(frame, match)
+
+    assert refined["cx"] == 647
+    assert refined["cy"] == 650
+
+
+def test_card_scroll_match_refines_to_the_gray_thumb():
+    frame = _frame()
+    frame[357:405, 487:494] = (110, 110, 110)
+    match = {"x": 482, "y": 348, "w": 22, "h": 110, "cx": 493, "cy": 403}
+
+    refined = bounty.refine_card_scroll_match(frame, match)
+
+    assert refined["cx"] == 490
+    assert refined["cy"] == 381
+
+
+def test_card_scroll_heuristic_recovers_a_missed_template_thumb():
+    frame = _frame()
+    card = (332, 277, 196, 208)
+    # A live thumb in the card-relative scrollbar crop, shaped like the
+    # rendering observed on the current board but with no template match.
+    frame[327:375, 487:494] = (100, 100, 100)
+
+    match = bounty._heuristic_card_scroll_match(frame, card)
+
+    assert match is not None
+    assert match["detector"] == "card_relative_thumb_heuristic"
+    assert match["cx"] == 491
+    assert match["thumb_h"] == 48
+
+
+def test_card_scroll_refinement_ignores_the_card_edge_component():
+    frame = _frame()
+    frame[120:160, 106:113] = (110, 110, 110)
+    frame[115:180, 118:122] = (110, 110, 110)
+    match = {"x": 100, "y": 100, "w": 24, "h": 120, "cx": 112, "cy": 160}
+
+    refined = bounty.refine_card_scroll_match(frame, match)
+
+    assert refined["cx"] == 109
+    assert refined["cy"] == 140
+
+
+def test_card_scroll_uses_image_match_when_template_results_exist():
+    frame = _frame()
+    frame[200:420, 300:500] = (150, 180, 200)
+    cv2.rectangle(frame, (315, 275), (485, 280), (20, 20, 20), -1)
+    cv2.rectangle(frame, (315, 320), (485, 325), (20, 20, 20), -1)
+    cv2.rectangle(frame, (315, 365), (485, 370), (20, 20, 20), -1)
+    matches = [{
+        "x": 487, "y": 238, "w": 6, "h": 24,
+        "cx": 490, "cy": 250, "score": 0.98,
+    }]
+
+    cards = bounty.detect_card_scrolls(frame, matches)
+
+    assert len(cards) == 1
+    assert cards[0]["has_scrollbar"] is True
+    assert cards[0]["x"] == 490
+    assert cards[0]["from_y"] == 250
+    assert cards[0]["scrollbar_match"] is matches[0]
+
+
+def test_card_scroll_does_not_reenable_pixel_heuristic_when_image_has_no_match():
+    frame = _frame()
+    frame[200:420, 300:500] = (150, 180, 200)
+    cv2.rectangle(frame, (315, 275), (485, 280), (20, 20, 20), -1)
+    cv2.rectangle(frame, (315, 320), (485, 325), (20, 20, 20), -1)
+    cv2.rectangle(frame, (315, 365), (485, 370), (20, 20, 20), -1)
+    frame[250:360, 469:475] = (20, 20, 20)
+
+    cards = bounty.detect_card_scrolls(frame, [])
+
+    assert len(cards) == 1
+    assert cards[0]["has_scrollbar"] is False
+
+
 def test_rejects_impossible_remaining_bounty_counter(monkeypatch):
     frame = _frame()
     monkeypatch.setattr(
@@ -222,6 +315,17 @@ def test_detects_green_wave_link_from_color_and_nearby_objective():
     found = bounty.detect_objectives(frame, lines)
     assert len(found) == 1
     assert found[0]["kind"] == "infinite"
+    assert found[0]["target_wave"] == 30
+
+
+def test_accepts_windows_ocr_wave_variant_from_first_card():
+    frame = _frame()
+    bx, by, _bw, _bh = bounty.BOARD_REGION
+    _link_text(frame, bx + 80, by + 130)
+    lines = [{"text": "CI_euWave.30 of King's Tomb", "x": 60, "y": 92,
+              "w": 155, "h": 16, "cx": 137, "cy": 100}]
+    found = bounty.detect_objectives(frame, lines)
+    assert len(found) == 1
     assert found[0]["target_wave"] == 30
 
 

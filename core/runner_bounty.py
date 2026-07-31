@@ -1,9 +1,12 @@
 """Auto Bounty: inspect the Event Bounty Board and run supported objectives."""
 import math
+import os
 import re
 import threading
 import time
 from difflib import SequenceMatcher
+
+import numpy as np
 
 from . import bounty
 from . import vision
@@ -12,6 +15,59 @@ from .runner_constants import *  # noqa: F401,F403
 
 
 class BountyOps:
+    def _bounty_audit_is_enabled(self) -> bool:
+        return bool(getattr(self, "_bounty_audit_enabled", False)) or (
+            os.environ.get("AE_BOUNTY_AUDIT") == "1")
+
+    def _bounty_audit(self):
+        if not self._bounty_audit_is_enabled():
+            return None
+        recorder = getattr(self, "_bounty_audit_recorder", None)
+        if recorder is None:
+            from .bounty_audit import BountyAudit
+            recorder = BountyAudit()
+            self._bounty_audit_recorder = recorder
+            self._log(f"[Audit] Auto Bounty trace started: {recorder.root}")
+        return recorder
+
+    def _audit_event(self, name: str, **data) -> None:
+        recorder = self._bounty_audit()
+        if recorder is not None:
+            recorder.event(name, **data)
+
+    def _audit_frame(self, label: str, frame, **data) -> None:
+        recorder = self._bounty_audit()
+        if recorder is not None:
+            recorder.frame(label, frame, **data)
+
+    def _close_bounty_audit(self) -> None:
+        recorder = getattr(self, "_bounty_audit_recorder", None)
+        if recorder is not None:
+            recorder.close()
+            self._bounty_audit_recorder = None
+
+    def _debug_bounty_log(self, message: str) -> None:
+        if self._bounty_detection_only():
+            self._log(message)
+
+    def _hover_bounty_ref(self, hwnd, x: int, y: int, label: str) -> None:
+        """Hover a live-detected bounty target without clicking it."""
+        sx, sy = vision.ref_to_screen(hwnd, int(x), int(y))
+        wm.activate_window(hwnd)
+        self._mouse.move_to(sx, sy)
+        self._audit_event(
+            "hover", label=label, reference=[int(x), int(y)],
+            screen=[sx, sy])
+        self._debug_bounty_log(
+            f"[Debug]   hover {label}: ref=({int(x)},{int(y)}) "
+            f"screen=({sx},{sy})")
+        time.sleep(0.12)
+
+    @staticmethod
+    def _bounty_detection_only() -> bool:
+        """Temporary live-replay mode: inspect, but never execute a bounty."""
+        return os.environ.get("AE_BOUNTY_DETECTION_ONLY") == "1"
+
     @staticmethod
     def _bounty_was_attempted(signature, attempted) -> bool:
         return any(bounty.same_signature(signature, previous) for previous in attempted)
@@ -77,21 +133,37 @@ class BountyOps:
 
     def _click_ref(self, hwnd, x: int, y: int, hold: float = 0.05) -> None:
         sx, sy = vision.ref_to_screen(hwnd, x, y)
+        self._audit_event(
+            "click", reference=[int(x), int(y)], screen=[sx, sy], hold=hold)
         self._mouse.shuffle_click(sx, sy, hold=hold)
 
     def _bounty_board_is_open(self, frame) -> bool:
         if frame is None:
             return False
         lines = bounty.ocr_windows.ocr_lines(frame)
-        if self._line_named(lines, "Bounty Board") is None:
+        try:
+            board_match = vision.find_frame_image(
+                frame,
+                bounty.BOUNTY_BOARD_IMAGE,
+                threshold=bounty.BOUNTY_IMAGE_THRESHOLD,
+                scale_factors=bounty.BOUNTY_IMAGE_SCALE_FACTORS,
+            )
+        except vision.TemplateNotFound:
+            board_match = None
+        if board_match is None and self._line_named(lines, "Bounty Board") is None:
             return False
         # The tiny heading is commonly OCRed as "Bountie LMt". The
         # dedicated saturated-counter reader validates an actual remaining /
         # total pair; dynamic bounty-card geometry is a secondary fallback.
-        return (
-            bounty.read_bounties_left(frame) is not None
-            or bool(bounty.detect_card_scrolls(frame))
-        )
+        remaining = bounty.read_bounties_left(frame)
+        # Keep the cheap counter result as a sufficient positive signal.  In
+        # particular, test/capture shims may expose an OCR sentinel rather
+        # than a NumPy frame, and card geometry cannot be evaluated on that.
+        cards = [] if remaining is not None else bounty.detect_card_scrolls(frame)
+        self._audit_event(
+            "board_open_probe", remaining=remaining, ocr_lines=lines,
+            cards=cards, image_match=board_match)
+        return remaining is not None or bool(cards)
 
     def _wait_bounty_board_open(self, hwnd, stop_event, timeout) -> bool:
         deadline = time.time() + timeout
@@ -122,6 +194,7 @@ class BountyOps:
             self._log('[Macro] Auto Bounty could not find the lobby "Events" button.')
             return False
 
+        board_match = None
         board_line = None
         for attempt in range(1, BOUNTY_NAV_CLICK_ATTEMPTS + 1):
             source = f'image score {event["score"]:.2f}' if event is not None else "Windows OCR"
@@ -132,9 +205,17 @@ class BountyOps:
                 vision.shuffle_click_match(self._mouse, hwnd, event)
             else:
                 self._click_ref(hwnd, event_line["cx"], event_line["cy"])
-            board_line = self._wait_ocr_line(
+            try:
+                board_match = vision.wait_for_image(
+                    hwnd, bounty.BOUNTY_BOARD_IMAGE,
+                    threshold=bounty.BOUNTY_IMAGE_THRESHOLD,
+                    timeout=BOUNTY_NAV_CLICK_VERIFY_TIMEOUT, stop_event=stop_event,
+                    scale_factors=bounty.BOUNTY_IMAGE_SCALE_FACTORS)
+            except vision.TemplateNotFound:
+                board_match = None
+            board_line = None if board_match is not None else self._wait_ocr_line(
                 hwnd, stop_event, "Bounty Board", BOUNTY_NAV_CLICK_VERIFY_TIMEOUT)
-            if board_line is not None:
+            if board_match is not None or board_line is not None:
                 break
             try:
                 event = vision.find_image(hwnd, "nav_event")
@@ -144,22 +225,340 @@ class BountyOps:
                 hwnd, stop_event, "Events", 1.0)
             if event is None and event_line is None:
                 break
-        if board_line is None:
+        if board_match is None and board_line is None:
             self._log('[Macro] Auto Bounty could not find "Bounty Board" on the Events screen.')
             return False
 
         for attempt in range(1, BOUNTY_NAV_CLICK_ATTEMPTS + 1):
             wm.activate_window(hwnd)
-            self._click_ref(hwnd, board_line["cx"], board_line["cy"])
+            if board_match is not None:
+                vision.shuffle_click_match(self._mouse, hwnd, board_match)
+            else:
+                self._click_ref(hwnd, board_line["cx"], board_line["cy"])
             if self._wait_bounty_board_open(
                     hwnd, stop_event, BOUNTY_NAV_CLICK_VERIFY_TIMEOUT):
                 return True
             self._log(f"[Macro] Bounty Board click did not register "
                       f"(attempt {attempt}/{BOUNTY_NAV_CLICK_ATTEMPTS}).")
-            board_line = self._wait_ocr_line(hwnd, stop_event, "Bounty Board", 1.0)
-            if board_line is None:
+            try:
+                board_match = vision.find_image(
+                    hwnd,
+                    bounty.BOUNTY_BOARD_IMAGE,
+                    threshold=bounty.BOUNTY_IMAGE_THRESHOLD,
+                    scale_factors=bounty.BOUNTY_IMAGE_SCALE_FACTORS)
+            except vision.TemplateNotFound:
+                board_match = None
+            board_line = None if board_match is not None else self._wait_ocr_line(
+                hwnd, stop_event, "Bounty Board", 1.0)
+            if board_match is None and board_line is None:
                 break
         self._log("[Macro] Bounty Board did not finish opening.")
+        return False
+
+    def _bounty_scroll_hover(self, hwnd, frame=None):
+        """Return a screen point from the live outer-scrollbar image."""
+        frame = vision.capture_game_bgr(hwnd) if frame is None else frame
+        try:
+            match = vision.find_frame_image(
+                frame,
+                bounty.BOUNTY_BOARD_SCROLL_IMAGE,
+                threshold=bounty.BOUNTY_IMAGE_THRESHOLD,
+                scale_factors=bounty.BOUNTY_IMAGE_SCALE_FACTORS,
+            )
+        except vision.TemplateNotFound:
+            match = None
+        if match is not None:
+            match = bounty.refine_board_scroll_match(frame, match)
+            self._audit_event("outer_scroll_match", match=match)
+            return vision.ref_to_screen(hwnd, match["cx"], match["cy"])
+        # Compatibility fallback until the rendering-specific crop has been
+        # captured through Image Manager. It is isolated here so bounty
+        # parsing never depends on a fixed board coordinate.
+        self._audit_event(
+            "outer_scroll_match_missing", fallback_reference=list(BOUNTY_SCROLL_HOVER))
+        return vision.ref_to_screen(hwnd, *BOUNTY_SCROLL_HOVER)
+
+    @staticmethod
+    def _card_scroll_matches(frame):
+        if not hasattr(frame, "shape") or not hasattr(frame, "size") or frame.size == 0:
+            return None
+        try:
+            # Match only inside each validated card's right edge. A full-board
+            # sweep can find parchment/background lookalikes above a card and
+            # then send a perfectly accurate drag to the wrong y position.
+            cards = bounty.detect_card_scrolls(frame)
+            matches = []
+            for item in cards:
+                x, y, w, h = item["card"]
+                region = (max(0, x + w - 55), max(0, y + 20), 55, max(1, h - 40))
+                matches.extend(vision.find_frame_images(
+                    frame,
+                    bounty.BOUNTY_CARD_SCROLL_IMAGE,
+                    region=region,
+                    threshold=bounty.BOUNTY_IMAGE_THRESHOLD,
+                    scale_factors=bounty.BOUNTY_IMAGE_SCALE_FACTORS,
+                ))
+            return matches
+        except vision.TemplateNotFound:
+            return None
+
+    def _inner_scrollbar_state(self, frame, drag):
+        """Return the current live thumb match for one detected card."""
+        if frame is None or not hasattr(frame, "shape"):
+            return None
+        try:
+            matches = self._card_scroll_matches(frame)
+        except Exception:
+            return None
+        x, y, w, h = drag["card"]
+        candidates = [
+            item for item in (matches or [])
+            if x - 12 <= int(item.get("cx", -999)) <= x + w + 12
+            and y + 25 <= int(item.get("cy", -999)) <= y + h - 25
+        ]
+        if candidates:
+            try:
+                return bounty.refine_card_scroll_match(
+                    frame, max(candidates, key=lambda item: item.get("score", 0.0)))
+            except Exception:
+                return max(candidates, key=lambda item: item.get("score", 0.0))
+        # A theme/layout variant can have no template match even though the
+        # card-relative thumb is visible. Keep verification on the same
+        # dynamic detector used by detect_card_scrolls so a real small move
+        # is not reported as an unverified drag.
+        try:
+            return bounty._heuristic_card_scroll_match(frame, drag["card"])
+        except Exception:
+            return None
+
+    def _refresh_card_drag(self, frame, card_box):
+        """Re-detect one card after its private content has moved."""
+        if frame is None or not hasattr(frame, "shape"):
+            return None
+        try:
+            scrollbar_matches = self._card_scroll_matches(frame)
+            cards = (
+                bounty.detect_card_scrolls(frame)
+                if scrollbar_matches is None else
+                bounty.detect_card_scrolls(frame, scrollbar_matches)
+            )
+        except Exception:
+            return None
+        if not cards:
+            return None
+        x, y, w, h = (int(value) for value in card_box)
+        return min(
+            cards,
+            key=lambda item: (
+                abs(int(item["card"][0]) - x)
+                + abs(int(item["card"][1]) - y),
+                abs(int(item["card"][2]) - w)
+                + abs(int(item["card"][3]) - h),
+            ),
+        )
+
+    @staticmethod
+    def _card_frame_delta(before, after, card) -> float | None:
+        """Measure visible movement inside one card, when both captures exist."""
+        if (before is None or after is None
+                or not hasattr(before, "shape") or not hasattr(after, "shape")):
+            return None
+        x, y, w, h = (int(value) for value in card)
+        before_crop = before[y:y + h, x:x + w]
+        after_crop = after[y:y + h, x:x + w]
+        if (before_crop.size == 0 or after_crop.size == 0
+                or before_crop.shape != after_crop.shape):
+            return None
+        return float(np.mean(np.abs(
+            before_crop.astype(np.int16) - after_crop.astype(np.int16))))
+
+    @staticmethod
+    def _card_scroll_edges(drag):
+        """Return live-derived (top, bottom, tolerance) scrollbar bounds."""
+        bar = drag.get("scrollbar_match") or {}
+        top = int(drag.get("top_y", bar.get("track_top", drag["from_y"])))
+        bottom = int(
+            drag.get("bottom_y", bar.get("track_bottom", drag["to_y"])))
+        thumb_h = int(bar.get("thumb_h", 0))
+        # Template matching/refinement can move the estimated center by a few
+        # pixels between frames. Treat a short remaining distance as already
+        # being at the edge; real mid-track drags still need visual movement.
+        tolerance = max(16, int(round(thumb_h * 0.12)))
+        return top, bottom, tolerance
+
+    def _perform_inner_scroll_drag(self, x1, y1, x2, y2, stop_event):
+        """Drag with a real hover-in and a held, stepped pointer path."""
+        # The generic drag helper is still the compatibility path for test
+        # doubles and older mouse backends. The Windows Mouse implementation
+        # has down/up primitives, so use the more deliberate choreography
+        # there: settle on the thin thumb, nudge into it, hold, then move in
+        # small real events instead of pressing immediately after a jump.
+        if not all(hasattr(self._mouse, name)
+                   for name in ("down", "up", "nudge")):
+            self._audit_event(
+                "mouse_drag_path", mode="backend_drag",
+                points=[[int(x1), int(y1)], [int(x2), int(y2)]])
+            self._mouse.drag(x1, y1, x2, y2, duration=0.45)
+            return
+        # Approach one pixel to the left, then nudge onto the exact thumb
+        # center. While held, use relative moves: Roblox can acknowledge the
+        # absolute arrival but ignore an absolute pointer path as a drag.
+        self._mouse.move_to(x1 - 1, y1)
+        time.sleep(0.08)
+        self._mouse.nudge(1, 0)
+        time.sleep(0.06)
+        self._mouse.down()
+        time.sleep(0.10)
+        steps = max(18, int(abs(y2 - y1) / 3))
+        step_delay = 0.42 / steps
+        # SendInput relative motion is subject to the desktop's pointer
+        # acceleration, so the cursor reaches roughly 70% of the requested
+        # pixel delta on this setup. Compensate the path length; the card's
+        # scrollbar clamps the final position at its own live track endpoint.
+        relative_scale = 1.45
+        last_command_x, last_command_y = x1, y1
+        path = [[int(x1 - 1), int(y1)], [int(x1), int(y1)]]
+        for index in range(1, steps + 1):
+            if self._checkpoint(stop_event):
+                self._mouse.up()
+                return
+            current_x = x1 + (x2 - x1) * index / steps
+            current_y = y1 + (y2 - y1) * index / steps
+            next_x, next_y = round(current_x), round(current_y)
+            command_x = x1 + round((next_x - x1) * relative_scale)
+            command_y = y1 + round((next_y - y1) * relative_scale)
+            self._mouse.nudge(
+                command_x - last_command_x, command_y - last_command_y)
+            last_command_x, last_command_y = command_x, command_y
+            if len(path) < 256:
+                path.append([int(command_x), int(command_y)])
+            time.sleep(step_delay)
+        time.sleep(0.08)
+        self._mouse.up()
+        self._audit_event(
+            "mouse_drag_path", mode="stepped_relative", points=path,
+            requested_start=[int(x1), int(y1)],
+            requested_end=[int(x2), int(y2)], relative_scale=relative_scale)
+
+    def _drag_inner_scroll_verified(self, hwnd, frame, drag, card_no, stop_event):
+        """Perform one card drag and verify that the UI accepted it.
+
+        Detection alone is not enough for a thin scrollbar. This records
+        focus/cursor evidence and compares the live thumb/card after the drag;
+        one retry is allowed if Roblox did not visibly move the card.
+        """
+        from_y = int(drag["from_y"])
+        to_y = int(drag.get("target_y", drag["to_y"]))
+        target_name = drag.get("target_name", "bottom")
+        remaining = abs(to_y - from_y)
+        if remaining <= 16:
+            self._debug_bounty_log(
+                f"[Debug]   inner scrollbar card {card_no} already at "
+                f"{target_name}: remaining={remaining}px")
+            return False
+
+        x1, y1 = vision.ref_to_screen(hwnd, drag["x"], from_y)
+        x2, y2 = vision.ref_to_screen(hwnd, drag["x"], to_y)
+        self._audit_event(
+            "scroll_verification_start", card=card_no,
+            target=target_name, reference_start=[int(drag["x"]), from_y],
+            reference_end=[int(drag["x"]), to_y],
+            screen_start=[x1, y1], screen_end=[x2, y2],
+            drag=drag)
+        before_state = self._inner_scrollbar_state(frame, drag)
+        before_y = (int(before_state["cy"])
+                    if before_state is not None else from_y)
+        self._audit_frame(
+            f"card_{card_no}_{target_name}_before", frame,
+            card=card_no, target=target_name,
+            scrollbar=before_state)
+
+        for attempt in range(1, 3):
+            if self._checkpoint(stop_event):
+                return False
+            wm.activate_window(hwnd)
+            time.sleep(BOUNTY_CLICK_FOCUS_SETTLE)
+            cursor_before = getattr(self._mouse, "position", lambda: None)()
+            focus_before = bool(getattr(wm, "is_foreground", lambda _hwnd: True)(hwnd))
+            self._perform_inner_scroll_drag(x1, y1, x2, y2, stop_event)
+            self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
+            after = vision.capture_game_bgr(hwnd)
+            # Unit-test doubles and platform capture shims may return an
+            # opaque sentinel instead of a frame. The real Windows path always
+            # reaches the visual checks below; keep the sentinel path as an
+            # attempted drag so ordering tests can exercise the same loop.
+            if after is not None and not hasattr(after, "shape"):
+                self._debug_bounty_log(
+                    f"[Debug]   inner drag attempt {attempt} card {card_no}: "
+                    "capture unavailable; treating input as attempted")
+                return True
+            cursor_after = getattr(self._mouse, "position", lambda: None)()
+            after_state = self._inner_scrollbar_state(after, drag)
+            after_y = (int(after_state["cy"])
+                       if after_state is not None else None)
+            thumb_delta = (after_y - before_y) if after_y is not None else None
+            card_delta = self._card_frame_delta(after, frame, drag["card"])
+            card_delta_text = (
+                f"{card_delta:.2f}" if card_delta is not None else "n/a")
+            cursor_ok = bool(
+                cursor_after is not None
+                and abs(int(cursor_after[0]) - int(x2)) <= 4
+                and abs(int(cursor_after[1]) - int(y2)) <= 4)
+            expected_direction = 1 if to_y > from_y else -1
+            visual_ok = bool(
+                (thumb_delta is not None
+                 and thumb_delta * expected_direction >= 4)
+                or (card_delta is not None and card_delta >= 1.5))
+            # If a capture was unavailable, the input evidence is the only
+            # evidence possible; never call a real captured frame verified
+            # without a visible change.
+            # Relative input can finish a few pixels short in the OS cursor
+            # readback even while Roblox has visibly moved the card. A real
+            # thumb/card delta is stronger evidence than that readback; keep
+            # focus mandatory, and use cursor position as the fallback only
+            # when a post-drag capture is unavailable.
+            verified = bool(
+                focus_before
+                and (visual_ok or (cursor_ok and after is None)))
+            self._audit_frame(
+                f"card_{card_no}_{target_name}_attempt_{attempt}", after,
+                card=card_no, target=target_name, attempt=attempt,
+                scrollbar=after_state)
+            self._audit_event(
+                "scroll_verification_attempt", card=card_no,
+                target=target_name, attempt=attempt,
+                screen_start=[x1, y1], screen_end=[x2, y2],
+                focus_before=focus_before, cursor_before=cursor_before,
+                cursor_after=cursor_after, before_thumb_y=before_y,
+                after_thumb_y=after_y, thumb_delta=thumb_delta,
+                card_delta=card_delta, cursor_ok=cursor_ok,
+                visual_ok=visual_ok, registered=verified)
+            self._debug_bounty_log(
+                f"[Debug]   inner drag attempt {attempt} card {card_no}: "
+                f"screen=({x1},{y1})->({x2},{y2}) "
+                f"focus={focus_before} cursor_before={cursor_before} "
+                f"cursor_after={cursor_after} thumb_delta={thumb_delta} "
+                f"card_delta={card_delta_text} "
+                f"registered={verified}")
+            if verified:
+                return True
+            if attempt == 1:
+                self._log(
+                    f"[Macro] Auto Bounty inner scrollbar drag did not "
+                    f"register for card {card_no}; retrying once.")
+                if after_state is not None:
+                    retry_from = int(after_state["cy"])
+                    if abs(to_y - retry_from) <= 16:
+                        self._debug_bounty_log(
+                            f"[Debug]   retry skipped: card {card_no} "
+                            f"reached {target_name} after the first drag")
+                        return False
+                    x1, y1 = vision.ref_to_screen(hwnd, drag["x"], retry_from)
+            frame = after
+            before_y = after_y if after_y is not None else before_y
+        self._log(
+            f"[Macro] Auto Bounty inner scrollbar drag failed for card "
+            f"{card_no} after 2 attempts.")
         return False
 
     def _leave_bounty_board(self, hwnd, stop_event) -> bool:
@@ -188,7 +587,15 @@ class BountyOps:
         # stage. Always return to the beginning so every pass audits cards in
         # a deterministic left-to-right order instead of starting wherever
         # the previous click happened to leave the carousel.
-        sx, sy = vision.ref_to_screen(hwnd, *BOUNTY_SCROLL_HOVER)
+        # Keep the original incremental carousel traversal. The image match
+        # only replaces the fixed hover point; it must not change the number
+        # or order of scroll/scan steps.
+        self._audit_event(
+            "board_scan_start", attempted=attempted,
+            horizontal_steps=BOUNTY_HORIZONTAL_SCROLL_STEPS)
+        frame = vision.capture_game_bgr(hwnd)
+        wm.activate_window(hwnd)
+        sx, sy = self._bounty_scroll_hover(hwnd, frame)
         self._mouse.move_to(sx, sy)
         self._mouse.nudge()
         for _ in range(BOUNTY_HORIZONTAL_SCROLL_STEPS):
@@ -196,65 +603,267 @@ class BountyOps:
         self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
 
         summon_sightings = []
+        detection_only = self._bounty_detection_only()
+        if detection_only:
+            self._log("[Debug] Auto Bounty detection-only replay enabled; "
+                      "no objective or claim will be executed.")
         for scroll_no in range(BOUNTY_HORIZONTAL_SCROLL_STEPS + 1):
             if self._checkpoint(stop_event):
                 return None
             frame = vision.capture_game_bgr(hwnd)
             if frame is not None:
-                drags = bounty.detect_card_scrolls(frame)
+                self._audit_frame(
+                    f"board_scan_step_{scroll_no + 1}_before", frame,
+                    scroll_step=scroll_no + 1)
+                if hasattr(frame, "shape"):
+                    try:
+                        self._audit_event(
+                            "ocr_lines", stage="board_scan",
+                            scroll_step=scroll_no + 1,
+                            lines=bounty.ocr_windows.ocr_lines(frame))
+                    except Exception as exc:
+                        self._audit_event(
+                            "ocr_failed", stage="board_scan",
+                            scroll_step=scroll_no + 1,
+                            error=f"{type(exc).__name__}: {exc}")
+                scrollbar_matches = self._card_scroll_matches(frame)
+                drags = (
+                    bounty.detect_card_scrolls(frame)
+                    if scrollbar_matches is None else
+                    bounty.detect_card_scrolls(frame, scrollbar_matches)
+                )
+                self._debug_bounty_log(
+                    f"[Debug] Bounty scan step {scroll_no + 1}/"
+                    f"{BOUNTY_HORIZONTAL_SCROLL_STEPS + 1}: "
+                    f"{len(drags)} validated card(s), "
+                    f"{len(scrollbar_matches or [])} inner scrollbar match(es).")
+                self._audit_event(
+                    "card_detection", scroll_step=scroll_no + 1,
+                    scrollbar_matches=scrollbar_matches or [],
+                    cards=drags)
+                for card_no, detected in enumerate(drags, 1):
+                    x, y, w, h = detected["card"]
+                    bar = detected.get("scrollbar_match") or {}
+                    self._debug_bounty_log(
+                        f"[Debug]   card {card_no}: box=({x},{y},{w},{h}) "
+                        f"inner_bar={detected.get('has_scrollbar', False)} "
+                        f"drag=({detected.get('x')},{detected.get('from_y')}"
+                        f"->{detected.get('to_y')}) "
+                        f"match=({bar.get('cx')},{bar.get('cy')}) "
+                        f"score={bar.get('score', 0.0):.3f}")
+                if detection_only:
+                    try:
+                        shot = self._save_debug_screenshot_unconditional(
+                            hwnd, f"bounty_scan_step_{scroll_no + 1}")
+                        self._debug_bounty_log(
+                            f"[Debug]   scan screenshot: {shot}")
+                    except Exception as exc:
+                        self._debug_bounty_log(
+                            f"[Debug]   scan screenshot failed: {exc}")
                 # Fully inspect one card (including its private scrollbar)
                 # before considering the next card. Card positions are
                 # detected from the current frame; no bounty/map coordinates
                 # or assumed card ordering are baked in.
-                for drag in sorted(drags, key=lambda item: item["card"][0]):
+                for card_no, initial_drag in enumerate(
+                        sorted(drags, key=lambda item: item["card"][0]), 1):
                     if self._checkpoint(stop_event):
                         return None
-                    card_x, card_y, card_w, card_h = drag["card"]
-                    for claim in bounty.detect_claim_buttons(frame, [drag]):
-                        return claim
-                    summon_sightings.extend(
-                        bounty.detect_summon_objectives(frame, [drag]))
-                    for objective in bounty.detect_objectives(frame):
-                        if (card_x <= objective["cx"] <= card_x + card_w
-                                and card_y <= objective["cy"] <= card_y + card_h
-                                and not self._bounty_was_attempted(
-                                    objective["signature"], attempted)):
-                            return objective
-                    if not drag.get("has_scrollbar", True):
-                        # Every visible objective was already inspected and
-                        # this card has no private bar, so there is no hidden
-                        # content to reveal. Move directly to the next card.
-                        continue
-                    x1, y1 = vision.ref_to_screen(hwnd, drag["x"], drag["from_y"])
-                    x2, y2 = vision.ref_to_screen(hwnd, drag["x"], drag["to_y"])
-                    self._mouse.drag(x1, y1, x2, y2, duration=0.25)
-                    self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
-                    frame = vision.capture_game_bgr(hwnd)
-                    if frame is not None:
-                        summon_sightings.extend(
-                            bounty.detect_summon_objectives(frame, [drag]))
-                        for objective in bounty.detect_objectives(frame):
-                            if (card_x <= objective["cx"] <= card_x + card_w
-                                    and card_y <= objective["cy"] <= card_y + card_h
+                    drag = self._refresh_card_drag(
+                        frame, initial_drag["card"]) or initial_drag
+                    self._debug_bounty_log(
+                        f"[Debug]   beginning left-to-right card {card_no} "
+                        f"at x={drag['card'][0]}")
+                    claim_candidate = None
+                    # A missing template match has already had a strict
+                    # card-relative thumb heuristic applied in bounty.py. If
+                    # that also finds nothing, do not wheel here: Roblox can
+                    # route a wheel over a flat card to the outer carousel.
+                    # Only a live scrollbar match is allowed to move this
+                    # card; otherwise it is treated as a non-scrollable card.
+                    scroll_mode = (
+                        "drag" if drag.get("has_scrollbar", True) else "none")
+                    self._audit_event(
+                        "card_scroll_mode", card=card_no, mode=scroll_mode,
+                        card_box=drag["card"])
+                    bottom_scanned = scroll_mode == "none"
+                    if scroll_mode == "drag":
+                        top_y, _bottom_y, edge_tolerance = (
+                            self._card_scroll_edges(drag))
+                        if abs(int(drag["from_y"]) - top_y) > edge_tolerance:
+                            top_drag = {
+                                **drag,
+                                "target_y": top_y,
+                                "target_name": "top",
+                            }
+                            self._debug_bounty_log(
+                                f"[Debug]   card {card_no} is not at top; "
+                                f"rewinding thumb {drag['from_y']}->{top_y}")
+                            if not self._drag_inner_scroll_verified(
+                                    hwnd, frame, top_drag, card_no, stop_event):
+                                self._log(
+                                    f"[Macro] Auto Bounty could not verify "
+                                    f"the top of card {card_no}; treating "
+                                    "the unchanged viewport as an edge and "
+                                    "continuing its inspection.")
+                            frame = vision.capture_game_bgr(hwnd)
+                            refreshed = self._refresh_card_drag(
+                                frame, drag["card"])
+                            if refreshed is None:
+                                self._log(
+                                    f"[Macro] Auto Bounty could not re-detect "
+                                    f"card {card_no} after returning to its "
+                                    "top; stopping the board scan safely.")
+                                return None
+                            drag = refreshed
+                    for inner_pass in range(BOUNTY_MAX_INNER_CARD_PASSES):
+                        if self._checkpoint(stop_event):
+                            return None
+                        card_x, card_y, card_w, card_h = drag["card"]
+                        self._debug_bounty_log(
+                            f"[Debug]   inspecting card {card_no} pass "
+                            f"{inner_pass + 1}/{BOUNTY_MAX_INNER_CARD_PASSES}")
+                        if detection_only:
+                            self._hover_bounty_ref(
+                                hwnd, card_x + card_w // 2, card_y + card_h // 2,
+                                f"card {card_no} pass {inner_pass + 1}")
+                        claims = bounty.detect_claim_buttons(frame, [drag])
+                        for claim in claims:
+                            self._debug_bounty_log(
+                                f"[Debug]   claim candidate card={card_no} "
+                                f"screen_ref=({claim['cx']},{claim['cy']})")
+                            claim_candidate = claim
+                            if detection_only:
+                                self._hover_bounty_ref(
+                                    hwnd, claim["cx"], claim["cy"],
+                                    f"claim card {card_no}")
+                        summons = bounty.detect_summon_objectives(frame, [drag])
+                        summon_sightings.extend(summons)
+                        if detection_only:
+                            for summon in summons:
+                                self._hover_bounty_ref(
+                                    hwnd, summon["cx"], summon["cy"],
+                                    f"summon card {card_no}")
+                        objectives = [
+                            objective for objective in bounty.detect_objectives(frame)
+                            if card_x <= objective["cx"] <= card_x + card_w
+                            and card_y <= objective["cy"] <= card_y + card_h
+                        ]
+                        self._audit_event(
+                            "card_contents", card=card_no,
+                            pass_number=inner_pass + 1,
+                            claims=claims,
+                            summons=summons, objectives=objectives,
+                            scrollbar=drag.get("scrollbar_match"),
+                            reference_card=list(drag["card"]))
+                        for objective in objectives:
+                            self._debug_bounty_log(
+                                f"[Debug]   objective candidate card={card_no} "
+                                f"pass={inner_pass + 1} "
+                                f"kind={objective.get('kind')} "
+                                f"target={objective.get('target_wave')} "
+                                f"ref=({objective.get('cx')},{objective.get('cy')}) "
+                                f"text={objective.get('text', '')!r}")
+                            if detection_only:
+                                self._hover_bounty_ref(
+                                    hwnd, objective["cx"], objective["cy"],
+                                    f"objective card {card_no} pass {inner_pass + 1}")
+                            if (not detection_only
                                     and not self._bounty_was_attempted(
-                                        objective["signature"], attempted)):
+                                    objective["signature"], attempted)):
                                 return objective
+                        if scroll_mode == "none":
+                            self._debug_bounty_log(
+                                f"[Debug]   card {card_no} exhausted: "
+                                "no validated private scrollbar")
+                            bottom_scanned = True
+                            break
+                        if scroll_mode == "drag":
+                            _top_y, bottom_y, edge_tolerance = (
+                                self._card_scroll_edges(drag))
+                            if abs(int(drag["from_y"]) - bottom_y) <= edge_tolerance:
+                                self._debug_bounty_log(
+                                    f"[Debug]   card {card_no} reached its "
+                                    f"bottom ({drag['from_y']}≈{bottom_y})")
+                                bottom_scanned = True
+                                self._audit_event(
+                                    "scroll_edge_verified", card=card_no,
+                                    edge="bottom", current_y=drag["from_y"],
+                                    target_y=bottom_y, tolerance=edge_tolerance)
+                                break
+                            bottom_drag = {
+                                **drag,
+                                "target_y": bottom_y,
+                                "target_name": "bottom",
+                            }
+                            moved = self._drag_inner_scroll_verified(
+                                hwnd, frame, bottom_drag, card_no, stop_event)
+                            if not moved:
+                                self._log(
+                                    f"[Macro] Auto Bounty could not verify the "
+                                    f"bottom of card {card_no}; treating the "
+                                    "unchanged viewport as the bottom edge.")
+                                bottom_scanned = True
+                                break
+                            next_frame = vision.capture_game_bgr(hwnd)
+                            if next_frame is None:
+                                self._debug_bounty_log(
+                                    f"[Debug]   card {card_no} paused: no post-drag "
+                                    "frame was available")
+                                return None
+                            frame = next_frame
+                            refreshed = self._refresh_card_drag(
+                                frame, drag["card"])
+                            if refreshed is None:
+                                self._log(
+                                    f"[Macro] Auto Bounty could not re-detect "
+                                    f"card {card_no}'s scrollbar after a verified "
+                                    "drag; stopping the board scan safely.")
+                                return None
+                            else:
+                                drag = refreshed
+                    else:
+                        self._debug_bounty_log(
+                            f"[Debug]   card {card_no} reached the inner-pass "
+                            "safety bound before its bottom was verified")
+                        return None
+                    if bottom_scanned and claim_candidate is not None:
+                        self._debug_bounty_log(
+                            f"[Debug]   card {card_no} verified top and bottom; "
+                            "claim is now eligible")
+                        if not detection_only:
+                            return claim_candidate
                 if not drags:
                     claims = bounty.detect_claim_buttons(frame, [])
                     if claims:
-                        return claims[0]
+                        self._debug_bounty_log(
+                            f"[Debug] claim candidate without validated card "
+                            f"ref=({claims[0]['cx']},{claims[0]['cy']})")
+                        if not detection_only:
+                            return claims[0]
                     for objective in bounty.detect_objectives(frame):
+                        self._debug_bounty_log(
+                            f"[Debug]   unscoped objective candidate "
+                            f"kind={objective.get('kind')} "
+                            f"target={objective.get('target_wave')} "
+                            f"ref=({objective.get('cx')},{objective.get('cy')}) "
+                            f"text={objective.get('text', '')!r}")
                         if not self._bounty_was_attempted(
                                 objective["signature"], attempted):
-                            return objective
+                            if not detection_only:
+                                return objective
                     summon_sightings.extend(
                         bounty.detect_summon_objectives(frame))
             if scroll_no == BOUNTY_HORIZONTAL_SCROLL_STEPS:
                 break
-            sx, sy = vision.ref_to_screen(hwnd, *BOUNTY_SCROLL_HOVER)
+            frame = vision.capture_game_bgr(hwnd)
+            wm.activate_window(hwnd)
+            sx, sy = self._bounty_scroll_hover(hwnd, frame)
             self._mouse.move_to(sx, sy)
             self._mouse.nudge()
             self._mouse.scroll(BOUNTY_HORIZONTAL_WHEEL_DELTA)
+            self._debug_bounty_log(
+                f"[Debug] Outer scroll step {scroll_no + 1}: "
+                f"hover_screen=({sx},{sy}), delta={BOUNTY_HORIZONTAL_WHEEL_DELTA}")
             self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
         available_summons = [
             item for item in summon_sightings
@@ -268,10 +877,17 @@ class BountyOps:
                 available_summons,
                 key=lambda item: (
                     item["remaining_summons"], item["target_summons"]))
-            return {
+            result = {
                 **largest,
                 "signature": ("summon", largest["target_summons"], 0),
             }
+            if detection_only:
+                self._debug_bounty_log(
+                    f"[Debug] summon candidate target={result['target_summons']} "
+                    f"remaining={result['remaining_summons']} "
+                    f"ref=({result['cx']},{result['cy']})")
+                return None
+            return result
         return None
 
     def _capture_summon_menu(self, hwnd):
@@ -569,6 +1185,10 @@ class BountyOps:
                     bounty.read_bounties_left(frame)
                     if frame is not None else None
                 )
+                self._audit_frame("board_scan_finished", frame)
+                self._audit_event(
+                    "board_scan_finished", remaining=remaining,
+                    attempted=attempted)
                 if remaining is not None:
                     left, total = remaining
                     self._set_bounty_remaining(left, total)

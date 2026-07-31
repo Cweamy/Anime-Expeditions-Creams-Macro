@@ -196,6 +196,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._paused_logged = False
         self._stop_logged = False  # one "Stopped." per stop -- see _checkpoint
         self._debug_screenshots = False
+        # Auto Bounty audit is opt-in because it writes a captured board frame
+        # for each meaningful detection/scroll state.  The packaged test build
+        # exposes the switch in Settings > Debug; AE_BOUNTY_AUDIT=1 is also a
+        # useful override when the UI cannot be reached on another machine.
+        self._bounty_audit_enabled = False
+        self._bounty_audit_recorder = None
         # Off by default -- see _apply_team_loadout_panel's OCR confirmation.
         self._loose_team_ocr_match = False
         self._current_hwnd = None       # set at the top of _run -- lets _checkpoint reach Leave Stage on stop
@@ -249,7 +255,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
     def start(self, hwnd_getter, get_tasks, scroll_power: int = None, coords: dict = None,
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
               webhook: dict = None, expedition_color_buttons: bool = True,
-              expedition_camera_o_ms: float = 100, loose_team_ocr_match: bool = False) -> dict:
+              expedition_camera_o_ms: float = 100, loose_team_ocr_match: bool = False,
+              bounty_audit: bool = False) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -257,6 +264,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._paused_logged = False
         self._stop_logged = False
         self._debug_screenshots = bool(debug_screenshots)
+        self._bounty_audit_enabled = bool(bounty_audit)
         self._loose_team_ocr_match = bool(loose_team_ocr_match)
         self._expedition_color_buttons = bool(expedition_color_buttons)
         try:
@@ -624,6 +632,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._log_unexpected_phase_error("runner session", exc)
             self._set_status(action="Idle")
         finally:
+            self._close_bounty_audit()
             wm.allow_sleep()
             vision.close_mss()
 
