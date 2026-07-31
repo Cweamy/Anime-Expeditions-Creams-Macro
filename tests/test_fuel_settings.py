@@ -1,6 +1,10 @@
 from core import settings
 from core import paths
-from core.runner_constants import FUEL_INTERVAL_SECONDS, FUEL_RETRY_SECONDS
+from core.runner_constants import (
+    FUEL_INTERVAL_SECONDS,
+    FUEL_RETRY_SECONDS,
+    fuel_refill_interval_seconds,
+)
 from main import Api
 
 
@@ -42,7 +46,7 @@ def test_default_fuel_paths_are_shipped_and_nonempty(monkeypatch, tmp_path):
         assert paths.load_path(path_name)["events"]
 
 
-def test_success_starts_eight_hour_timer_and_reset_makes_due(monkeypatch, tmp_path):
+def test_max_success_starts_eight_hour_timer_and_reset_makes_due(monkeypatch, tmp_path):
     api = _api(monkeypatch, tmp_path)
     now = [10_000.0]
     monkeypatch.setattr("main.time.time", lambda: now[0])
@@ -63,10 +67,39 @@ def test_success_starts_eight_hour_timer_and_reset_makes_due(monkeypatch, tmp_pa
     assert api.get_fuel_settings()["resources"]["gold_mine"]["due"] is True
 
 
-def test_failure_retries_after_fifteen_minutes_without_resetting_success(monkeypatch, tmp_path):
+def test_numeric_amount_uses_its_coverage_with_a_safety_margin(monkeypatch, tmp_path):
+    api = _api(monkeypatch, tmp_path)
+    now = [20_000.0]
+    monkeypatch.setattr("main.time.time", lambda: now[0])
+    api.set_fuel_resource_enabled("resource_drill", True)
+    api.set_fuel_resource_amount("resource_drill", 20)
+    api.set_fuel_enabled(True)
+
+    api.mark_fuel_refill_result("resource_drill", True)
+    state = api.get_fuel_settings()["resources"]["resource_drill"]
+    expected_interval = fuel_refill_interval_seconds(20)
+
+    assert expected_interval == 95 * 60
+    assert state["interval_seconds"] == expected_interval
+    assert state["next_due_at"] == now[0] + expected_interval
+
+    now[0] += expected_interval
+    assert api.get_fuel_settings()["resources"]["resource_drill"]["due"] is True
+
+
+def test_fuel_interval_examples_and_low_amount_floor():
+    assert fuel_refill_interval_seconds("max") == 8 * 60 * 60
+    assert fuel_refill_interval_seconds(50) == 4 * 60 * 60
+    assert fuel_refill_interval_seconds(20) == 95 * 60
+    assert fuel_refill_interval_seconds(10) == 45 * 60
+    assert fuel_refill_interval_seconds(1) == 5 * 60
+
+
+def test_failure_retries_after_five_minutes_without_resetting_success(monkeypatch, tmp_path):
     api = _api(monkeypatch, tmp_path)
     now = [50_000.0]
     monkeypatch.setattr("main.time.time", lambda: now[0])
+    assert FUEL_RETRY_SECONDS == 5 * 60
     for resource in ("resource_drill", "gold_mine"):
         api.set_fuel_resource_enabled(resource, True)
     api.set_fuel_enabled(True)

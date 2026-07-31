@@ -1454,6 +1454,7 @@ class Api:
             FUEL_PATH_KEYS,
             FUEL_RESOURCES,
             FUEL_RETRY_SECONDS,
+            fuel_refill_interval_seconds,
         )
 
         defaults = self._default_fuel_settings()
@@ -1490,14 +1491,17 @@ class Api:
             except (TypeError, ValueError):
                 next_attempt_at = 0.0
             # Legacy development builds used retry_after only for failures.
-            # Derive the regular 8-hour attempt once when that older shape is read.
+            # Derive the quantity-aware attempt once when that older shape is read.
             if "next_attempt_at" not in saved_source:
                 try:
                     retry_after = max(0.0, float(source.get("retry_after") or 0))
                 except (TypeError, ValueError):
                     retry_after = 0.0
                 next_attempt_at = max(
-                    (last_refilled_at + FUEL_INTERVAL_SECONDS) if last_refilled_at else 0.0,
+                    (
+                        last_refilled_at + fuel_refill_interval_seconds(amount)
+                        if last_refilled_at else 0.0
+                    ),
                     retry_after,
                 )
             resource_enabled = bool(source.get("enabled"))
@@ -1509,6 +1513,7 @@ class Api:
                 "next_attempt_at": next_attempt_at,
                 "next_due_at": next_attempt_at,
                 "remaining_seconds": max(0, int(next_attempt_at - now + 0.999)),
+                "interval_seconds": fuel_refill_interval_seconds(amount),
                 "due": due,
             }
 
@@ -1572,7 +1577,11 @@ class Api:
         return {"ok": True}
 
     def mark_fuel_refill_result(self, resource: str, succeeded: bool) -> dict:
-        from core.runner_constants import FUEL_INTERVAL_SECONDS, FUEL_RESOURCES, FUEL_RETRY_SECONDS
+        from core.runner_constants import (
+            FUEL_RESOURCES,
+            FUEL_RETRY_SECONDS,
+            fuel_refill_interval_seconds,
+        )
 
         if resource not in FUEL_RESOURCES:
             return {"ok": False, "reason": "bad_resource"}
@@ -1581,7 +1590,8 @@ class Api:
         now = time.time()
         if succeeded:
             state["last_refilled_at"] = now
-            state["next_attempt_at"] = now + FUEL_INTERVAL_SECONDS
+            state["next_attempt_at"] = (
+                now + fuel_refill_interval_seconds(state.get("amount")))
         else:
             state["next_attempt_at"] = now + FUEL_RETRY_SECONDS
         self._save_fuel_settings(fuel)
