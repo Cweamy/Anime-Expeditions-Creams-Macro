@@ -467,6 +467,7 @@ class Api:
         self.mouse = Mouse()
         self.keyboard = Keyboard()
         self._path_test_stop = None
+        self._pending_recording_events = None  # stopped-but-not-yet-named Record block capture (see stop_input_capture)
         # Apply the persisted Macro Speed delay before anything can click
         # (see core.pacing + set_setting's live-update hook).
         from core import pacing
@@ -2062,6 +2063,72 @@ class Api:
         from core import paths
         return paths.list_custom_paths()
 
+    # ------------------------------------------------------------------
+    # Record block (Macro Manager > Setup > Record): a general-purpose
+    # mouse+keyboard recorder -- everything Click/Send Key don't cover on
+    # their own, not just WASD movement (see core.paths above for that).
+    # Same start/stop-then-name/save/discard split as path recording, for
+    # the same reason: naming happens in a dialog AFTER the hooks are torn
+    # down, so typing the name can't leak into the recording.
+    # ------------------------------------------------------------------
+    def start_input_recording(self) -> dict:
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+        wm.show_window(hwnd)
+        wm.activate_window(hwnd)
+
+        from core import input_record
+        try:
+            input_record.start_recording(hwnd)
+        except input_record.RecordingAlreadyActive as exc:
+            return {"ok": False, "reason": str(exc)}
+        except ImportError:
+            return {"ok": False, "reason": "the 'mouse'/'keyboard' packages aren't installed"}
+        return {"ok": True}
+
+    def stop_input_capture(self) -> dict:
+        from core import input_record
+        self._pending_recording_events = input_record.stop_recording()
+        return {"ok": True, "count": len(self._pending_recording_events)}
+
+    def save_pending_recording(self, name: str) -> dict:
+        from core import input_record
+        events = self._pending_recording_events or []
+        if not events:
+            return {"ok": False, "reason": "no_input_recorded"}
+        saved_name = input_record.save_recording(name, events)
+        self._pending_recording_events = None
+        self.push_log(f'[Macro Manager] Recorded input "{saved_name}" ({len(events)} events).')
+        return {"ok": True, "name": saved_name}
+
+    def discard_pending_recording(self) -> dict:
+        from core import input_record
+        input_record.cancel_recording()
+        self._pending_recording_events = None
+        return {"ok": True}
+
+    def list_recordings(self) -> list:
+        from core import input_record
+        return input_record.list_recordings()
+
+    def export_recordings_bundle(self, names) -> dict:
+        # Task/Template file export (ui/app.js's exportCustomRecordings) --
+        # unlike the Share Code path (export_template_code, which already
+        # zlib-compresses the whole payload), the exported .json file isn't
+        # compressed at all otherwise, so a Record block with a dense mouse
+        # path bundled in raw would dominate the file's size on its own.
+        from core import input_record
+        if not isinstance(names, list):
+            return {}
+        return input_record.collect_recordings_compressed(names)
+
+    def import_recordings_bundle(self, bundle: dict) -> dict:
+        from core import input_record
+        if not isinstance(bundle, dict):
+            return {"ok": False, "added": 0}
+        return {"ok": True, "added": input_record.import_recordings_compressed(bundle)}
+
     def set_setting(self, key: str, value) -> dict:
         cfg.update({key: value})  # atomic -- see cfg.update (fixes settings not saving)
         if key == "action_delay_ms":
@@ -2179,9 +2246,9 @@ class Api:
         return {"ok": ok}
 
     def export_template_code(self, names=None) -> dict:
-        from core import paths
+        from core import input_record, paths
 
-        def _bundle(*block_sets):
+        def _bundle_paths(*block_sets):
             # Recorded walks that the macro's custom Walk Path blocks reference,
             # packed alongside so they work on the importer's machine (auto-mode
             # walks use shipped defaults everyone already has -- see
@@ -2190,6 +2257,21 @@ class Api:
             for blocks in block_sets:
                 needed |= share.collect_walk_path_names(blocks)
             return paths.collect_paths(needed)
+
+        def _bundle_recordings(*block_sets):
+            # Same idea for Record block input recordings.
+            needed = set()
+            for blocks in block_sets:
+                needed |= share.collect_recording_names(blocks)
+            return input_record.collect_recordings(needed)
+
+        def _add_bundles(payload, *block_sets):
+            bundled_paths = _bundle_paths(*block_sets)
+            if bundled_paths:
+                payload["paths"] = bundled_paths
+            bundled_recordings = _bundle_recordings(*block_sets)
+            if bundled_recordings:
+                payload["recordings"] = bundled_recordings
 
         if isinstance(names, str) and names.strip():
             if not tpl.template_exists(names):
@@ -2202,9 +2284,7 @@ class Api:
                 "name": names,
                 "blocks": blocks,
             }
-            bundled = _bundle(blocks)
-            if bundled:
-                payload["paths"] = bundled
+            _add_bundles(payload, blocks)
             code = share.encode_template_code(payload)
             return {"ok": True, "code": code, "count": 1}
         elif isinstance(names, list) and len(names) > 0:
@@ -2220,9 +2300,7 @@ class Api:
                     "name": t_name,
                     "blocks": blocks,
                 }
-                bundled = _bundle(blocks)
-                if bundled:
-                    payload["paths"] = bundled
+                _add_bundles(payload, blocks)
                 code = share.encode_template_code(payload)
                 return {"ok": True, "code": code, "count": 1}
             else:
@@ -2237,9 +2315,7 @@ class Api:
                     "version": 1,
                     "templates": templates,
                 }
-                bundled = _bundle(*templates.values())
-                if bundled:
-                    payload["paths"] = bundled
+                _add_bundles(payload, *templates.values())
                 code = share.encode_template_code(payload)
                 return {"ok": True, "code": code, "count": len(templates)}
         else:
@@ -2253,14 +2329,12 @@ class Api:
                 "version": 1,
                 "templates": templates,
             }
-            bundled = _bundle(*templates.values())
-            if bundled:
-                payload["paths"] = bundled
+            _add_bundles(payload, *templates.values())
             code = share.encode_template_code(payload)
             return {"ok": True, "code": code, "count": len(templates)}
 
     def import_template_code(self, code_str: str) -> dict:
-        from core import paths
+        from core import input_record, paths
 
         res = share.decode_template_code(code_str)
         if not res.get("ok"):
@@ -2282,17 +2356,28 @@ class Api:
             if saved_path != pname:
                 rename_map[pname] = saved_path
 
+        # Same recreate-then-remap dance for Record block input recordings.
+        bundled_recordings = res.get("recordings", {}) or {}
+        recording_rename_map = {}
+        for rname, rdata in bundled_recordings.items():
+            events = rdata.get("events", []) if isinstance(rdata, dict) else rdata
+            saved_recording = input_record.import_recording(rname, events)
+            if saved_recording != rname:
+                recording_rename_map[rname] = saved_recording
+
         imported_names = []
         for tname, blocks in templates.items():
             share.remap_walk_path_names(blocks, rename_map)
+            share.remap_recording_names(blocks, recording_rename_map)
             saved = tpl.save_template(tname, blocks)
             imported_names.append(saved)
 
         walk_note = f" (+{len(bundled_paths)} walk path(s))" if bundled_paths else ""
+        rec_note = f" (+{len(bundled_recordings)} recording(s))" if bundled_recordings else ""
         self.push_log(f"Imported {len(imported_names)} template(s) via Share Code: "
-                       f"{', '.join(imported_names)}{walk_note}")
+                       f"{', '.join(imported_names)}{walk_note}{rec_note}")
         return {"ok": True, "count": len(imported_names), "templates": imported_names,
-                "walk_paths": len(bundled_paths)}
+                "walk_paths": len(bundled_paths), "recordings": len(bundled_recordings)}
 
     def preview_template_code(self, code_str: str) -> dict:
         return share.preview_template_code(code_str)

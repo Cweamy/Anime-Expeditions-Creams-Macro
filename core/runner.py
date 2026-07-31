@@ -202,9 +202,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._debug_screenshots = False
         # Off by default -- see _apply_team_loadout_panel's OCR confirmation.
         self._loose_team_ocr_match = False
-        self._current_hwnd = None       # set at the top of _run -- lets _checkpoint reach Leave Stage on stop
+        self._current_hwnd = None       # set at the top of _run
         self._hwnd_getter = None        # set at the top of _run -- lets _attempt_rejoin find a re-docked hwnd
-        self._left_stage_this_run = False
         # Placed-unit screen positions from THIS match's Pre Start (see
         # _run_place_unit_block), keyed by the unit's #ordinal among place_unit
         # blocks (same numbering ui/app.js's listPlacedUnits() uses for the
@@ -284,7 +283,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             time.monotonic() + self._memory_refresh_interval_seconds
             if self._memory_refresh_enabled else None)
         self._current_hwnd = None
-        self._left_stage_this_run = False
         self._last_applied_team_loadout = None
         self._consecutive_losses = 0
         self._consecutive_loss_map = None
@@ -328,7 +326,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._coords = {**DEFAULT_COORDS, **(coords or {})}
         self._current_hwnd = None
         self._last_applied_team_loadout = None
-        self._left_stage_this_run = True  # nothing to Leave Stage from -- there's no real match here
         self._memory_refresh_enabled = False
         self._memory_refresh_interval_seconds = 0.0
         self._memory_refresh_next_at = None
@@ -431,7 +428,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._log("[Macro] Resumed.")
             self._paused_logged = False
         if stop_event.is_set():
-            self._try_leave_stage(stop_event)
             # Say WHAT was in flight when the stop landed, not just
             # "Stopped." -- someone stopping a run that's visibly hung
             # (e.g. sitting on "Waiting for gamemode menu...") is exactly
@@ -456,36 +452,14 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
     def _interruptible_sleep(self, seconds: float, stop_event: threading.Event = None) -> None:
         """time.sleep(), but bails out immediately once stop_event fires
         instead of blocking it for the full duration -- F2/Stop is supposed
-        to stay instant (see _checkpoint/_try_leave_stage's own comment on
-        this), which a plain time.sleep(5.0) settle delay quietly breaks
-        for however long is left on it."""
+        to stay instant (see _checkpoint), which a plain time.sleep(5.0)
+        settle delay quietly breaks for however long is left on it."""
         if seconds <= 0:
             return
         if stop_event is not None:
             stop_event.wait(seconds)
         else:
             time.sleep(seconds)
-
-    def _try_leave_stage(self, stop_event: threading.Event = None) -> None:
-        # F2/Stop must stay instant (see main.py's hotkey wiring), so this is
-        # a single one-shot check, not a wait -- no match just means either
-        # Leave Stage isn't on screen right now (not mid-match) or the image
-        # hasn't been added, either way nothing to click. Guarded so a stop
-        # mid-run only ever attempts this once, not on every _checkpoint call
-        # after the stop_event is already set.
-        if self._left_stage_this_run or self._current_hwnd is None:
-            return
-        self._left_stage_this_run = True
-        stop_evt = stop_event or getattr(self, "_stop_event", None)
-        try:
-            match = vision.find_image(self._current_hwnd, "leave_stage")
-        except vision.TemplateNotFound:
-            return
-        if match is not None:
-            self._log(f"[Macro] Stopping -- clicking Leave Stage (score {match['score']:.2f}) to quit to menu.")
-            vision.click_match(self._mouse, self._current_hwnd, match)
-            self._interruptible_sleep(0.5, stop_evt)
-            self._click_return_to_lobby_if_found(self._current_hwnd, stop_event=stop_evt)
 
     def _click_return_to_lobby_if_found(self, hwnd, stop_event: threading.Event = None) -> bool:
         # Leave Stage can bring up its own "Return to Lobby" confirmation
@@ -2237,6 +2211,16 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if first_repeat:
             self._log("[Macro] Pre Start: setting up the camera...")
             self._set_status(action="Setting up camera...")
+            # nav_unitmanager (just confirmed by _wait_teleport_in) is a HUD
+            # element and can render a beat before the character/camera
+            # controller has actually finished attaching to the freshly-
+            # spawned avatar -- this blind right-click-drag has no visual
+            # confirmation of its own to wait on, so a short settle here is
+            # what catches that rare case instead of dragging on a camera
+            # that isn't ready to receive it yet.
+            self._interruptible_sleep(CAMERA_SETUP_SETTLE, stop_event)
+            if self._checkpoint(stop_event):
+                return False
             try:
                 if task.get("mode") == "expedition":
                     camera.run_camera_drag_hold(self._mouse, self._keyboard, hwnd, hold_ms=730,

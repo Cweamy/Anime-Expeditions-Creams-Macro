@@ -11,6 +11,7 @@ import threading
 import time
 
 from . import detect
+from . import input_record
 from . import keys
 from . import paths as walk_paths
 from . import vision
@@ -241,6 +242,10 @@ class BlockOps:
                 self._battle_block_state = {}
             elif btype == "walk":
                 self._run_walk_block_tick(stop_event, block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
+            elif btype == "record":
+                self._run_record_macro_tick(hwnd, stop_event, block, self._battle_block_index + 1)
                 done = True
                 self._battle_block_state = {}
             elif btype == "wait_wave":
@@ -558,6 +563,31 @@ class BlockOps:
         sprint = bool(block.get("sprint"))
         walk_paths.replay_events(events, self._keyboard, stop_event, sprint=sprint)
         self._log(f'{label}: walk finished{" (sprinting)" if sprint else ""}.')
+
+    def _run_record_macro_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int,
+                                 phase_label: str = "Battle") -> None:
+        """One-shot: replays a recorded mouse+keyboard input sequence (see
+        core.input_record) -- the general-purpose counterpart of the Walk
+        block above, for any multi-step click/type/scroll sequence no other
+        block covers, recorded once via the block's own Record/Stop button
+        instead of built up one Click/Send Key block at a time.
+
+        Runs in either phase, same as Walk -- Pre Start can chain several
+        before the match begins, Battle/Loop can fire one mid-match."""
+        name = block.get("params", {}).get("recording") or ""
+        label = f'{phase_label} block #{block_num} (Record)'
+        if not name:
+            self._log(f'{label}: no recording selected -- skipping.')
+            return
+        self._log(f'{label}: replaying "{name}"...')
+        self._set_status(action=f'Replaying "{name}"...')
+        data = input_record.load_recording(name)
+        events = data.get("events", [])
+        if not events:
+            self._log(f'{label}: recording "{name}" has no captured input -- skipping.')
+            return
+        input_record.replay_events(events, self._mouse, self._keyboard, hwnd, stop_event)
+        self._log(f'{label}: replay finished.')
 
     def _run_wait_wave_tick(self, hwnd, block: dict, block_num: int) -> bool:
         """Waits until the current wave has reached OR already passed the
@@ -925,6 +955,8 @@ class BlockOps:
             self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {}, block, first_repeat)
         elif btype == "walk":
             self._run_walk_block_tick(stop_event, block, i, phase_label="Pre Start")
+        elif btype == "record":
+            self._run_record_macro_tick(hwnd, stop_event, block, i, phase_label="Pre Start")
         elif btype == "click":
             self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
         elif btype == "wait_ms":

@@ -321,6 +321,14 @@ SOLO_START_TIMEOUT = 10.0  # Solo mode's direct Start button, in place of Enter 
 # (see MATCHMAKING_TELEPORT_TIMEOUT below) -- that one's a genuinely
 # different wait, not just a longer version of this one.
 TELEPORT_IN_TIMEOUT = 30.0
+# nav_unitmanager (the "teleport finished" confirmation above) is a HUD
+# element -- it can render before the character/camera controller has
+# actually finished attaching to the freshly-spawned avatar, which the Pre
+# Start camera drag doesn't wait on or verify at all (it's a blind
+# right-click-and-move sequence). Reported live, rarely: the camera drag
+# fires a beat too early and the right-click-drag/scroll doesn't register
+# that time. This settle is the fix -- see _run_prestart.
+CAMERA_SETUP_SETTLE = 0.6
 # Clicking Enter Matchmaking doesn't teleport you in on its own -- it only
 # happens once the lobby actually FILLS with real players, which can take
 # anywhere from seconds to several minutes depending on server population,

@@ -2,6 +2,21 @@ import numpy as np
 import pytest
 
 from core import vision
+from core import window as wm
+
+
+def test_screen_to_ref_is_the_inverse_of_ref_to_screen(monkeypatch):
+    """core.input_record's Record block relies on screen_to_ref undoing
+    ref_to_screen exactly, so a captured screen point round-trips back to
+    the same reference point it was converted from."""
+    monkeypatch.setattr(wm, "get_window_rect_screen", lambda hwnd: (100, 50, 100 + 576, 50 + 378))
+
+    ref_x, ref_y = 300.0, 200.0
+    screen_x, screen_y = vision.ref_to_screen(1, ref_x, ref_y)
+    back_x, back_y = vision.screen_to_ref(1, screen_x, screen_y)
+
+    assert round(back_x) == ref_x
+    assert round(back_y) == ref_y
 
 
 def test_find_image_any_captures_once_for_multiple_candidates(monkeypatch):

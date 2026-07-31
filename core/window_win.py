@@ -54,6 +54,22 @@ ROBLOX_PROCESS_NAMES = {
 }
 
 
+def _is_named_or_renamed_variant(proc_name: str, base: str) -> bool:
+    """True if proc_name IS `base` (with or without .exe), or a copy of it
+    renamed with a non-letter suffix -- multi-instance tools that let you run
+    several Roblox windows at once do this, e.g. "robloxplayerbeta_1.exe" or
+    "roblox (2).exe". Deliberately NOT true for an unrelated tool whose name
+    merely happens to start with the same letters, like the real-world
+    "Roblox Account Manager.exe" (a third-party account switcher, not the
+    game) starting with "roblox": there the character right after the base
+    is a lowercase letter ('a'), meaning it's a longer, different word, not a
+    suffix tacked onto a copy of `base` itself."""
+    if not proc_name.startswith(base):
+        return False
+    rest = proc_name[len(base):]
+    return not rest or not rest[0].isalpha()
+
+
 def is_roblox_process_or_title(hwnd: int, title: str) -> bool:
     title_lower = title.lower()
     if "roblox" not in title_lower:
@@ -67,7 +83,18 @@ def is_roblox_process_or_title(hwnd: int, title: str) -> bool:
     # rare no-process case below.
     if "studio" in proc_name:
         return False
-    if proc_name in ROBLOX_PROCESS_NAMES or proc_name.startswith("roblox") or proc_name.startswith("bloxstrap"):
+    # Was a bare proc_name.startswith("roblox")/("bloxstrap") -- matched the
+    # real game's multi-instance-renamed copies as intended, but ALSO matched
+    # any unrelated tool whose executable name happens to start with those
+    # same letters (reported live: "Roblox Account Manager.exe", a third-
+    # party account switcher, was listed and could be docked as if it were
+    # the game). _is_named_or_renamed_variant only allows an exact name or a
+    # non-letter-suffixed copy of one of the real client's own base names.
+    if (proc_name in ROBLOX_PROCESS_NAMES
+            or _is_named_or_renamed_variant(proc_name, "robloxplayerbeta")
+            or _is_named_or_renamed_variant(proc_name, "robloxplayerlauncher")
+            or _is_named_or_renamed_variant(proc_name, "roblox")
+            or _is_named_or_renamed_variant(proc_name, "bloxstrap")):
         return True
     if not proc_name and title_lower.startswith("roblox") and "studio" not in title_lower:
         return True

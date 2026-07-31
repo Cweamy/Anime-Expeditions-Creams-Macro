@@ -237,11 +237,16 @@ const world = (data) => new Function('data', `
       restoredPaths.push([name, events]);
       return { ok: true };
     },
+    import_recordings_bundle: async (bundle) => {
+      restoredPaths.push(...Object.entries(bundle));
+      return { ok: true, added: Object.keys(bundle).length };
+    },
     save_template: async (n, b) => { saved.push(n); return { ok: true }; },
     save_tasks: async () => ({ ok: true }),
   } };
   ${extract('importCustomPaths')}
   ${extract('normalizeExtractAfter')}
+  ${extract('importCustomRecordings')}
   ${extract('importTasks')}
   return { importTasks, saved, restoredPaths, logs, cards: () => taskCards };
 `)(data);
@@ -391,11 +396,16 @@ def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
               restored.push([name, events]);
               return { ok: true };
             },
+            export_recordings_bundle: async () => ({}),
+            import_recordings_bundle: async () => ({ ok: true, added: 0 }),
             save_template: async () => ({ ok: true }),
           }};
           ${extract('collectCustomPathNames')}
           ${extract('exportCustomPaths')}
           ${extract('importCustomPaths')}
+          ${extract('collectRecordingNames')}
+          ${extract('exportCustomRecordings')}
+          ${extract('importCustomRecordings')}
           ${extract('exportTemplates')}
           ${extract('importTemplates')}
           return {
@@ -512,6 +522,7 @@ _TASK_EXPORT_WORLD = """
 const logs = []; let exported = null;
 global.addLog = m => logs.push(m);
 global.exportCustomPaths = async () => ({});
+global.exportCustomRecordings = async () => ({});
 global.taskCards = %s;
 global.pywebview = { api: {
   list_templates: async () => %s,
@@ -549,6 +560,7 @@ const MAX_EXTRACT_AFTER = 9999;
 global.addLog = m => logs.push(m);
 global.confirm = () => confirmAnswer;
 global.importCustomPaths = async () => 0;
+global.importCustomRecordings = async () => 0;
 global.refreshTaskTemplates = async () => {};
 global.renderTaskList = () => {}; global.renderTaskBuilder = () => {};
 global.saveTaskQueue = () => {};
@@ -635,6 +647,7 @@ let confirmAnswer = %s, confirmsSeen = [], loadedIntoEditor = null;
 global.addLog = m => logs.push(m);
 global.confirm = m => { confirmsSeen.push(m); return confirmAnswer; };
 global.importCustomPaths = async () => 0;
+global.importCustomRecordings = async () => 0;
 global.refreshTemplateList = async () => {};
 global.loadSelectedTemplate = async () => { loadedIntoEditor = selectValue; };
 global.creationEditorHasUnsavedChanges = () => %s;

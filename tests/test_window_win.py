@@ -121,6 +121,26 @@ def test_is_roblox_process_or_title(monkeypatch):
     monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "robloxplayerbeta.exe")
     assert window_win.is_roblox_process_or_title(1, "Art Studio Tycoon - Roblox") is True
 
+    # Scenario 9: a third-party account switcher whose exe name merely starts
+    # with "roblox" (reported live, listed and attachable as if it were the
+    # game itself) must NOT match -- the old bare .startswith("roblox") check
+    # matched it just like it matched the real client's renamed copies.
+    monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "robloxaccountmanager.exe")
+    assert window_win.is_roblox_process_or_title(1, "Roblox Account Manager") is False
+
+    # Scenario 10: a multi-instance tool's renamed COPY of the real client
+    # exe (a non-letter suffix tacked onto the real base name) must still
+    # match, so running several accounts at once still works.
+    monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "robloxplayerbeta_1.exe")
+    assert window_win.is_roblox_process_or_title(1, "Roblox") is True
+    monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "roblox (2).exe")
+    assert window_win.is_roblox_process_or_title(1, "Roblox") is True
+
+    # Scenario 11: an unrelated tool riding on the Bloxstrap name gets the
+    # same treatment as scenario 9.
+    monkeypatch.setattr(window_win, "get_process_name", lambda hwnd: "bloxstrapaccountmanager.exe")
+    assert window_win.is_roblox_process_or_title(1, "Roblox") is False
+
 
 
 def test_base_window_manager_and_factory():
