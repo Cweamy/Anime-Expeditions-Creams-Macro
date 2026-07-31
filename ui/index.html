@@ -993,6 +993,17 @@
               </div>
               <button id="toggle-auto-relaunch-roblox" class="toggle-switch" onclick="toggleSetting('auto_relaunch_roblox', this)"></button>
             </div>
+            <div class="setting-row" style="border-bottom: none; grid-column: span 2; align-items: flex-start;">
+              <div>
+                <div class="setting-label">Periodic Roblox Refresh</div>
+                <div class="setting-desc">Restart Roblox after the selected number of hours to clear long-session memory buildup. It waits for a completed match and safe lobby boundary, so it does not interrupt a match or add FPS polling. Off by default.</div>
+              </div>
+              <div class="flex items-center gap-2" style="flex-shrink: 0;">
+                <input id="setting-memory-refresh-hours" type="number" min="1" max="12" step="0.5" class="block-input" style="width: 78px;" onchange="saveMemoryRefreshHours(this)">
+                <span style="font-size: 11px; color: var(--text-muted);">hours</span>
+                <button id="toggle-memory-refresh" class="toggle-switch" onclick="toggleSetting('memory_refresh_enabled', this)"></button>
+              </div>
+            </div>
             <div class="setting-row">
               <div>
                 <div class="setting-label">Background</div>
