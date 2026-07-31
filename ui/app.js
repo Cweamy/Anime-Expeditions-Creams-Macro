@@ -819,6 +819,18 @@ async function saveActionDelay(input) {
   } catch (e) {}
 }
 
+// Settings > General > Roblox controls: the runner samples this only at
+// completed-match boundaries. Keeping the interval here (rather than in a
+// task) makes it apply consistently across every queued task and repeat pass.
+async function saveMemoryRefreshHours(input) {
+  const hours = Math.min(12, Math.max(1, parseFloat(input.value) || 4));
+  input.value = hours;
+  try {
+    await pywebview.api.set_setting('memory_refresh_hours', hours);
+    addLog(`[Settings] Periodic Roblox refresh set to ${hours} hour${hours === 1 ? '' : 's'}.`);
+  } catch (e) {}
+}
+
 async function toggleSetting(key, btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
@@ -1068,6 +1080,10 @@ async function loadSettingsUI() {
     const autoRelaunchEl = document.getElementById('toggle-auto-relaunch-roblox');
     // Default ON -- absent key means enabled.
     if (autoRelaunchEl) autoRelaunchEl.classList.toggle('on', s.auto_relaunch_roblox !== false);
+    const memoryRefreshEl = document.getElementById('toggle-memory-refresh');
+    if (memoryRefreshEl) memoryRefreshEl.classList.toggle('on', !!s.memory_refresh_enabled);
+    const memoryRefreshHoursEl = document.getElementById('setting-memory-refresh-hours');
+    if (memoryRefreshHoursEl) memoryRefreshHoursEl.value = s.memory_refresh_hours ?? 4;
     const actionDelayEl = document.getElementById('setting-action-delay');
     if (actionDelayEl) actionDelayEl.value = s.action_delay_ms || 0;
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');

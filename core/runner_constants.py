@@ -32,6 +32,13 @@ MAP_SELECT_RETRY_ATTEMPTS = 3
 # bad match doesn't end an unattended overnight run.
 TASK_RECOVERY_ATTEMPTS = 3
 
+# Optional full-client refresh for long unattended runs. The runner only
+# checks this at a completed-match boundary, so it never adds a polling loop
+# or competes with the capture/input path while a match is active.
+MEMORY_REFRESH_DEFAULT_HOURS = 4.0
+MEMORY_REFRESH_MIN_HOURS = 1.0
+MEMORY_REFRESH_MAX_HOURS = 12.0
+
 # Fail-safe: losing the SAME map this many times in a row usually means
 # something's actually wrong (a bad team loadout, a stuck client, a map
 # that's genuinely too hard) rather than plain bad luck -- rather than just

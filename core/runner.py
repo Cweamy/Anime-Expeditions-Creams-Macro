@@ -243,6 +243,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # unbroken streak on the SAME map ever counts toward it.
         self._consecutive_losses = 0
         self._consecutive_loss_map = None
+        self._memory_refresh_enabled = False
+        self._memory_refresh_interval_seconds = 0.0
+        self._memory_refresh_next_at = None
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -253,7 +256,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
     def start(self, hwnd_getter, get_tasks, scroll_power: int = None, coords: dict = None,
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
               webhook: dict = None, expedition_color_buttons: bool = True,
-              expedition_camera_o_ms: float = 100, loose_team_ocr_match: bool = False) -> dict:
+              expedition_camera_o_ms: float = 100, loose_team_ocr_match: bool = False,
+              memory_refresh_enabled: bool = False,
+              memory_refresh_hours: float = MEMORY_REFRESH_DEFAULT_HOURS) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -267,6 +272,17 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._expedition_camera_o_ms = max(0.0, float(expedition_camera_o_ms))
         except (TypeError, ValueError):
             self._expedition_camera_o_ms = 100.0
+        self._memory_refresh_enabled = bool(memory_refresh_enabled)
+        try:
+            refresh_hours = float(memory_refresh_hours)
+        except (TypeError, ValueError):
+            refresh_hours = MEMORY_REFRESH_DEFAULT_HOURS
+        refresh_hours = min(MEMORY_REFRESH_MAX_HOURS,
+                            max(MEMORY_REFRESH_MIN_HOURS, refresh_hours))
+        self._memory_refresh_interval_seconds = refresh_hours * 3600.0
+        self._memory_refresh_next_at = (
+            time.monotonic() + self._memory_refresh_interval_seconds
+            if self._memory_refresh_enabled else None)
         self._current_hwnd = None
         self._left_stage_this_run = False
         self._last_applied_team_loadout = None
@@ -313,6 +329,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._current_hwnd = None
         self._last_applied_team_loadout = None
         self._left_stage_this_run = True  # nothing to Leave Stage from -- there's no real match here
+        self._memory_refresh_enabled = False
+        self._memory_refresh_interval_seconds = 0.0
+        self._memory_refresh_next_at = None
         self._thread = threading.Thread(
             target=self._run_debug_test,
             args=(hwnd_getter, mode, macro_name, self._stop_event),
@@ -668,6 +687,26 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if self._fuel_wants_in():
             self._run_fuel_refill(hwnd, stop_event)
 
+    def _memory_refresh_due(self) -> bool:
+        """Return whether the optional long-run Roblox refresh is due.
+
+        This is intentionally a cheap monotonic-clock check. It is called
+        only after a match result, alongside the existing safe-boundary
+        schedulers; there is no independent timer thread touching capture or
+        input while gameplay is active.
+        """
+        return bool(
+            self._memory_refresh_enabled
+            and self._memory_refresh_interval_seconds > 0
+            and self._memory_refresh_next_at is not None
+            and time.monotonic() >= self._memory_refresh_next_at
+        )
+
+    def _complete_memory_refresh(self) -> None:
+        """Arm the next refresh after a successful Roblox rejoin."""
+        self._memory_refresh_next_at = (
+            time.monotonic() + self._memory_refresh_interval_seconds)
+
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,
               webhook: dict = None) -> None:
@@ -1012,6 +1051,19 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     (not is_last_repeat)
                     and self._auto_shop_wants_in()
                 )
+                # Periodic memory refresh uses the same safe-boundary shape
+                # as the other maintenance diversions: leave after this
+                # result, relaunch Roblox into the lobby, then re-enter the
+                # task from scratch. Other scheduled diversions take priority
+                # so two maintenance flows never stack on one result.
+                memory_refresh_wants_in = (
+                    self._memory_refresh_due()
+                    and not restart_needed
+                    and not challenge_wants_in
+                    and not crafting_wants_in
+                    and not fuel_wants_in
+                    and not auto_shop_wants_in
+                )
                 # The bounded-Infinite path and the Leave-at-Minute block
                 # (left_live_match) already left the live match, so there is no
                 # Victory/Defeat screen to process here.
@@ -1020,7 +1072,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                         repeat=(not is_last_repeat) and not challenge_wants_in
                         and not crafting_wants_in and not fuel_wants_in
                         and not auto_shop_wants_in
-                        and not restart_needed):
+                        and not restart_needed and not memory_refresh_wants_in):
                     if stop_event.is_set():
                         return False
                     task_failed = True
@@ -1200,6 +1252,29 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                         task_failed = True
                         break
                     fresh_entry = True
+                    continue
+
+                if memory_refresh_wants_in:
+                    self._log(
+                        "Periodic Roblox refresh is due -- waiting at the "
+                        "safe lobby boundary before restarting the client.")
+                    if not self._attempt_rejoin(hwnd, stop_event):
+                        if stop_event.is_set():
+                            return False
+                        task_failed = True
+                        break
+                    self._complete_memory_refresh()
+                    if self._current_hwnd and wm.is_window(self._current_hwnd):
+                        hwnd = self._current_hwnd
+                    if not is_last_repeat:
+                        if not self._run_task_setup(
+                                hwnd, stop_event, task, mode, map_name, coords,
+                                scroll_power, scroll_nudges, webhook):
+                            if stop_event.is_set():
+                                return False
+                            task_failed = True
+                            break
+                        fresh_entry = True
                     continue
 
                 if not is_last_repeat:

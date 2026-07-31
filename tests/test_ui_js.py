@@ -69,6 +69,24 @@ def test_new_tasks_have_a_bounded_infinite_wave_default(tmp_path):
     assert out["infinite_wave_limit"] == 20
 
 
+def test_memory_refresh_hours_are_clamped_and_saved(tmp_path):
+    out = run_js("""
+        const calls = [];
+        const pywebview = {api: {set_setting: async (key, value) => calls.push([key, value])}};
+        function addLog() {}
+        eval(extract('saveMemoryRefreshHours'));
+        (async () => {
+          const input = {value: '0.25'};
+          await saveMemoryRefreshHours(input);
+          console.log(JSON.stringify({value: input.value, calls}));
+        })();
+    """, tmp_path)
+    assert out == {
+        "value": 1,
+        "calls": [["memory_refresh_hours", 1]],
+    }
+
+
 def test_extract_after_normalization_preserves_decimal_strings_and_repairs_scientific_notation(
         tmp_path):
     out = run_js("""

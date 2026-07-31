@@ -789,6 +789,11 @@ class Api:
             # mid-run (see _dock_watchdog). Default on -- it's the point of an
             # unattended overnight run surviving a Roblox crash.
             "auto_relaunch_roblox": data.get("auto_relaunch_roblox", True),
+            # Optional long-run memory protection. The runner performs this
+            # only at a completed-match/lobby boundary, never from a timer
+            # thread during FPS-sensitive capture or input.
+            "memory_refresh_enabled": data.get("memory_refresh_enabled", False),
+            "memory_refresh_hours": data.get("memory_refresh_hours", 4.0),
             # Off by default -- see core.runner._apply_team_loadout_panel.
             # The strict "unitteams" OCR confirmation is correct for most
             # setups; this loosens it to also accept "teams"/"team"/"loadout"
@@ -1846,7 +1851,9 @@ class Api:
             default_walk_paths, webhook_settings,
             expedition_color_buttons=data.get("expedition_color_buttons", True),
             expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100),
-            loose_team_ocr_match=data.get("loose_team_ocr_match", False))
+            loose_team_ocr_match=data.get("loose_team_ocr_match", False),
+            memory_refresh_enabled=data.get("memory_refresh_enabled", False),
+            memory_refresh_hours=data.get("memory_refresh_hours", 4.0))
 
     def stop_macro(self) -> dict:
         # An explicit Stop cancels any pending auto-reopen/auto-restart -- if
