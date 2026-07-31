@@ -746,6 +746,14 @@ class Api:
             # mid-run (see _dock_watchdog). Default on -- it's the point of an
             # unattended overnight run surviving a Roblox crash.
             "auto_relaunch_roblox": data.get("auto_relaunch_roblox", True),
+            # Off by default -- see core.runner._apply_team_loadout_panel.
+            # The strict "unitteams" OCR confirmation is correct for most
+            # setups; this loosens it to also accept "teams"/"team"/"loadout"
+            # for whoever's setup renders the Load Team list title in a way
+            # the strict check keeps missing. Opt-in because a looser match
+            # risks confirming the panel open on the WRONG screen right
+            # before a fixed-coordinate row click.
+            "loose_team_ocr_match": data.get("loose_team_ocr_match", False),
         }
 
     def get_tasks(self) -> list:
@@ -1259,7 +1267,8 @@ class Api:
             lambda: self.game_hwnd, self.get_tasks, scroll_power, coords, scroll_nudges, debug_screenshots,
             default_walk_paths, webhook_settings,
             expedition_color_buttons=data.get("expedition_color_buttons", True),
-            expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100))
+            expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100),
+            loose_team_ocr_match=data.get("loose_team_ocr_match", False))
 
     def stop_macro(self) -> dict:
         # An explicit Stop cancels any pending auto-reopen/auto-restart -- if

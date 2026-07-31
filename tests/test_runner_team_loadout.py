@@ -147,6 +147,68 @@ def test_windows_ocr_confirms_current_unit_teams_title_without_lowering_threshol
     )
 
 
+def test_generic_ocr_text_does_not_confirm_by_default(monkeypatch):
+    """Loose Team Panel Detection (Settings > Debug) is off by default --
+    a generic word like "Teams" (which the still-open Unit Manager's own
+    button already reads) must NOT be enough to confirm the Load Team list
+    is open unless the user opted into the wider match."""
+    runner = _runner()
+    assert runner._loose_team_ocr_match is False
+    stop = threading.Event()
+    team_match = {"cx": 100, "cy": 100, "score": 0.95}
+    saved = []
+
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner_module.vision, "wait_for_image", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
+    monkeypatch.setattr(
+        runner_module.vision, "capture_game_bgr",
+        lambda _hwnd: np.zeros((756, 1152, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(runner_module.ocr_windows, "is_available", lambda: True)
+    monkeypatch.setattr(runner_module.ocr_windows, "ocr_image", lambda _frame: "Teams")
+    monkeypatch.setattr(
+        runner, "_save_debug_screenshot_unconditional",
+        lambda _hwnd, name: saved.append(name),
+    )
+
+    assert runner._apply_team_loadout_panel(123, stop, team_match, 1, "include") is False
+    assert saved == ["team_loadout_open_failed"]
+
+
+def test_generic_ocr_text_confirms_when_loose_match_is_enabled(monkeypatch):
+    runner = _runner()
+    runner._loose_team_ocr_match = True
+    stop = threading.Event()
+    team_match = {"cx": 100, "cy": 100, "score": 0.95}
+    confirm_match = {"cx": 483, "cy": 416, "score": 0.98}
+    include_match = {"cx": 456, "cy": 436, "score": 0.99}
+
+    def wait_for_image(_hwnd, name, **_kwargs):
+        return {
+            "team_loadout_open": None,
+            "confirm": confirm_match,
+            "include": include_match,
+        }[name]
+
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
+    monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
+    monkeypatch.setattr(
+        runner_module.vision, "capture_game_bgr",
+        lambda _hwnd: np.zeros((756, 1152, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(runner_module.ocr_windows, "is_available", lambda: True)
+    monkeypatch.setattr(runner_module.ocr_windows, "ocr_image", lambda _frame: "Teams")
+
+    assert runner._apply_team_loadout_panel(123, stop, team_match, 1, "include") is True
+    assert any(
+        'confirmed by Windows OCR: "Teams"' in logged.args[0]
+        for logged in runner._log.call_args_list
+    )
+
+
 def test_equipment_failure_saves_screen_and_fails_instead_of_silently_continuing(monkeypatch):
     runner = _runner()
     stop = threading.Event()
