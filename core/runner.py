@@ -589,7 +589,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         running -- Play, Story, every stage row, ... -- adds up fast, so this
         only actually writes when the toggle is on. Returns None otherwise,
         which callers fold into their log line's " Debug: ..." suffix."""
-        return vision.save_match_debug(hwnd, name, match) if self._debug_screenshots else None
+        return vision.save_match_debug(
+            hwnd, name, match, log=self._log) if self._debug_screenshots else None
 
     def _run_session(self, *args) -> None:
         """Thread entry for a real run. Wraps _run only to guarantee this

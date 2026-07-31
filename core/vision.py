@@ -761,7 +761,7 @@ def find_in_gray_multiscale(haystack_gray: np.ndarray, name: str, template_dir: 
 DEBUG_DIR = os.path.join(constants.APP_DIR, "debug")
 
 
-def save_match_debug(hwnd: int, name: str, match: dict) -> str:
+def save_match_debug(hwnd: int, name: str, match: dict, log=None) -> str:
     """Saves a full-window screenshot with the matched box drawn on it (green
     rect + name/score label) to debug/vision_<name>.png -- lets you actually
     SEE what got clicked instead of guessing from the log alone. Especially
@@ -769,18 +769,33 @@ def save_match_debug(hwnd: int, name: str, match: dict) -> str:
     and a template cropped too loosely around the shared shape can match
     either one with a similar score; the drawn box makes that immediately
     obvious. match must be in full-window coords (what find_image/
-    wait_for_image return -- already offset if a region was used)."""
-    os.makedirs(DEBUG_DIR, exist_ok=True)
-    bgr = capture_game_bgr(hwnd)
-    if bgr is None:
-        raise RuntimeError("window capture returned no image")
-    x, y, w, h = match["x"], match["y"], match["w"], match["h"]
-    cv2.rectangle(bgr, (x, y), (x + w, y + h), (0, 255, 0), 2)
-    cv2.putText(bgr, f"{name} {match['score']:.2f}", (x, max(12, y - 6)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-    path = os.path.join(DEBUG_DIR, f"vision_{name}.png")
-    cv2.imwrite(path, bgr)
-    return path
+    wait_for_image return -- already offset if a region was used).
+
+    This is optional diagnostics, so capture/drawing/disk failures are logged
+    and ignored rather than aborting the macro action that was already found.
+    """
+    try:
+        os.makedirs(DEBUG_DIR, exist_ok=True)
+        bgr = capture_game_bgr(hwnd)
+        if bgr is None:
+            raise RuntimeError("window capture returned no image")
+        # Exact-size PrintWindow captures can be zero-copy NumPy views over
+        # immutable ``bytes``. OpenCV 5 correctly refuses to use those as a
+        # drawing output. A private C-contiguous copy also handles the negative
+        # stride introduced by the RGB -> BGR channel view.
+        bgr = np.array(bgr, dtype=np.uint8, copy=True, order="C")
+        x, y, w, h = match["x"], match["y"], match["w"], match["h"]
+        cv2.rectangle(bgr, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(bgr, f"{name} {match['score']:.2f}", (x, max(12, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+        path = os.path.join(DEBUG_DIR, f"vision_{name}.png")
+        if not cv2.imwrite(path, bgr):
+            raise RuntimeError(f"OpenCV could not write {path}")
+        return path
+    except Exception as exc:
+        if log is not None:
+            log(f'[Debug] Couldn\'t save match screenshot for "{name}" -- continuing: {exc}')
+        return None
 
 
 def save_window_screenshot(hwnd: int, path: str) -> str:
