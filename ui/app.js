@@ -1072,6 +1072,8 @@ async function loadSettingsUI() {
     if (actionDelayEl) actionDelayEl.value = s.action_delay_ms || 0;
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
     if (debugScreenshotsEl) debugScreenshotsEl.classList.toggle('on', !!s.debug_screenshots);
+    const looseTeamOcrEl = document.getElementById('toggle-loose-team-ocr-match');
+    if (looseTeamOcrEl) looseTeamOcrEl.classList.toggle('on', !!s.loose_team_ocr_match);
     const expColorEl = document.getElementById('toggle-expedition-color');
     // Default ON -- the key is simply absent until the user first flips it.
     if (expColorEl) expColorEl.classList.toggle('on', s.expedition_color_buttons !== false);
@@ -6137,9 +6139,10 @@ function renderCreationLoadout() {
   const el = document.getElementById('creation-loadout');
   if (!el) return;
   const teams = ['', '1', '2', '3', '4', '5', '6', '7', '8'];
+  // Ensure string conversion so numeric values (e.g. 2) match dropdown option strings
   const teamSel = `
     <select class="task-select" onchange="creationTeam = this.value; renderCreationLoadout()">
-      ${teams.map(v => `<option value="${v}" ${v === creationTeam ? 'selected' : ''}>${v === '' ? 'No Team' : 'Team ' + v}</option>`).join('')}
+      ${teams.map(v => `<option value="${v}" ${v === String(creationTeam) ? 'selected' : ''}>${v === '' ? 'No Team' : 'Team ' + v}</option>`).join('')}
     </select>`;
   const eqSeg = creationTeam === '' ? '' : `
     <span class="palette-group-label" style="margin: 0; white-space: nowrap; flex-shrink: 0;">Equipment :</span>

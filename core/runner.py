@@ -196,6 +196,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._paused_logged = False
         self._stop_logged = False  # one "Stopped." per stop -- see _checkpoint
         self._debug_screenshots = False
+        # Off by default -- see _apply_team_loadout_panel's OCR confirmation.
+        self._loose_team_ocr_match = False
         self._current_hwnd = None       # set at the top of _run -- lets _checkpoint reach Leave Stage on stop
         self._hwnd_getter = None        # set at the top of _run -- lets _attempt_rejoin find a re-docked hwnd
         self._left_stage_this_run = False
@@ -247,7 +249,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
     def start(self, hwnd_getter, get_tasks, scroll_power: int = None, coords: dict = None,
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
               webhook: dict = None, expedition_color_buttons: bool = True,
-              expedition_camera_o_ms: float = 100) -> dict:
+              expedition_camera_o_ms: float = 100, loose_team_ocr_match: bool = False) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -255,6 +257,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._paused_logged = False
         self._stop_logged = False
         self._debug_screenshots = bool(debug_screenshots)
+        self._loose_team_ocr_match = bool(loose_team_ocr_match)
         self._expedition_color_buttons = bool(expedition_color_buttons)
         try:
             self._expedition_camera_o_ms = max(0.0, float(expedition_camera_o_ms))
@@ -2224,7 +2227,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         blocks = data.get("blocks") or {}
         if isinstance(blocks, list):
             return True  # old-format template -- same as _run_prestart_blocks
-        team = blocks.get("team") or ""
+        # Read team setting from template blocks or task fallback (handling int/str types)
+        raw_team = blocks.get("team") if blocks.get("team") is not None and blocks.get("team") != "" else task.get("team")
+        team = str(raw_team).strip() if raw_team is not None else ""
         if not team:
             return True
         equipment = blocks.get("equipment") if blocks.get("equipment") in ("include", "exclude") else "include"
@@ -2305,8 +2310,19 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 frame = vision.capture_game_bgr(hwnd)
                 text = ocr_windows.ocr_image(frame) if frame is not None else ""
                 normalized = "".join((text or "").lower().split())
-                if "unitteams" in normalized:
-                    loadout_open = {"detector": "windows_ocr", "text": "Unit Teams"}
+                # Strict by default: "unitteams" (no space) is specific to
+                # this exact screen. Settings > Debug > "Loose Team Panel
+                # Detection" opts into also accepting "teams"/"team"/
+                # "loadout" for setups where the strict text keeps missing --
+                # off by default because those are generic enough to already
+                # appear on the PREVIOUS screen (the still-open Unit Manager,
+                # whose own Teams button reads "Teams"), which would confirm
+                # the panel open before the transition actually happens, right
+                # before a fixed-coordinate row click.
+                keywords = (("unitteams", "loadteam", "teamloadout", "teams", "team", "loadout")
+                            if self._loose_team_ocr_match else ("unitteams",))
+                if any(k in normalized for k in keywords):
+                    loadout_open = {"detector": "windows_ocr", "text": text or "Unit Teams"}
             if loadout_open is not None:
                 break
             if stop_event.is_set():
@@ -2317,7 +2333,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._save_debug_screenshot_unconditional(hwnd, "team_loadout_open_failed")
             return False
         if loadout_open.get("detector") == "windows_ocr":
-            self._log('[Macro] Load Team list open (confirmed by Windows OCR: "Unit Teams").')
+            self._log(f'[Macro] Load Team list open (confirmed by Windows OCR: "{loadout_open.get("text")}").')
         else:
             self._log(f'[Macro] Load Team list open (score {loadout_open["score"]:.2f}).')
         # The title arrives before the row animation has completely settled.
