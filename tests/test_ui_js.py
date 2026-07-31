@@ -932,6 +932,7 @@ def test_detect_block_round_trips_through_save_and_load(tmp_path):
         type: 'detect', image: 'boss', advanced: true, mode: 'multi',
         images: ['a', 'b'], logic: 'or', expr: "find('x')",
         region: { x: 1, y: 2, w: 3, h: 4 }, threshold: 0.8, showAll: true,
+        loop: true, loopAttempts: 5, loopIntervalMs: 750,
         then: [{ type: 'wait_ms', params: { ms: 500 } }],
         else: [{ type: 'send_key', params: {}, key: 'q',
                  then: undefined }],
@@ -941,6 +942,7 @@ def test_detect_block_round_trips_through_save_and_load(tmp_path):
       console.log(JSON.stringify({
         mode: loaded.mode, images: loaded.images, logic: loaded.logic,
         region: loaded.region, threshold: loaded.threshold, showAll: loaded.showAll,
+        loop: loaded.loop, loopAttempts: loaded.loopAttempts, loopIntervalMs: loaded.loopIntervalMs,
         thenType: loaded.then[0].type, thenMs: loaded.then[0].params.ms,
         elseType: loaded.else[0].type, elseKey: loaded.else[0].key,
         thenHasId: !!loaded.then[0].id,
@@ -954,6 +956,8 @@ def test_detect_block_round_trips_through_save_and_load(tmp_path):
     assert out['region'] == {'x': 1, 'y': 2, 'w': 3, 'h': 4}
     assert out['threshold'] == 0.8
     assert out['showAll'] is True
+    assert out['loop'] is True
+    assert out['loopAttempts'] == 5 and out['loopIntervalMs'] == 750
     assert out['thenType'] == 'wait_ms' and out['thenMs'] == 500
     assert out['elseType'] == 'send_key' and out['elseKey'] == 'q'
     assert out['thenHasId'] is True           # nested blocks get real ids on load
