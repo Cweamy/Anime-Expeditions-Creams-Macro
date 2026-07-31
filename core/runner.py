@@ -724,6 +724,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._run_guarded_phase(
                 "Auto Fuel", hwnd, stop_event,
                 lambda: self._run_fuel_refill_if_due(hwnd, stop_event))
+            shop_enabled = self._auto_shop_wants_in()
             self._run_guarded_phase(
                 "Auto Shop", hwnd, stop_event,
                 lambda: self._run_auto_shop_if_due(hwnd, stop_event))
@@ -739,8 +740,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             # than keep replaying a stale snapshot from when the run started.
             tasks = get_tasks()
             if not tasks:
-                if bounty_enabled:
-                    self._log("[Macro] Auto Bounty pass finished and the Task Queue is empty -- going Idle.")
+                if bounty_enabled or shop_enabled:
+                    self._log("[Macro] Resource automation pass finished and the Task Queue is empty -- going Idle.")
                 else:
                     self._log("[Macro] Task queue is empty -- add a task on the Task screen first.")
                 self._set_status(action="Idle")

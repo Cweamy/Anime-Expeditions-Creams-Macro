@@ -1439,10 +1439,7 @@ class Api:
             "shops": {
                 "gold_shop": {
                     "enabled": gold_config["enabled"],
-                    "state": auto_shop.normalize_shop_state(
-                        source_gold.get("state"),
-                        period,
-                    ),
+                    "state": {},
                     "items": {},
                 },
             },
@@ -1460,6 +1457,19 @@ class Api:
                     period,
                 ),
             }
+
+        shop_state = auto_shop.normalize_shop_state(
+            source_gold.get("state"),
+            period,
+        )
+        has_pending = any(
+            (item.get("state") or {}).get("status") == auto_shop.STATUS_PENDING
+            for item in canonical["shops"]["gold_shop"]["items"].values()
+        )
+        if has_pending and shop_state.get("status") == auto_shop.STATUS_FAILED_TODAY:
+            shop_state = auto_shop.fresh_shop_state(period)
+        canonical["shops"]["gold_shop"]["state"] = shop_state
+
         return canonical
 
     def _save_auto_shop_settings(self, settings: dict) -> dict:
@@ -1567,9 +1577,9 @@ class Api:
         )
         if item is None:
             return {"ok": False, "reason": "bad_item"}
-        item["state"] = auto_shop.fresh_item_state(
-            current_auto_shop_period()
-        )
+        period = current_auto_shop_period()
+        item["state"] = auto_shop.fresh_item_state(period)
+        shop["state"] = auto_shop.fresh_shop_state(period)
         self._save_auto_shop_settings(settings)
         return {"ok": True}
 

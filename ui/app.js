@@ -3451,21 +3451,28 @@ function renderAutoShopScreen() {
     const runtime = item.state || {};
     const attempts = Number(runtime.attempts || 0);
     const status = autoShopStatusLabel(runtime.status);
+    const isCompleted = runtime.status === 'completed' || runtime.status === 'out_of_stock' || runtime.status === 'max_inventory';
     const resetToday = runtime.status && runtime.status !== 'pending'
-      ? `<button type="button" class="seg-btn active"
+      ? `<button type="button" class="block-mod-btn" style="padding: 3px 10px; font-size: 11px; border-color: rgba(224, 86, 122, 0.4); color: var(--rose);"
                  onclick="resetAutoShopItemToday('gold_shop', '${item.key}')">Reset Today</button>`
       : '';
     return `
-      <div class="task-card" data-key="${escapeHtml(item.key)}" style="--tqc: var(--amber); cursor: default;">
-        <div class="tq-text" style="min-width: 0; flex: 1;">
-          <div class="challenge-map-row" style="margin-top: 0;">
+      <div class="task-card" data-key="${escapeHtml(item.key)}" style="--tqc: var(--amber); cursor: default; padding: 10px 14px; margin-bottom: 6px;">
+        <div class="tq-text" style="width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+          <div style="display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1;">
             <button class="toggle-switch ${item.enabled ? 'on' : ''}"
                     onclick="toggleAutoShopItem('gold_shop', '${item.key}', this)"></button>
-            <div style="min-width: 130px; flex: 1;">
-              <div class="tq-title">${escapeHtml(item.name)}</div>
-              <div class="setting-desc">Daily max: ${item.daily_maximum} | ${status}${attempts ? ` | ${attempts}/3 attempts` : ''}</div>
+            <div style="min-width: 0; flex: 1;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="tq-title" style="font-weight: 600; font-size: 14px; color: var(--text);">${escapeHtml(item.name)}</span>
+                ${resetToday}
+              </div>
+              <div class="setting-desc" style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">
+                Daily max: ${item.daily_maximum} | <span style="color: ${isCompleted ? 'var(--teal)' : 'var(--text-muted)'};">${status}</span>${attempts ? ` | ${attempts}/3 attempts` : ''}
+              </div>
             </div>
-            ${resetToday}
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
             <div class="seg-toggle" style="width: auto;">
               <button type="button" value="max" class="seg-btn ${isMax ? 'active' : ''}"
                       onclick="setAutoShopItemMax('gold_shop', '${item.key}')">Max</button>
@@ -3473,7 +3480,7 @@ function renderAutoShopScreen() {
                       onclick="setAutoShopItemNumberMode('gold_shop', '${item.key}')">Number</button>
             </div>
             <input type="number" class="block-input" min="1" max="${item.daily_maximum}"
-                   style="width: 64px; ${isMax ? 'visibility: hidden;' : ''}"
+                   style="width: 58px; text-align: center; ${isMax ? 'visibility: hidden;' : ''}"
                    value="${numericTarget}" placeholder="Qty"
                    onchange="setAutoShopItemTarget('gold_shop', '${item.key}', this.value, ${item.daily_maximum})">
           </div>

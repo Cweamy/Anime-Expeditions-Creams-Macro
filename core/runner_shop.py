@@ -35,8 +35,9 @@ SHOP_OUT_OF_STOCK_BANDS = {
 }
 SHOP_OUT_OF_STOCK_DEFAULT_BAND = (218, 110)
 SHOP_LIST_ACTION_VIEWPORT = (390, 218, 316, 362)
-SHOP_SETTLE_DELAY = 0.6
-SHOP_LIST_SETTLE_DELAY = 0.3
+SHOP_SETTLE_DELAY = 1.2
+SHOP_LIST_SETTLE_DELAY = 0.8
+SHOP_MODAL_POST_CLOSE_DELAY = 0.8
 SHOP_CAPTURE_INTERVAL = 0.12
 SHOP_ITEM_SCROLL_STEPS = {
     "cursed_boba": 0,
@@ -145,12 +146,14 @@ class ShopOps:
         return str((state or {}).get("period") or auto_shop.current_auto_shop_period())
 
     @staticmethod
-    def _shop_region_is_visible(region: tuple) -> bool:
+    def _shop_region_is_visible(
+            region: tuple, allow_top_clip: bool = False) -> bool:
         x, y, width, height = region
         view_x, view_y, view_width, view_height = SHOP_LIST_ACTION_VIEWPORT
+        min_y = 180 if allow_top_clip else view_y
         return (
             x >= view_x
-            and y >= view_y
+            and y >= min_y
             and x + width <= view_x + view_width
             and y + height <= view_y + view_height
         )
@@ -186,11 +189,12 @@ class ShopOps:
         except vision.TemplateNotFound as exc:
             self._log(f"[Shop] {exc}")
             return None
+        allow_top = (scroll_amount == 0)
         if match is not None:
             stock_region = auto_shop_vision.stock_status_region_from_item_match(match)
             buy_region = auto_shop_vision.initial_buy_region_from_item_match(match)
             if (
-                    self._shop_region_is_visible(stock_region)
+                    self._shop_region_is_visible(stock_region, allow_top_clip=allow_top)
                     and self._shop_region_is_visible(buy_region)):
                 return match
 
@@ -214,7 +218,7 @@ class ShopOps:
                 stock_region = auto_shop_vision.stock_status_region_from_item_match(match)
                 buy_region = auto_shop_vision.initial_buy_region_from_item_match(match)
                 if (
-                        self._shop_region_is_visible(stock_region)
+                        self._shop_region_is_visible(stock_region, allow_top_clip=allow_top)
                         and self._shop_region_is_visible(buy_region)):
                     return match
         self._log(
@@ -225,28 +229,54 @@ class ShopOps:
 
     def _shop_find_visible_item(
             self, hwnd, item: dict, stop_event: threading.Event):
-        """Find one actionable card without changing the current list position."""
+        """Find one actionable card with 1-notch refinement if slightly off."""
         if self._checkpoint(stop_event):
             return None
         template = auto_shop.item_definition(item["key"])["template"]
         column = SHOP_ITEM_COLUMNS[item["key"]]
-        try:
-            match = vision.find_image(
-                hwnd,
-                template,
-                region=SHOP_LIST_SLOT_VIEWPORTS[column],
-            )
-        except vision.TemplateNotFound as exc:
-            self._log(f"[Shop] {exc}")
-            return None
-        if match is None:
-            return None
-        stock_region = auto_shop_vision.stock_status_region_from_item_match(match)
-        buy_region = auto_shop_vision.initial_buy_region_from_item_match(match)
-        if (
-                self._shop_region_is_visible(stock_region)
-                and self._shop_region_is_visible(buy_region)):
-            return match
+        scroll_amount = SHOP_ITEM_SCROLL_AMOUNTS.get(item["key"], 0)
+        allow_top = (scroll_amount == 0)
+        for attempt in range(2):
+            if self._checkpoint(stop_event):
+                return None
+            try:
+                match = vision.find_image(
+                    hwnd,
+                    template,
+                    region=SHOP_LIST_SLOT_VIEWPORTS[column],
+                )
+            except vision.TemplateNotFound as exc:
+                self._log(f"[Shop] {exc}")
+                return None
+            if match is not None:
+                stock_region = auto_shop_vision.stock_status_region_from_item_match(match)
+                buy_region = auto_shop_vision.initial_buy_region_from_item_match(match)
+                if (
+                        self._shop_region_is_visible(stock_region, allow_top_clip=allow_top)
+                        and self._shop_region_is_visible(buy_region)):
+                    return match
+            if attempt == 0:
+                time.sleep(0.3)
+
+        # Refinement search: if scroll slightly undershot, try a 1-notch adjustment (-120px)
+        if scroll_amount != 0 and scroll_amount != SHOP_BOTTOM_SCROLL_AMOUNT:
+            self._mouse.scroll(SHOP_SCROLL_REFINEMENT_AMOUNT)
+            time.sleep(0.4)
+            try:
+                match = vision.find_image(
+                    hwnd,
+                    template,
+                    region=SHOP_LIST_SLOT_VIEWPORTS[column],
+                )
+            except vision.TemplateNotFound:
+                match = None
+            if match is not None:
+                stock_region = auto_shop_vision.stock_status_region_from_item_match(match)
+                buy_region = auto_shop_vision.initial_buy_region_from_item_match(match)
+                if (
+                        self._shop_region_is_visible(stock_region, allow_top_clip=allow_top)
+                        and self._shop_region_is_visible(buy_region)):
+                    return match
         return None
 
     def _shop_find_slot_out_of_stock(
@@ -352,6 +382,13 @@ class ShopOps:
                     self._log(f'[Shop] "{item["name"]}" is out of stock.')
                     continue
                 match = self._shop_find_visible_item(hwnd, item, stop_event)
+                cancel_match = None
+                if match is None:
+                    synthetic = self._shop_synthetic_item_match(item, scroll_amount)
+                    cancel_match = self._shop_try_fallback_modal(hwnd, item, synthetic, stop_event)
+                    if cancel_match is not None:
+                        match = synthetic
+
                 if match is None:
                     self._shop_save_item_state(
                         shop_key,
@@ -364,13 +401,74 @@ class ShopOps:
                         "it will retry on the next Auto Shop pass."
                     )
                     continue
-                self._shop_process_visible_item(
-                    hwnd,
-                    shop_key,
-                    item,
-                    match,
-                    stop_event,
-                )
+                if cancel_match is not None:
+                    self._shop_process_visible_item(
+                        hwnd,
+                        shop_key,
+                        item,
+                        match,
+                        stop_event,
+                        cancel_match=cancel_match,
+                    )
+                else:
+                    self._shop_process_visible_item(
+                        hwnd,
+                        shop_key,
+                        item,
+                        match,
+                        stop_event,
+                    )
+
+    def _shop_synthetic_item_match(self, item: dict, scroll_amount: int) -> dict:
+        """Construct synthetic item match coordinates from calibrated slot position."""
+        column = SHOP_ITEM_COLUMNS[item["key"]]
+        center_x = 475 if column == "left" else 629
+        center_y = 295 if scroll_amount == 0 else 430
+        return {
+            "x": center_x - 30,
+            "y": center_y - 27,
+            "w": 61,
+            "h": 55,
+            "cx": center_x,
+            "cy": center_y,
+        }
+
+    def _shop_try_fallback_modal(
+            self, hwnd, item: dict, synthetic_match: dict,
+            stop_event: threading.Event):
+        """Attempt clicking calibrated buy button if template match failed, returning cancel_match if modal opens."""
+        if self._checkpoint(stop_event):
+            return None
+        region = auto_shop_vision.initial_buy_region_from_item_match(synthetic_match)
+        try:
+            buy_crop = vision.capture_game_bgr(hwnd, region)
+        except Exception:
+            buy_crop = None
+        if buy_crop is None or not buy_crop.size or not auto_shop_vision.buy_button_is_enabled(buy_crop):
+            return None
+        x, y, width, height = region
+        buy_match = {
+            "x": x,
+            "y": y,
+            "w": width,
+            "h": height,
+            "cx": x + width // 2,
+            "cy": y + height // 2,
+        }
+        vision.click_match(self._mouse, hwnd, buy_match)
+        try:
+            cancel_match = vision.wait_for_image(
+                hwnd,
+                auto_shop.AUTO_SHOP_UI_TEMPLATES["modal_cancel"],
+                timeout=SHOP_MODAL_TIMEOUT,
+                stop_event=stop_event,
+            )
+        except Exception:
+            cancel_match = None
+        if cancel_match is not None:
+            self._log(f'[Shop] Fallback modal opened for "{item["name"]}"!')
+            return cancel_match
+        return None
 
     def _shop_read_observation(
             self, hwnd, item: dict, item_match: dict,
@@ -569,6 +667,7 @@ class ShopOps:
                 SHOP_MODAL_CLOSE_TIMEOUT,
                 stop_event,
         ):
+            time.sleep(SHOP_MODAL_POST_CLOSE_DELAY)
             return True
         self._shop_cancel_modal(hwnd, cancel_match)
         return False
@@ -639,7 +738,7 @@ class ShopOps:
 
     def _shop_process_visible_item(
             self, hwnd, shop_key: str, item: dict, item_match: dict,
-            stop_event: threading.Event) -> None:
+            stop_event: threading.Event, cancel_match: dict = None) -> None:
         """Buy one already-visible card without reading its remaining stock."""
         item_key = item["key"]
         period = self._shop_state_period(item.get("state") or {})
@@ -683,11 +782,12 @@ class ShopOps:
             f'[Shop] Opening purchase for "{item["name"]}": '
             f"{amount} requested."
         )
-        cancel_match = self._shop_open_purchase_modal(
-            hwnd,
-            item_match,
-            stop_event,
-        )
+        if cancel_match is None:
+            cancel_match = self._shop_open_purchase_modal(
+                hwnd,
+                item_match,
+                stop_event,
+            )
         if cancel_match is None:
             if not stop_event.is_set():
                 self._shop_save_item_state(
@@ -974,16 +1074,16 @@ class ShopOps:
                 return False
             if self._checkpoint(stop_event):
                 return False
-            time.sleep(SHOP_SETTLE_DELAY)
+            if name != auto_shop.AUTO_SHOP_UI_TEMPLATES["destination"]:
+                time.sleep(0.3)
 
-        if not self._wait_for_image_gone(
-                hwnd,
-                ("nav_play",),
-                SHOP_NAV_TIMEOUT,
-                stop_event,
-        ):
-            self._log("[Shop] Gold Shop teleport never started.")
-            return False
+        # Check for teleport fade-out immediately after clicking the destination
+        self._wait_for_image_gone(
+            hwnd,
+            ("nav_play",),
+            SHOP_NAV_TIMEOUT,
+            stop_event,
+        )
         self._set_status(action="Loading Gold Shop...")
         try:
             loaded = vision.wait_for_image(
@@ -996,19 +1096,32 @@ class ShopOps:
             loaded = None
         if loaded is None:
             return False
+        time.sleep(1.5)
         if not wm.activate_window(hwnd):
             self._log("[Shop] Couldn't confirm Roblox focus before opening Gold Shop.")
             return False
-        time.sleep(0.5)
+        time.sleep(0.3)
         camera.tilt_camera_top_down(self._mouse, hwnd)
-        self._keyboard.tap(ord("E"))
-        self._set_status(action="Selecting Gold Shop...")
-        if self._click_found_image(
+        time.sleep(0.5)
+
+        # Retry pressing E and locating shop_tab up to 3 times
+        tab_match = None
+        for attempt in range(3):
+            if self._checkpoint(stop_event):
+                return False
+            self._set_status(action="Selecting Gold Shop...")
+            self._keyboard.tap(ord("E"))
+            tab_match = self._click_found_image(
                 hwnd,
                 auto_shop.AUTO_SHOP_UI_TEMPLATES["shop_tab"],
-                SHOP_OPEN_TIMEOUT,
+                3.0,
                 stop_event,
-        ) is None:
+            )
+            if tab_match is not None:
+                break
+            time.sleep(0.5)
+
+        if tab_match is None:
             self._log("[Shop] Couldn't find the Gold Shop tab after pressing E.")
             return False
         if self._checkpoint(stop_event):
