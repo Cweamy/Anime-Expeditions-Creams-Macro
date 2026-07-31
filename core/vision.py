@@ -64,6 +64,17 @@ def ref_to_screen(hwnd: int, x: float, y: float):
     left, top, sx, sy = _window_geometry(hwnd)
     return int(left + x * sx), int(top + y * sy)
 
+
+def screen_to_ref(hwnd: int, x: float, y: float):
+    """Absolute screen point -> reference-space point, the inverse of
+    ref_to_screen. Used to capture a live mouse position (e.g. the Macro
+    Manager Record block, see core.input_record) into the same portable
+    reference space every other stored coordinate in this codebase already
+    uses, so a recording made at one window position/size replays correctly
+    at any other."""
+    left, top, sx, sy = _window_geometry(hwnd)
+    return (x - left) / sx, (y - top) / sy
+
 UI_ASSETS_DIR = os.path.join(constants.ASSETS_DIR, "ui")
 # Map name-label crops (core.stage_select) -- kept separate from Assets/ui
 # since these are keyed by map name (one FOLDER per map, named to match a

@@ -326,7 +326,6 @@ class CraftingOps:
         self._stop_logged = False
         self._coords = {**DEFAULT_COORDS, **(coords or {})}
         self._current_hwnd = None
-        self._left_stage_this_run = True  # nothing to Leave Stage from here
         self._thread = threading.Thread(
             target=self._run_crafting_test, args=(hwnd_getter, self._stop_event), daemon=True)
         self._thread.start()

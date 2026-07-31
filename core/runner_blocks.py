@@ -11,6 +11,7 @@ import threading
 import time
 
 from . import detect
+from . import input_record
 from . import keys
 from . import paths as walk_paths
 from . import vision
@@ -111,7 +112,9 @@ class BlockOps:
                 continue
             self._battle_block_index, self._battle_block_state = rt["index"], rt["state"]
             try:
-                self._run_battle_blocks_tick(hwnd, stop_event, rt["blocks"], first_repeat, macro_name)
+                self._run_battle_blocks_tick(
+                    hwnd, stop_event, rt["blocks"], first_repeat, macro_name,
+                    persistent_detects=rt.setdefault("completed_detects", set()))
                 if self._battle_block_index >= len(rt["blocks"]):
                     self._battle_block_index = 0  # reached the end -> loop restarts
                     self._battle_block_state = {}
@@ -122,7 +125,7 @@ class BlockOps:
         self._battle_block_index, self._battle_block_state = saved_index, saved_state
 
     def _run_battle_blocks_tick(self, hwnd, stop_event: threading.Event, battle_blocks: list, first_repeat: bool,
-                                  macro_name: str = None) -> None:
+                                  macro_name: str = None, persistent_detects=None) -> None:
         """Advances the Battle-phase block list by one step, called once per
         poll of _wait_for_match_result's Victory/Defeat loop instead of
         running the whole list to completion up front -- Upgrade Unit can
@@ -147,8 +150,38 @@ class BlockOps:
                 self._battle_block_index += block.get("_offset", 1)
                 continue
             if btype == "detect":
+                detect_index = self._battle_block_index
+                if persistent_detects is not None and detect_index in persistent_detects:
+                    # A looped Detect already found its condition (or used up
+                    # its configured search attempts) earlier in this match.
+                    # Skip the complete Then/Else construct when Loop A/B
+                    # comes around again so the action cannot repeat while the
+                    # matched image remains visible.
+                    self._battle_block_index += block.get("_end_offset", 1)
+                    self._battle_block_state = {}
+                    return
+                loop_enabled, max_attempts, loop_interval = detect.loop_settings(block)
+                detect_state = self._battle_block_state.setdefault("detect_loop", {})
+                if loop_enabled:
+                    next_check = detect_state.get("next_check", 0.0)
+                    if next_check and time.time() < next_check:
+                        return
                 found, matches = detect.evaluate(self, hwnd, block)
                 self._log_detect_outcome(block, found, matches, self._battle_block_index + 1, "Battle")
+                if loop_enabled and not found:
+                    detect_state["attempts"] = detect_state.get("attempts", 0) + 1
+                    if max_attempts and detect_state["attempts"] >= max_attempts:
+                        if persistent_detects is not None:
+                            persistent_detects.add(detect_index)
+                        self._log(f'[Macro] Detect block #{self._battle_block_index + 1} reached its '
+                                  f'{max_attempts}-search limit -- taking Else.')
+                        self._battle_block_index += block.get("_else_offset", 1)
+                        self._battle_block_state = {}
+                        return
+                    detect_state["next_check"] = time.time() + loop_interval
+                    return
+                if loop_enabled and persistent_detects is not None:
+                    persistent_detects.add(detect_index)
                 self._battle_block_index += 1 if found else block.get("_else_offset", 1)
                 self._battle_block_state = {}
                 return
@@ -209,6 +242,10 @@ class BlockOps:
                 self._battle_block_state = {}
             elif btype == "walk":
                 self._run_walk_block_tick(stop_event, block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
+            elif btype == "record":
+                self._run_record_macro_tick(hwnd, stop_event, block, self._battle_block_index + 1)
                 done = True
                 self._battle_block_state = {}
             elif btype == "wait_wave":
@@ -527,6 +564,31 @@ class BlockOps:
         walk_paths.replay_events(events, self._keyboard, stop_event, sprint=sprint)
         self._log(f'{label}: walk finished{" (sprinting)" if sprint else ""}.')
 
+    def _run_record_macro_tick(self, hwnd, stop_event: threading.Event, block: dict, block_num: int,
+                                 phase_label: str = "Battle") -> None:
+        """One-shot: replays a recorded mouse+keyboard input sequence (see
+        core.input_record) -- the general-purpose counterpart of the Walk
+        block above, for any multi-step click/type/scroll sequence no other
+        block covers, recorded once via the block's own Record/Stop button
+        instead of built up one Click/Send Key block at a time.
+
+        Runs in either phase, same as Walk -- Pre Start can chain several
+        before the match begins, Battle/Loop can fire one mid-match."""
+        name = block.get("params", {}).get("recording") or ""
+        label = f'{phase_label} block #{block_num} (Record)'
+        if not name:
+            self._log(f'{label}: no recording selected -- skipping.')
+            return
+        self._log(f'{label}: replaying "{name}"...')
+        self._set_status(action=f'Replaying "{name}"...')
+        data = input_record.load_recording(name)
+        events = data.get("events", [])
+        if not events:
+            self._log(f'{label}: recording "{name}" has no captured input -- skipping.')
+            return
+        input_record.replay_events(events, self._mouse, self._keyboard, hwnd, stop_event)
+        self._log(f'{label}: replay finished.')
+
     def _run_wait_wave_tick(self, hwnd, block: dict, block_num: int) -> bool:
         """Waits until the current wave has reached OR already passed the
         configured target -- not exact equality, so a wave that ticks over
@@ -723,6 +785,31 @@ class BlockOps:
         self._mouse.click(left + self._coords["unit_info_reset_x"], top + self._coords["unit_info_reset_y"])
         return True
 
+    def _run_prestart_detect(self, hwnd, stop_event: threading.Event, block: dict, block_num: int):
+        """Evaluate a Detect block, optionally polling it until it resolves.
+
+        Returns True for Then, False for Else, and None when Stop interrupts
+        an in-progress self-loop. This is deliberately local to Detect: the
+        surrounding Pre Start/Battle/Loop scheduling remains unchanged.
+        """
+        loop_enabled, max_attempts, loop_interval = detect.loop_settings(block)
+        attempts = 0
+        while True:
+            found, matches = detect.evaluate(self, hwnd, block)
+            self._log_detect_outcome(block, found, matches, block_num, "Pre Start")
+            if found or not loop_enabled:
+                return found
+            attempts += 1
+            if max_attempts and attempts >= max_attempts:
+                self._log(f'[Macro] Detect block #{block_num} reached its '
+                          f'{max_attempts}-search limit -- taking Else.')
+                return False
+            if self._checkpoint(stop_event):
+                return None
+            self._interruptible_sleep(loop_interval, stop_event)
+            if stop_event.is_set():
+                return None
+
     def _run_prestart_blocks(self, hwnd, stop_event: threading.Event, task: dict, first_repeat: bool = True,
                                default_walk_paths: dict = None) -> None:
         # The task's Macro Operation (Creation > template) is what actually
@@ -812,8 +899,9 @@ class BlockOps:
                     continue
                 step += 1
                 if btype == "detect":
-                    found, matches = detect.evaluate(self, hwnd, block)
-                    self._log_detect_outcome(block, found, matches, step, "Pre Start")
+                    found = self._run_prestart_detect(hwnd, stop_event, block, step)
+                    if found is None:
+                        return
                     idx += 1 if found else block.get("_else_offset", 1)
                     continue
                 if block.get("once") and not first_repeat:
@@ -867,6 +955,8 @@ class BlockOps:
             self._run_walk_path_block(hwnd, stop_event, task, default_walk_paths or {}, block, first_repeat)
         elif btype == "walk":
             self._run_walk_block_tick(stop_event, block, i, phase_label="Pre Start")
+        elif btype == "record":
+            self._run_record_macro_tick(hwnd, stop_event, block, i, phase_label="Pre Start")
         elif btype == "click":
             self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
         elif btype == "wait_ms":

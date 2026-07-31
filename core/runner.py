@@ -126,6 +126,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # (Start pressed from inside a stage); consumed one-shot by
         # _run_task to skip the first task's lobby/stage entry.
         self._skip_first_task_setup = False
+        # Team/equipment successfully applied by the most recent loadout
+        # operation. A matching task can keep using it when the queue moves
+        # to the next stage instead of reopening Team Loadout every time.
+        self._last_applied_team_loadout = None
         # Set by _handle_match_result when an event farm task's Victory dropped
         # a Crow Relic and the task opted into auto-clearing Act 4; read (and
         # cleared) by _run_task, which runs the divert. See _run_act4_diversion.
@@ -204,9 +208,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._bounty_audit_recorder = None
         # Off by default -- see _apply_team_loadout_panel's OCR confirmation.
         self._loose_team_ocr_match = False
-        self._current_hwnd = None       # set at the top of _run -- lets _checkpoint reach Leave Stage on stop
+        self._current_hwnd = None       # set at the top of _run
         self._hwnd_getter = None        # set at the top of _run -- lets _attempt_rejoin find a re-docked hwnd
-        self._left_stage_this_run = False
         # Placed-unit screen positions from THIS match's Pre Start (see
         # _run_place_unit_block), keyed by the unit's #ordinal among place_unit
         # blocks (same numbering ui/app.js's listPlacedUnits() uses for the
@@ -245,6 +248,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # unbroken streak on the SAME map ever counts toward it.
         self._consecutive_losses = 0
         self._consecutive_loss_map = None
+        self._memory_refresh_enabled = False
+        self._memory_refresh_interval_seconds = 0.0
+        self._memory_refresh_next_at = None
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -256,7 +262,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
               scroll_nudges: int = None, debug_screenshots: bool = False, default_walk_paths: dict = None,
               webhook: dict = None, expedition_color_buttons: bool = True,
               expedition_camera_o_ms: float = 100, loose_team_ocr_match: bool = False,
-              bounty_audit: bool = False) -> dict:
+              bounty_audit: bool = False,
+               memory_refresh_enabled: bool = False,
+               memory_refresh_hours: float = MEMORY_REFRESH_DEFAULT_HOURS) -> dict:
         if self.is_running():
             return {"ok": False, "reason": "already_running"}
         self._stop_event = threading.Event()
@@ -271,8 +279,19 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._expedition_camera_o_ms = max(0.0, float(expedition_camera_o_ms))
         except (TypeError, ValueError):
             self._expedition_camera_o_ms = 100.0
+        self._memory_refresh_enabled = bool(memory_refresh_enabled)
+        try:
+            refresh_hours = float(memory_refresh_hours)
+        except (TypeError, ValueError):
+            refresh_hours = MEMORY_REFRESH_DEFAULT_HOURS
+        refresh_hours = min(MEMORY_REFRESH_MAX_HOURS,
+                            max(MEMORY_REFRESH_MIN_HOURS, refresh_hours))
+        self._memory_refresh_interval_seconds = refresh_hours * 3600.0
+        self._memory_refresh_next_at = (
+            time.monotonic() + self._memory_refresh_interval_seconds
+            if self._memory_refresh_enabled else None)
         self._current_hwnd = None
-        self._left_stage_this_run = False
+        self._last_applied_team_loadout = None
         self._consecutive_losses = 0
         self._consecutive_loss_map = None
         self._thread = threading.Thread(
@@ -314,7 +333,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # specifically re-picked away from.
         self._coords = {**DEFAULT_COORDS, **(coords or {})}
         self._current_hwnd = None
-        self._left_stage_this_run = True  # nothing to Leave Stage from -- there's no real match here
+        self._last_applied_team_loadout = None
+        self._memory_refresh_enabled = False
+        self._memory_refresh_interval_seconds = 0.0
+        self._memory_refresh_next_at = None
         self._thread = threading.Thread(
             target=self._run_debug_test,
             args=(hwnd_getter, mode, macro_name, self._stop_event),
@@ -414,7 +436,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._log("[Macro] Resumed.")
             self._paused_logged = False
         if stop_event.is_set():
-            self._try_leave_stage(stop_event)
             # Say WHAT was in flight when the stop landed, not just
             # "Stopped." -- someone stopping a run that's visibly hung
             # (e.g. sitting on "Waiting for gamemode menu...") is exactly
@@ -439,36 +460,14 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
     def _interruptible_sleep(self, seconds: float, stop_event: threading.Event = None) -> None:
         """time.sleep(), but bails out immediately once stop_event fires
         instead of blocking it for the full duration -- F2/Stop is supposed
-        to stay instant (see _checkpoint/_try_leave_stage's own comment on
-        this), which a plain time.sleep(5.0) settle delay quietly breaks
-        for however long is left on it."""
+        to stay instant (see _checkpoint), which a plain time.sleep(5.0)
+        settle delay quietly breaks for however long is left on it."""
         if seconds <= 0:
             return
         if stop_event is not None:
             stop_event.wait(seconds)
         else:
             time.sleep(seconds)
-
-    def _try_leave_stage(self, stop_event: threading.Event = None) -> None:
-        # F2/Stop must stay instant (see main.py's hotkey wiring), so this is
-        # a single one-shot check, not a wait -- no match just means either
-        # Leave Stage isn't on screen right now (not mid-match) or the image
-        # hasn't been added, either way nothing to click. Guarded so a stop
-        # mid-run only ever attempts this once, not on every _checkpoint call
-        # after the stop_event is already set.
-        if self._left_stage_this_run or self._current_hwnd is None:
-            return
-        self._left_stage_this_run = True
-        stop_evt = stop_event or getattr(self, "_stop_event", None)
-        try:
-            match = vision.find_image(self._current_hwnd, "leave_stage")
-        except vision.TemplateNotFound:
-            return
-        if match is not None:
-            self._log(f"[Macro] Stopping -- clicking Leave Stage (score {match['score']:.2f}) to quit to menu.")
-            vision.click_match(self._mouse, self._current_hwnd, match)
-            self._interruptible_sleep(0.5, stop_evt)
-            self._click_return_to_lobby_if_found(self._current_hwnd, stop_event=stop_evt)
 
     def _click_return_to_lobby_if_found(self, hwnd, stop_event: threading.Event = None) -> bool:
         # Leave Stage can bring up its own "Return to Lobby" confirmation
@@ -670,6 +669,26 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
     def _run_fuel_refill_if_due(self, hwnd, stop_event: threading.Event) -> None:
         if self._fuel_wants_in():
             self._run_fuel_refill(hwnd, stop_event)
+
+    def _memory_refresh_due(self) -> bool:
+        """Return whether the optional long-run Roblox refresh is due.
+
+        This is intentionally a cheap monotonic-clock check. It is called
+        only after a match result, alongside the existing safe-boundary
+        schedulers; there is no independent timer thread touching capture or
+        input while gameplay is active.
+        """
+        return bool(
+            self._memory_refresh_enabled
+            and self._memory_refresh_interval_seconds > 0
+            and self._memory_refresh_next_at is not None
+            and time.monotonic() >= self._memory_refresh_next_at
+        )
+
+    def _complete_memory_refresh(self) -> None:
+        """Arm the next refresh after a successful Roblox rejoin."""
+        self._memory_refresh_next_at = (
+            time.monotonic() + self._memory_refresh_interval_seconds)
 
     def _run(self, hwnd_getter, get_tasks, stop_event: threading.Event, scroll_power: int = None,
               coords: dict = None, scroll_nudges: int = None, default_walk_paths: dict = None,
@@ -1015,6 +1034,19 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     (not is_last_repeat)
                     and self._auto_shop_wants_in()
                 )
+                # Periodic memory refresh uses the same safe-boundary shape
+                # as the other maintenance diversions: leave after this
+                # result, relaunch Roblox into the lobby, then re-enter the
+                # task from scratch. Other scheduled diversions take priority
+                # so two maintenance flows never stack on one result.
+                memory_refresh_wants_in = (
+                    self._memory_refresh_due()
+                    and not restart_needed
+                    and not challenge_wants_in
+                    and not crafting_wants_in
+                    and not fuel_wants_in
+                    and not auto_shop_wants_in
+                )
                 # The bounded-Infinite path and the Leave-at-Minute block
                 # (left_live_match) already left the live match, so there is no
                 # Victory/Defeat screen to process here.
@@ -1023,7 +1055,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                         repeat=(not is_last_repeat) and not challenge_wants_in
                         and not crafting_wants_in and not fuel_wants_in
                         and not auto_shop_wants_in
-                        and not restart_needed):
+                        and not restart_needed and not memory_refresh_wants_in):
                     if stop_event.is_set():
                         return False
                     task_failed = True
@@ -1203,6 +1235,29 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                         task_failed = True
                         break
                     fresh_entry = True
+                    continue
+
+                if memory_refresh_wants_in:
+                    self._log(
+                        "Periodic Roblox refresh is due -- waiting at the "
+                        "safe lobby boundary before restarting the client.")
+                    if not self._attempt_rejoin(hwnd, stop_event):
+                        if stop_event.is_set():
+                            return False
+                        task_failed = True
+                        break
+                    self._complete_memory_refresh()
+                    if self._current_hwnd and wm.is_window(self._current_hwnd):
+                        hwnd = self._current_hwnd
+                    if not is_last_repeat:
+                        if not self._run_task_setup(
+                                hwnd, stop_event, task, mode, map_name, coords,
+                                scroll_power, scroll_nudges, webhook):
+                            if stop_event.is_set():
+                                return False
+                            task_failed = True
+                            break
+                        fresh_entry = True
                     continue
 
                 if not is_last_repeat:
@@ -1529,7 +1584,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Loop A / Loop B: their own index+state, ticked and restarted every
         # poll alongside Battle (see _tick_loop_phases).
         loop_blocks = self._load_loop_blocks(task)
-        self._loop_runtime = {key: {"blocks": loop_blocks[key], "index": 0, "state": {}}
+        self._loop_runtime = {key: {"blocks": loop_blocks[key], "index": 0, "state": {},
+                                    "completed_detects": set()}
                               for key in ("loop_a", "loop_b")}
         self._release_quick_place_shift()  # safety net -- never enter a match with Shift stuck down from before
         # exp_extract is a recurring checkpoint choice (Extract AND Continue
@@ -2164,6 +2220,16 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if first_repeat:
             self._log("[Macro] Pre Start: setting up the camera...")
             self._set_status(action="Setting up camera...")
+            # nav_unitmanager (just confirmed by _wait_teleport_in) is a HUD
+            # element and can render a beat before the character/camera
+            # controller has actually finished attaching to the freshly-
+            # spawned avatar -- this blind right-click-drag has no visual
+            # confirmation of its own to wait on, so a short settle here is
+            # what catches that rare case instead of dragging on a camera
+            # that isn't ready to receive it yet.
+            self._interruptible_sleep(CAMERA_SETUP_SETTLE, stop_event)
+            if self._checkpoint(stop_event):
+                return False
             try:
                 if task.get("mode") == "expedition":
                     camera.run_camera_drag_hold(self._mouse, self._keyboard, hwnd, hold_ms=730,
@@ -2187,12 +2253,21 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # exact state it expects and produce exactly the kind of "it bugs
         # out" behavior this was reported as.
         if first_repeat:
-            if not self._apply_team_loadout(hwnd, stop_event, task):
-                if stop_event.is_set():
+            team_loadout = self._team_loadout_key(task)
+            if team_loadout and team_loadout == self._last_applied_team_loadout:
+                self._log(f"[Macro] Reusing Team Loadout {team_loadout[0]} "
+                          f"(equipment: {team_loadout[1]}) from the previous task.")
+            else:
+                if team_loadout and team_loadout != self._last_applied_team_loadout:
+                    # Do not let a failed attempt for a different team leave
+                    # an older successful key eligible for a later task.
+                    self._last_applied_team_loadout = None
+                if not self._apply_team_loadout(hwnd, stop_event, task):
+                    if stop_event.is_set():
+                        return False
+                    self._log("[Macro] Team Loadout didn't actually apply -- failing this match setup so it "
+                              "retries from the lobby instead of starting a round with no team equipped.")
                     return False
-                self._log("[Macro] Team Loadout didn't actually apply -- failing this match setup so it "
-                           "retries from the lobby instead of starting a round with no team equipped.")
-                return False
         else:
             self._log("[Macro] Repeat of the same stage -- skipping Team Loadout (already applied on entry).")
         if self._checkpoint(stop_event):
@@ -2208,6 +2283,31 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if self._checkpoint(stop_event):
             return False
         return True
+
+    def _team_loadout_key(self, task: dict):
+        """Return the normalized team/equipment pair configured by a task.
+
+        Invalid or legacy templates return ``None`` because they do not have
+        a loadout that can safely be reused. The actual application path keeps
+        its existing logging and validation behavior.
+        """
+        macro_name = task.get("macro")
+        if not macro_name:
+            return None
+        from . import templates as tpl
+        data = tpl.load_template(macro_name)
+        blocks = data.get("blocks") or {}
+        if not isinstance(blocks, dict):
+            return None
+        team = blocks.get("team") or ""
+        try:
+            team_num = int(team)
+        except (TypeError, ValueError):
+            return None
+        if not (1 <= team_num <= TEAM_LOADOUT_MAX_SUPPORTED):
+            return None
+        equipment = blocks.get("equipment") if blocks.get("equipment") in ("include", "exclude") else "include"
+        return team_num, equipment
 
     def _apply_team_loadout(self, hwnd, stop_event: threading.Event, task: dict) -> bool:
         """Presses H to open the team-select panel, waits for it to
@@ -2253,6 +2353,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                        f'{TEAM_LOADOUT_MAX_SUPPORTED} are positioned so far) -- skipping.')
             return True
 
+        team_loadout = (team_num, equipment)
+        # A real attempt for a different configuration makes the old success
+        # unusable, even if this attempt later fails.
+        self._last_applied_team_loadout = None
         self._log(f"[Macro] Applying Team Loadout {team_num} (equipment: {equipment})...")
         self._set_status(action=f"Applying Team Loadout {team_num}...")
         self._keyboard.tap(ord("H"))
@@ -2268,7 +2372,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                            f'the team panel never opened. Team Loadout {team_num} was NOT applied.')
             return False
         try:
-            return self._apply_team_loadout_panel(hwnd, stop_event, team_match, team_num, equipment)
+            applied = self._apply_team_loadout_panel(hwnd, stop_event, team_match, team_num, equipment)
+            if applied:
+                self._last_applied_team_loadout = team_loadout
+            return applied
         finally:
             # Every early-return inside the panel flow (scroll landing wrong,
             # Confirm/equipment images never showing up, a checkpoint stop)
@@ -2622,6 +2729,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             return False
 
         self._set_status(action="Disconnected -- rejoining...")
+        # A rejoin creates a fresh game session; the previous team's visual
+        # state cannot be assumed to survive it.
+        self._last_applied_team_loadout = None
         try:
             os.startfile(REJOIN_DEEPLINK)
         except OSError as exc:

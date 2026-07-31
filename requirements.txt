@@ -1,5 +1,9 @@
 pywebview      # docked macro UI (Windows: uses the EdgeChromium/WebView2 runtime, preinstalled on Win10/11)
-keyboard       # global hotkeys (Settings > Hotkeys)
+keyboard       # global hotkeys (Settings > Hotkeys), also the keyboard half of the
+               # Macro Manager Record block's global input capture (core/input_record.py)
+mouse          # the mouse half of the Record block's global input capture -- same
+               # author/style as keyboard above, global move/click/scroll hooks
+               # (core/input_record.py)
 mss            # screen capture (Settings > Webhook > Debug Screenshot, core/rewards.py)
 requests       # multipart webhook uploads (core/webhook.py send_file)
 opencv-python  # reward-icon image preprocessing (core/rewards.py)

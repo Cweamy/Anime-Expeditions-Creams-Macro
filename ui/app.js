@@ -520,7 +520,7 @@ function switchScreen(name) {
     }
   } catch (e) {}
 
-  if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); }
+  if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); refreshSavedRecordings(); }
   if (name === 'task') refreshTaskQueue();
   if (name === 'resource') {
     refreshCraftingScreen();
@@ -819,6 +819,18 @@ async function saveActionDelay(input) {
   } catch (e) {}
 }
 
+// Settings > General > Roblox controls: the runner samples this only at
+// completed-match boundaries. Keeping the interval here (rather than in a
+// task) makes it apply consistently across every queued task and repeat pass.
+async function saveMemoryRefreshHours(input) {
+  const hours = Math.min(12, Math.max(1, parseFloat(input.value) || 4));
+  input.value = hours;
+  try {
+    await pywebview.api.set_setting('memory_refresh_hours', hours);
+    addLog(`[Settings] Periodic Roblox refresh set to ${hours} hour${hours === 1 ? '' : 's'}.`);
+  } catch (e) {}
+}
+
 async function toggleSetting(key, btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
@@ -1068,6 +1080,10 @@ async function loadSettingsUI() {
     const autoRelaunchEl = document.getElementById('toggle-auto-relaunch-roblox');
     // Default ON -- absent key means enabled.
     if (autoRelaunchEl) autoRelaunchEl.classList.toggle('on', s.auto_relaunch_roblox !== false);
+    const memoryRefreshEl = document.getElementById('toggle-memory-refresh');
+    if (memoryRefreshEl) memoryRefreshEl.classList.toggle('on', !!s.memory_refresh_enabled);
+    const memoryRefreshHoursEl = document.getElementById('setting-memory-refresh-hours');
+    if (memoryRefreshHoursEl) memoryRefreshHoursEl.value = s.memory_refresh_hours ?? 4;
     const actionDelayEl = document.getElementById('setting-action-delay');
     if (actionDelayEl) actionDelayEl.value = s.action_delay_ms || 0;
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
@@ -2252,6 +2268,59 @@ async function importCustomPaths(paths) {
   return added;
 }
 
+// Record block counterpart of collectCustomPathNames/exportCustomPaths/
+// importCustomPaths above. Unlike that one, this recurses into a Detect
+// block's then/else branches -- Record blocks running in Battle/Loop
+// commonly sit inside one (see core.share._iter_blocks, the same
+// traversal the Python side of the Share Code export already uses).
+function collectRecordingNames(templates) {
+  const names = new Set();
+  const walk = (blocks) => {
+    for (const block of blocks || []) {
+      if (!block) continue;
+      if (block.type === 'record' && block.params && block.params.recording) {
+        names.add(block.params.recording);
+      } else if (block.type === 'detect') {
+        walk(block.then);
+        walk(block.else);
+      }
+    }
+  };
+  for (const template of Object.values(templates || {})) {
+    const root = template && template.blocks != null ? template.blocks : template;
+    const lists = Array.isArray(root) ? [root] : Object.values(root || {}).filter(Array.isArray);
+    for (const blocks of lists) walk(blocks);
+  }
+  return [...names];
+}
+
+// Unlike exportCustomPaths/importCustomPaths above, this bundles and
+// restores recordings' events zlib-compressed (see
+// core.input_record.collect_recordings_compressed) in one batched call --
+// a dense mouse-move recording is thousands of small similar objects, and
+// the plain-JSON task/template export this feeds isn't compressed
+// otherwise, so an uncompressed recording could dominate the file's size
+// on its own.
+async function exportCustomRecordings(templates) {
+  const names = collectRecordingNames(templates);
+  if (names.length === 0) return {};
+  try {
+    return await pywebview.api.export_recordings_bundle(names) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+async function importCustomRecordings(recordings) {
+  if (!recordings || Object.keys(recordings).length === 0) return 0;
+  try {
+    const result = await pywebview.api.import_recordings_bundle(recordings);
+    return (result && result.ok) ? result.added : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 async function exportSettings() {
   try {
     const s = await pywebview.api.get_settings();
@@ -2327,9 +2396,10 @@ async function exportTasks() {
     }
   }
   const paths = await exportCustomPaths(templates);
+  const recordings = await exportCustomRecordings(templates);
   const payload = {
     kind: 'anime-expeditions-tasks', version: 2, exported: new Date().toISOString(),
-    tasks: taskCards, templates, paths,
+    tasks: taskCards, templates, paths, recordings,
   };
   let result = null;
   try { result = await pywebview.api.export_tasks_file(payload); } catch (e) {}
@@ -2371,6 +2441,7 @@ async function importTasks() {
     return;
   }
   const pathAdded = await importCustomPaths(data.paths);
+  const recordingAdded = await importCustomRecordings(data.recordings);
   let tplAdded = 0;
   try {
     for (const [name, t] of bundled) {
@@ -2396,7 +2467,7 @@ async function importTasks() {
   renderTaskList();
   renderTaskBuilder();
   saveTaskQueue();
-  addLog(`[Task] Imported ${added} task(s)${tplAdded ? `, ${tplAdded} macro template(s)` : ''}${pathAdded ? `, and ${pathAdded} custom path(s)` : ''}.`);
+  addLog(`[Task] Imported ${added} task(s)${tplAdded ? `, ${tplAdded} macro template(s)` : ''}${pathAdded ? `, ${pathAdded} custom path(s)` : ''}${recordingAdded ? `, and ${recordingAdded} recording(s)` : ''}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -3910,6 +3981,15 @@ const BLOCK_TYPES = {
   // button + an optional hold time. See renderSendKeyControls / the runner's
   // _run_send_key_tick.
   send_key:           { label: 'Send Key',          group: 'Setup',  color: 'var(--brand)', params: [{ key: 'hold_ms', type: 'number', placeholder: 'hold ms', default: 0 }] },
+  // Records a whole mouse+keyboard input sequence (movement, clicks, scroll,
+  // any key -- not just WASD or one Click/Send Key at a time) via its own
+  // Record/Stop button, then replays it with the original timing. The
+  // general-purpose escape hatch Click/Send Key don't cover on their own:
+  // a multi-step UI interaction, a precisely-timed combo, ... Bespoke
+  // controls: renderRecordControls(); recording/replay live in
+  // core.input_record, runs via core.runner_blocks._run_record_macro_tick.
+  // Allowed in both phases, same as Walk.
+  record:             { label: 'Record',            group: 'Setup',  color: 'var(--rose)',  params: [] },
   // Detect: search for an image (or a combination, or a raw condition) and run
   // one of two nested block groups -- Then when found, Else when not. The
   // macro's one branching block. Bespoke controls: renderDetectControls();
@@ -3939,7 +4019,7 @@ const PHASE_ALLOWED = {
   // path) is a normal addable block, allowed in BOTH phases -- you can drop
   // several into Pre Start to walk between multiple starter-placement spots
   // before the match begins. The Loop phases take the same set as Battle.
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'click', 'wait_ms', 'send_key', 'detect'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'record', 'click', 'wait_ms', 'send_key', 'detect'],
   battle: _BATTLE_ALLOWED,
   loop_a: _BATTLE_ALLOWED,
   loop_b: _BATTLE_ALLOWED,
@@ -3950,6 +4030,13 @@ let phaseCollapsed = { prestart: false, battle: false, loop_a: false, loop_b: fa
 let recordingBlockId = null;
 let recordingFuelPathKey = null;
 let savedPaths = [];
+// Record block (mouse+keyboard input recordings) -- kept separate from the
+// Walk Path/Walk recorder state above rather than generalizing it, so this
+// new recorder can't accidentally interact with the existing, already-
+// working path-recording flow.
+let recordingMacroBlockId = null;
+let pendingMacroRecordingTarget = null;
+let savedRecordings = [];
 
 // renderPhases() rebuilds the ENTIRE block list via innerHTML on nearly every
 // Macro Manager interaction (toggling Once, clone/remove, drag-drop reorder,
@@ -4054,7 +4141,9 @@ function addBlock(type, key, atIndex) {
   if (type === 'detect') {
     Object.assign(block, {
       image: '', advanced: false, mode: 'single', images: [], logic: 'and',
-      expr: '', region: null, threshold: null, showAll: false, then: [], else: [],
+      expr: '', region: null, threshold: null, showAll: false,
+      loop: false, loopAttempts: 0, loopIntervalMs: 1000,
+      then: [], else: [],
     });
   }
   const list = resolveContainer(key);
@@ -4181,6 +4270,14 @@ async function refreshSavedPaths() {
   const defaultSel = document.getElementById('default-walk-path');
   if (defaultSel) { const prev = defaultSel.value; defaultSel.innerHTML = options; defaultSel.value = prev; }
   await loadDefaultWalkPaths();
+}
+
+async function refreshSavedRecordings() {
+  try {
+    savedRecordings = await pywebview.api.list_recordings();
+  } catch (e) {
+    savedRecordings = [];
+  }
 }
 
 // Settings > Debug > "Default Auto Walk": map name -> saved path, so a
@@ -4331,10 +4428,11 @@ let pendingRecordingTarget = null;
 function stopActiveRecording() {
   if (recordingBlockId) toggleRecordPath(recordingBlockId);
   else if (recordingFuelPathKey) toggleRecordFuelPath(recordingFuelPathKey);
+  else if (recordingMacroBlockId) toggleRecordMacro(recordingMacroBlockId);
 }
 
 async function startRecordingTarget(target) {
-  if (recordingBlockId || recordingFuelPathKey) return;
+  if (recordingBlockId || recordingFuelPathKey || recordingMacroBlockId) return;
   closeFuelPaths();
   switchScreen('dashboard');
   await new Promise(resolve => setTimeout(resolve, 200));
@@ -4343,6 +4441,8 @@ async function startRecordingTarget(target) {
     if (result.ok) {
       if (target.kind === 'fuel') recordingFuelPathKey = target.pathKey;
       else recordingBlockId = target.blockId;
+      const textEl = document.getElementById('rec-popout-text');
+      if (textEl) textEl.textContent = 'Recording path (WASD + I/O) - timer starts on your first key';
       document.getElementById('rec-popout').style.display = 'flex';
       addLog(`[${target.kind === 'fuel' ? 'Fuel' : 'Macro Manager'}] Recording path -- walk with WASD (I/O also recorded, timer starts on your first key), then click Stop Recording.`);
     } else {
@@ -4438,6 +4538,82 @@ async function discardPathRecording() {
   try { await pywebview.api.discard_pending_path(); } catch (e) {}
   pendingRecordingTarget = null;
   addLog('[Path Recorder] Recording discarded.');
+  renderPhases();
+}
+
+// ---------------------------------------------------------------------------
+// Record block (mouse+keyboard input recording) -- a separate flow from the
+// Walk Path/Walk recorder above (own state, own naming modal) rather than a
+// generalization of it, so this new recorder can't regress the existing,
+// already-working WASD path recording.
+// ---------------------------------------------------------------------------
+async function toggleRecordMacro(blockId) {
+  if (recordingMacroBlockId === blockId) {
+    pendingMacroRecordingTarget = { blockId };
+    recordingMacroBlockId = null;
+    document.getElementById('rec-popout').style.display = 'none';
+    let stopResult = null;
+    try { stopResult = await pywebview.api.stop_input_capture(); } catch (e) {}
+    renderPhases();
+    switchScreen('creation');
+    if (!stopResult || !stopResult.count) {
+      addLog('[Input Recorder] Nothing recorded -- no mouse/keyboard input detected.');
+      try { await pywebview.api.discard_pending_recording(); } catch (e) {}
+      pendingMacroRecordingTarget = null;
+      return;
+    }
+    const input = document.getElementById('macro-record-name-input');
+    if (input) { input.value = ''; }
+    document.getElementById('macro-record-name-modal').style.display = 'flex';
+    setTimeout(() => { if (input) { input.focus(); } }, 50);
+    return;
+  }
+  if (recordingBlockId || recordingFuelPathKey || recordingMacroBlockId) return;
+  switchScreen('dashboard');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  try {
+    const result = await pywebview.api.start_input_recording();
+    if (result.ok) {
+      recordingMacroBlockId = blockId;
+      const textEl = document.getElementById('rec-popout-text');
+      if (textEl) textEl.textContent = 'Recording mouse + keyboard input inside the game window';
+      document.getElementById('rec-popout').style.display = 'flex';
+      addLog('[Macro Manager] Recording input -- act inside the Roblox window, then click Stop Recording.');
+    } else {
+      addLog(`[Input Recorder] Couldn't start recording: ${result.reason || 'error'}`);
+    }
+  } catch (e) {}
+  renderPhases();
+}
+
+async function saveMacroRecordingName() {
+  const input = document.getElementById('macro-record-name-input');
+  const name = input ? input.value.trim() : '';
+  if (!name) return;
+  document.getElementById('macro-record-name-modal').style.display = 'none';
+  restoreGameIfDashboard();
+  try {
+    const result = await pywebview.api.save_pending_recording(name);
+    if (result.ok) {
+      await refreshSavedRecordings();
+      const blockId = pendingMacroRecordingTarget && pendingMacroRecordingTarget.blockId;
+      const loc = blockId ? findBlockLocation(blockId) : null;
+      if (loc) loc.container[loc.idx].params.recording = result.name;
+      addLog(`[Macro Manager] Saved recording "${result.name}".`);
+    } else {
+      addLog(`[Input Recorder] Couldn't save recording: ${result.reason || 'error'}`);
+    }
+  } catch (e) {}
+  pendingMacroRecordingTarget = null;
+  renderPhases();
+}
+
+async function discardMacroRecording() {
+  document.getElementById('macro-record-name-modal').style.display = 'none';
+  restoreGameIfDashboard();
+  try { await pywebview.api.discard_pending_recording(); } catch (e) {}
+  pendingMacroRecordingTarget = null;
+  addLog('[Input Recorder] Recording discarded.');
   renderPhases();
 }
 
@@ -4673,6 +4849,20 @@ function setWalkPathPath(id, name) {
   renderPhases();
 }
 
+// Record block: a saved input recording (mouse+keyboard, see
+// core.input_record) picked from a dropdown, same Record/Stop button
+// pattern as renderWalkControls but backed by toggleRecordMacro/the
+// recordingMacroBlockId state above instead of the Walk Path recorder.
+function renderRecordControls(b) {
+  const isRecording = recordingMacroBlockId === b.id;
+  const options = savedRecordings.map(n => `<option value="${escapeHtml(n)}" ${n === b.params.recording ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
+  return `
+    <button type="button" class="block-mod-btn ${isRecording ? 'on' : ''}" onclick="toggleRecordMacro('${b.id}')">${isRecording ? 'Stop' : 'Record'}</button>
+    <select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'recording', this.value)">
+      <option value="">Pick saved recording...</option>${options}
+    </select>`;
+}
+
 // Every Place Unit block as {n, name}, in the same #1, #2, ... routine order
 // placeUnitOrdinal() numbers rows with -- the option list for any control
 // that targets an already-placed unit.
@@ -4762,6 +4952,7 @@ function renderBlockRow(b, key) {
     : b.type === 'send_key' ? renderSendKeyControls(b)
     : b.type === 'walk' ? renderWalkControls(b)
     : b.type === 'walk_path' ? renderWalkPathControls(b)
+    : b.type === 'record' ? renderRecordControls(b)
     : b.type === 'upgrade_unit' ? renderUpgradeControls(b)
     : b.type === 'auto_upgrade_unit' ? renderAutoUpgradeControls(b)
     : b.type === 'sell_unit' ? renderSellUnitControls(b)
@@ -4902,10 +5093,23 @@ function renderDetectAdvanced(b) {
     <span class="detect-thr-val" id="detect-thr-${b.id}">${b.threshold == null ? 'default' : pct + '%'}</span>
     ${b.threshold == null ? '' : `<button type="button" class="blk-btn" onclick="clearDetectThreshold('${b.id}')">Default</button>`}`);
   const showAll = `<label class="detect-check"><input type="checkbox" ${b.showAll ? 'checked' : ''} onchange="toggleDetectShowAll('${b.id}')"> Log every match location</label>`;
+  const loopToggle = `<label class="detect-check"><input type="checkbox" ${b.loop ? 'checked' : ''} onchange="toggleDetectLoop('${b.id}')"> Until found</label>`;
+  const loopOptions = b.loop ? `
+    <div class="detect-loop-settings">
+      ${blkField('Max searches', `<input class="block-input" type="number" min="0" step="1" value="${Math.max(0, Number(b.loopAttempts) || 0)}" oninput="updateDetectLoopAttempts('${b.id}', this.value)">`)}
+      ${blkField('Retry every', `<input class="block-input" type="number" min="100" max="60000" step="100" value="${Math.max(100, Number(b.loopIntervalMs) || 1000)}" oninput="updateDetectLoopInterval('${b.id}', this.value)"> <span class="detect-hint">ms</span>`)}
+    </div>` : `<span class="detect-hint">Polls this condition until it is found.</span>`;
+  const loopBox = `
+    <div class="detect-loop-box ${b.loop ? 'on' : ''}">
+      <div class="detect-loop-head"><span class="detect-loop-title">Loop</span>${loopToggle}</div>
+      ${loopOptions}
+      <span class="detect-hint detect-loop-help">0 searches = unlimited. After a limit, Else runs. Then runs once per match.</span>
+    </div>`;
   return `<div class="detect-advanced">
     <div class="detect-adv-seg">${modeSeg}</div>
     ${cond}${regionRow}${thrRow}
     <div class="detect-adv-row">${showAll}</div>
+    ${loopBox}
   </div>`;
 }
 
@@ -4935,6 +5139,13 @@ function toggleDetectAdvanced(id) {
 function setDetectMode(id, mode) { const b = detectBlock(id); if (b) { b.mode = mode; renderPhases(); } }
 function setDetectLogic(id, logic) { const b = detectBlock(id); if (b) { b.logic = logic; renderPhases(); } }
 function toggleDetectShowAll(id) { const b = detectBlock(id); if (b) { b.showAll = !b.showAll; renderPhases(); } }
+function toggleDetectLoop(id) { const b = detectBlock(id); if (b) { b.loop = !b.loop; renderPhases(); } }
+function updateDetectLoopAttempts(id, val) {
+  const b = detectBlock(id); if (b) b.loopAttempts = Math.max(0, Math.floor(Number(val) || 0));
+}
+function updateDetectLoopInterval(id, val) {
+  const b = detectBlock(id); if (b) b.loopIntervalMs = Math.max(100, Math.min(60000, Math.floor(Number(val) || 1000)));
+}
 function removeDetectImage(id, i) { const b = detectBlock(id); if (b) { (b.images || []).splice(i, 1); renderPhases(); } }
 function updateDetectExpr(id, val) { const b = detectBlock(id); if (b) b.expr = val; }  // no re-render -- keep textarea focus
 function clearDetectRegion(id) { const b = detectBlock(id); if (b) { b.region = null; renderPhases(); } }
@@ -6438,6 +6649,9 @@ function serializeBlock(b) {
     out.region = b.region ? { ...b.region } : null;
     out.threshold = typeof b.threshold === 'number' ? b.threshold : null;
     out.showAll = !!b.showAll;
+    out.loop = !!b.loop;
+    out.loopAttempts = Math.max(0, Math.floor(Number(b.loopAttempts) || 0));
+    out.loopIntervalMs = Math.max(100, Math.min(60000, Math.floor(Number(b.loopIntervalMs) || 1000)));
     out.then = (b.then || []).map(serializeBlock);
     out.else = (b.else || []).map(serializeBlock);
   }
@@ -6522,8 +6736,10 @@ async function exportTemplates() {
     try { templates[name] = await pywebview.api.load_template(name); } catch (e) {}
   }
   const paths = await exportCustomPaths(templates);
+  const recordings = await exportCustomRecordings(templates);
   const payload = {
-    kind: 'anime-expeditions-templates', version: 2, exported: new Date().toISOString(), templates, paths,
+    kind: 'anime-expeditions-templates', version: 2, exported: new Date().toISOString(),
+    templates, paths, recordings,
   };
   let result = null;
   try { result = await pywebview.api.export_tasks_file(payload, 'templates'); } catch (e) {}
@@ -6567,6 +6783,7 @@ async function importTemplates() {
     + '\n\nReplace them with the imported versions? '
     + 'Choose Cancel to keep yours and import only the new ones.');
   const pathAdded = await importCustomPaths(data.paths);
+  const recordingAdded = await importCustomRecordings(data.recordings);
   const imported = [];
   let replaced = 0;
   for (const [name, t] of entries) {
@@ -6593,7 +6810,8 @@ async function importTemplates() {
   addLog(`[Macro Manager] Imported ${imported.length} macro(s)`
     + `${replaced ? ` (${replaced} replaced)` : ''}`
     + `${kept ? `; kept your existing ${kept}` : ''}`
-    + `${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
+    + `${pathAdded ? `, ${pathAdded} custom path(s)` : ''}`
+    + `${recordingAdded ? `, and ${recordingAdded} recording(s)` : ''}.`);
 }
 
 async function refreshTemplateList() {
@@ -6635,6 +6853,9 @@ function blockFromSaved(b) {
     block.region = (b.region && typeof b.region === 'object') ? { ...b.region } : null;
     block.threshold = typeof b.threshold === 'number' ? b.threshold : null;
     block.showAll = !!b.showAll;
+    block.loop = !!b.loop;
+    block.loopAttempts = Math.max(0, Math.floor(Number(b.loopAttempts) || 0));
+    block.loopIntervalMs = Math.max(100, Math.min(60000, Math.floor(Number(b.loopIntervalMs) || 1000)));
     block.then = (Array.isArray(b.then) ? b.then : []).map(blockFromSaved);
     block.else = (Array.isArray(b.else) ? b.else : []).map(blockFromSaved);
   }
@@ -6754,6 +6975,7 @@ window.addEventListener('pywebviewready', async () => {
   renderPalette();
   renderPhases();
   refreshSavedPaths();
+  refreshSavedRecordings();
   loadSettingsUI();
 
   refreshTaskQueue();
@@ -6860,7 +7082,8 @@ async function updateImportPreview() {
       }
       if (countEl) {
         const walkNote = res.walk_paths ? ` + ${res.walk_paths} walk path(s)` : '';
-        countEl.textContent = `${res.total_templates} template(s)${walkNote}`;
+        const recNote = res.recordings ? ` + ${res.recordings} recording(s)` : '';
+        countEl.textContent = `${res.total_templates} template(s)${walkNote}${recNote}`;
       }
 
       if (itemsEl) {

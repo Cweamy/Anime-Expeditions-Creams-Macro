@@ -69,6 +69,24 @@ def test_new_tasks_have_a_bounded_infinite_wave_default(tmp_path):
     assert out["infinite_wave_limit"] == 20
 
 
+def test_memory_refresh_hours_are_clamped_and_saved(tmp_path):
+    out = run_js("""
+        const calls = [];
+        const pywebview = {api: {set_setting: async (key, value) => calls.push([key, value])}};
+        function addLog() {}
+        eval(extract('saveMemoryRefreshHours'));
+        (async () => {
+          const input = {value: '0.25'};
+          await saveMemoryRefreshHours(input);
+          console.log(JSON.stringify({value: input.value, calls}));
+        })();
+    """, tmp_path)
+    assert out == {
+        "value": 1,
+        "calls": [["memory_refresh_hours", 1]],
+    }
+
+
 def test_extract_after_normalization_preserves_decimal_strings_and_repairs_scientific_notation(
         tmp_path):
     out = run_js("""
@@ -219,11 +237,16 @@ const world = (data) => new Function('data', `
       restoredPaths.push([name, events]);
       return { ok: true };
     },
+    import_recordings_bundle: async (bundle) => {
+      restoredPaths.push(...Object.entries(bundle));
+      return { ok: true, added: Object.keys(bundle).length };
+    },
     save_template: async (n, b) => { saved.push(n); return { ok: true }; },
     save_tasks: async () => ({ ok: true }),
   } };
   ${extract('importCustomPaths')}
   ${extract('normalizeExtractAfter')}
+  ${extract('importCustomRecordings')}
   ${extract('importTasks')}
   return { importTasks, saved, restoredPaths, logs, cards: () => taskCards };
 `)(data);
@@ -373,11 +396,16 @@ def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
               restored.push([name, events]);
               return { ok: true };
             },
+            export_recordings_bundle: async () => ({}),
+            import_recordings_bundle: async () => ({ ok: true, added: 0 }),
             save_template: async () => ({ ok: true }),
           }};
           ${extract('collectCustomPathNames')}
           ${extract('exportCustomPaths')}
           ${extract('importCustomPaths')}
+          ${extract('collectRecordingNames')}
+          ${extract('exportCustomRecordings')}
+          ${extract('importCustomRecordings')}
           ${extract('exportTemplates')}
           ${extract('importTemplates')}
           return {
@@ -494,6 +522,7 @@ _TASK_EXPORT_WORLD = """
 const logs = []; let exported = null;
 global.addLog = m => logs.push(m);
 global.exportCustomPaths = async () => ({});
+global.exportCustomRecordings = async () => ({});
 global.taskCards = %s;
 global.pywebview = { api: {
   list_templates: async () => %s,
@@ -531,6 +560,7 @@ const MAX_EXTRACT_AFTER = 9999;
 global.addLog = m => logs.push(m);
 global.confirm = () => confirmAnswer;
 global.importCustomPaths = async () => 0;
+global.importCustomRecordings = async () => 0;
 global.refreshTaskTemplates = async () => {};
 global.renderTaskList = () => {}; global.renderTaskBuilder = () => {};
 global.saveTaskQueue = () => {};
@@ -617,6 +647,7 @@ let confirmAnswer = %s, confirmsSeen = [], loadedIntoEditor = null;
 global.addLog = m => logs.push(m);
 global.confirm = m => { confirmsSeen.push(m); return confirmAnswer; };
 global.importCustomPaths = async () => 0;
+global.importCustomRecordings = async () => 0;
 global.refreshTemplateList = async () => {};
 global.loadSelectedTemplate = async () => { loadedIntoEditor = selectValue; };
 global.creationEditorHasUnsavedChanges = () => %s;
@@ -958,6 +989,7 @@ def test_detect_block_round_trips_through_save_and_load(tmp_path):
         type: 'detect', image: 'boss', advanced: true, mode: 'multi',
         images: ['a', 'b'], logic: 'or', expr: "find('x')",
         region: { x: 1, y: 2, w: 3, h: 4 }, threshold: 0.8, showAll: true,
+        loop: true, loopAttempts: 5, loopIntervalMs: 750,
         then: [{ type: 'wait_ms', params: { ms: 500 } }],
         else: [{ type: 'send_key', params: {}, key: 'q',
                  then: undefined }],
@@ -967,6 +999,7 @@ def test_detect_block_round_trips_through_save_and_load(tmp_path):
       console.log(JSON.stringify({
         mode: loaded.mode, images: loaded.images, logic: loaded.logic,
         region: loaded.region, threshold: loaded.threshold, showAll: loaded.showAll,
+        loop: loaded.loop, loopAttempts: loaded.loopAttempts, loopIntervalMs: loaded.loopIntervalMs,
         thenType: loaded.then[0].type, thenMs: loaded.then[0].params.ms,
         elseType: loaded.else[0].type, elseKey: loaded.else[0].key,
         thenHasId: !!loaded.then[0].id,
@@ -980,6 +1013,8 @@ def test_detect_block_round_trips_through_save_and_load(tmp_path):
     assert out['region'] == {'x': 1, 'y': 2, 'w': 3, 'h': 4}
     assert out['threshold'] == 0.8
     assert out['showAll'] is True
+    assert out['loop'] is True
+    assert out['loopAttempts'] == 5 and out['loopIntervalMs'] == 750
     assert out['thenType'] == 'wait_ms' and out['thenMs'] == 500
     assert out['elseType'] == 'send_key' and out['elseKey'] == 'q'
     assert out['thenHasId'] is True           # nested blocks get real ids on load

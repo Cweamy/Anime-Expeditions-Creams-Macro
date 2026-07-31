@@ -46,6 +46,13 @@ def test_flatten_then_else_offsets_route_both_branches():
     assert 0 + detect_block["_else_offset"] == 4
     # After the then branch runs, the _jump (index 3) skips the else block (index 4) -> index 5
     assert 3 + jump["_offset"] == 5
+    assert 0 + detect_block["_end_offset"] == 5
+
+
+def test_loop_settings_normalize_limits_and_interval():
+    assert detect.loop_settings({"loop": True, "loopAttempts": "3", "loopIntervalMs": "250"}) == (True, 3, 0.25)
+    assert detect.loop_settings({"loop": True, "loopAttempts": 0, "loopIntervalMs": 1}) == (True, 0, 0.1)
+    assert detect.loop_settings({"loop": False}) == (False, 0, 1.0)
 
 
 def test_flatten_empty_then_still_jumps_correctly():
@@ -231,3 +238,82 @@ def test_battle_tick_runs_else_branch_when_not_found(monkeypatch):
     ])
     _drive_battle(runner, flat)
     assert recorded == ["else", "after"]
+
+
+def test_looped_detect_retries_then_runs_then_once(monkeypatch):
+    runner = MacroRunner(MagicMock(), MagicMock(), MagicMock())
+    runner._battle_block_index = 0
+    runner._battle_block_state = {}
+    runner._log = lambda *a, **k: None
+    recorded = []
+    runner._run_send_key_tick = lambda block, num, phase_label="Battle": recorded.append(block.get("_tag"))
+    outcomes = iter([(False, []), (True, [])])
+    monkeypatch.setattr(rb.detect, "evaluate", lambda r, h, b: next(outcomes))
+    clock = iter([100.0, 100.2])
+    monkeypatch.setattr(rb.time, "time", lambda: next(clock))
+
+    flat, _ = rb.detect.flatten([{
+        "type": "detect", "image": "x", "loop": True,
+        "loopAttempts": 3, "loopIntervalMs": 100,
+        "then": [{"type": "send_key", "_tag": "then"}],
+        "else": [{"type": "send_key", "_tag": "else"}],
+    }])
+    completed = set()
+    runner._run_battle_blocks_tick(0, threading.Event(), flat, True, "m", persistent_detects=completed)
+    assert runner._battle_block_index == 0
+    runner._run_battle_blocks_tick(0, threading.Event(), flat, True, "m", persistent_detects=completed)
+    _drive_battle(runner, flat)
+    assert recorded == ["then"]
+    assert completed == {0}
+
+    # Loop A/B starts the flat list over, but the completed Detect skips its
+    # whole construct instead of firing Then again while the image remains.
+    runner._battle_block_index = 0
+    runner._battle_block_state = {}
+    runner._run_battle_blocks_tick(0, threading.Event(), flat, True, "m", persistent_detects=completed)
+    assert runner._battle_block_index == len(flat)
+    assert recorded == ["then"]
+
+
+def test_looped_detect_uses_else_once_after_search_limit(monkeypatch):
+    runner = MacroRunner(MagicMock(), MagicMock(), MagicMock())
+    runner._battle_block_index = 0
+    runner._battle_block_state = {}
+    runner._log = lambda *a, **k: None
+    recorded = []
+    runner._run_send_key_tick = lambda block, num, phase_label="Battle": recorded.append(block.get("_tag"))
+    monkeypatch.setattr(rb.detect, "evaluate", lambda r, h, b: (False, []))
+    clock = iter([200.0, 200.2])
+    monkeypatch.setattr(rb.time, "time", lambda: next(clock))
+
+    flat, _ = rb.detect.flatten([{
+        "type": "detect", "image": "x", "loop": True,
+        "loopAttempts": 2, "loopIntervalMs": 100,
+        "then": [{"type": "send_key", "_tag": "then"}],
+        "else": [{"type": "send_key", "_tag": "else"}],
+    }])
+    completed = set()
+    runner._run_battle_blocks_tick(0, threading.Event(), flat, True, "m", persistent_detects=completed)
+    runner._run_battle_blocks_tick(0, threading.Event(), flat, True, "m", persistent_detects=completed)
+    _drive_battle(runner, flat)
+    assert recorded == ["else"]
+    assert completed == {0}
+
+
+def test_prestart_looped_detect_waits_until_found(monkeypatch):
+    runner = MacroRunner(MagicMock(), MagicMock(), MagicMock())
+    runner._log = lambda *a, **k: None
+    runner._log_detect_outcome = lambda *a, **k: None
+    runner._checkpoint = lambda _stop: False
+    sleeps = []
+    runner._interruptible_sleep = lambda seconds, _stop: sleeps.append(seconds)
+    outcomes = iter([(False, []), (True, [])])
+    monkeypatch.setattr(rb.detect, "evaluate", lambda r, h, b: next(outcomes))
+
+    result = runner._run_prestart_detect(
+        0, threading.Event(),
+        {"type": "detect", "loop": True, "loopAttempts": 0, "loopIntervalMs": 100},
+        1,
+    )
+    assert result is True
+    assert sleeps == [0.1]
