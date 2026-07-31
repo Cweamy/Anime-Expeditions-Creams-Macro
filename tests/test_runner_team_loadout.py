@@ -27,6 +27,99 @@ def _runner():
     return runner
 
 
+def test_team_loadout_key_normalizes_slot_and_equipment(monkeypatch):
+    runner = _runner()
+    monkeypatch.setattr(
+        "core.templates.load_template",
+        lambda _name: {"blocks": {"team": "2", "equipment": "exclude"}},
+    )
+
+    assert runner._team_loadout_key({"macro": "Farm"}) == (2, "exclude")
+
+
+def test_successful_team_loadout_is_recorded_for_next_task(monkeypatch):
+    runner = _runner()
+    stop = threading.Event()
+    monkeypatch.setattr(
+        "core.templates.load_template",
+        lambda _name: {"blocks": {"team": "2", "equipment": "include"}},
+    )
+    monkeypatch.setattr(
+        runner_module.vision,
+        "wait_for_image",
+        lambda _hwnd, name, **_kwargs: {"team": {"score": 0.95}}[name],
+    )
+    monkeypatch.setattr(runner, "_apply_team_loadout_panel", lambda *_args: True)
+    monkeypatch.setattr(runner, "_interruptible_sleep", lambda *_args: None)
+
+    assert runner._apply_team_loadout(123, stop, {"macro": "Farm"}) is True
+    assert runner._last_applied_team_loadout == (2, "include")
+
+
+def test_failed_team_loadout_clears_previous_success(monkeypatch):
+    runner = _runner()
+    runner._last_applied_team_loadout = (1, "include")
+    stop = threading.Event()
+    monkeypatch.setattr(
+        "core.templates.load_template",
+        lambda _name: {"blocks": {"team": "2", "equipment": "include"}},
+    )
+    monkeypatch.setattr(
+        runner_module.vision,
+        "wait_for_image",
+        lambda _hwnd, name, **_kwargs: {"team": {"score": 0.95}}[name],
+    )
+    monkeypatch.setattr(runner, "_apply_team_loadout_panel", lambda *_args: False)
+    monkeypatch.setattr(runner, "_interruptible_sleep", lambda *_args: None)
+
+    assert runner._apply_team_loadout(123, stop, {"macro": "Farm"}) is False
+    assert runner._last_applied_team_loadout is None
+
+
+def test_matching_team_skips_loadout_on_next_task(monkeypatch):
+    runner = _runner()
+    runner._last_applied_team_loadout = (2, "include")
+    monkeypatch.setattr(runner, "_team_loadout_key", lambda _task: (2, "include"))
+    monkeypatch.setattr(runner, "_apply_team_loadout", MagicMock())
+    monkeypatch.setattr(runner, "_run_prestart_blocks", MagicMock())
+    monkeypatch.setattr(runner, "_checkpoint", lambda _stop: False)
+    monkeypatch.setattr(runner_module.camera, "run_camera_setup", lambda *_args, **_kwargs: None)
+
+    assert runner._run_prestart(123, threading.Event(), {"macro": "Farm"}, {}) is True
+    runner._apply_team_loadout.assert_not_called()
+    assert any("Reusing Team Loadout 2" in call.args[0] for call in runner._log.call_args_list)
+
+
+def test_task_sequence_reuses_and_switches_team_or_equipment(monkeypatch):
+    runner = _runner()
+    keys = {
+        "first": (1, "include"),
+        "same-team": (1, "include"),
+        "different-team": (2, "include"),
+        "different-equipment": (2, "exclude"),
+        "same-again": (2, "exclude"),
+    }
+    applied = []
+
+    monkeypatch.setattr(runner, "_team_loadout_key", lambda task: keys[task["name"]])
+    monkeypatch.setattr(runner, "_checkpoint", lambda _stop: False)
+    monkeypatch.setattr(runner, "_run_prestart_blocks", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner_module.camera, "run_camera_setup", lambda *_args, **_kwargs: None)
+
+    def apply_loadout(_hwnd, _stop, task):
+        key = keys[task["name"]]
+        applied.append(key)
+        runner._last_applied_team_loadout = key
+        return True
+
+    monkeypatch.setattr(runner, "_apply_team_loadout", apply_loadout)
+    stop = threading.Event()
+    for name in keys:
+        assert runner._run_prestart(123, stop, {"name": name}, {}) is True
+
+    assert applied == [(1, "include"), (2, "include"), (2, "exclude")]
+
+
 def test_retries_teams_click_until_loadout_list_is_visually_open(monkeypatch):
     runner = _runner()
     stop = threading.Event()

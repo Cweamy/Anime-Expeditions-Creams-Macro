@@ -126,6 +126,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # (Start pressed from inside a stage); consumed one-shot by
         # _run_task to skip the first task's lobby/stage entry.
         self._skip_first_task_setup = False
+        # Team/equipment successfully applied by the most recent loadout
+        # operation. A matching task can keep using it when the queue moves
+        # to the next stage instead of reopening Team Loadout every time.
+        self._last_applied_team_loadout = None
         # Set by _handle_match_result when an event farm task's Victory dropped
         # a Crow Relic and the task opted into auto-clearing Act 4; read (and
         # cleared) by _run_task, which runs the divert. See _run_act4_diversion.
@@ -265,6 +269,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._expedition_camera_o_ms = 100.0
         self._current_hwnd = None
         self._left_stage_this_run = False
+        self._last_applied_team_loadout = None
         self._consecutive_losses = 0
         self._consecutive_loss_map = None
         self._thread = threading.Thread(
@@ -306,6 +311,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # specifically re-picked away from.
         self._coords = {**DEFAULT_COORDS, **(coords or {})}
         self._current_hwnd = None
+        self._last_applied_team_loadout = None
         self._left_stage_this_run = True  # nothing to Leave Stage from -- there's no real match here
         self._thread = threading.Thread(
             target=self._run_debug_test,
@@ -2179,12 +2185,21 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # exact state it expects and produce exactly the kind of "it bugs
         # out" behavior this was reported as.
         if first_repeat:
-            if not self._apply_team_loadout(hwnd, stop_event, task):
-                if stop_event.is_set():
+            team_loadout = self._team_loadout_key(task)
+            if team_loadout and team_loadout == self._last_applied_team_loadout:
+                self._log(f"[Macro] Reusing Team Loadout {team_loadout[0]} "
+                          f"(equipment: {team_loadout[1]}) from the previous task.")
+            else:
+                if team_loadout and team_loadout != self._last_applied_team_loadout:
+                    # Do not let a failed attempt for a different team leave
+                    # an older successful key eligible for a later task.
+                    self._last_applied_team_loadout = None
+                if not self._apply_team_loadout(hwnd, stop_event, task):
+                    if stop_event.is_set():
+                        return False
+                    self._log("[Macro] Team Loadout didn't actually apply -- failing this match setup so it "
+                              "retries from the lobby instead of starting a round with no team equipped.")
                     return False
-                self._log("[Macro] Team Loadout didn't actually apply -- failing this match setup so it "
-                           "retries from the lobby instead of starting a round with no team equipped.")
-                return False
         else:
             self._log("[Macro] Repeat of the same stage -- skipping Team Loadout (already applied on entry).")
         if self._checkpoint(stop_event):
@@ -2200,6 +2215,31 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if self._checkpoint(stop_event):
             return False
         return True
+
+    def _team_loadout_key(self, task: dict):
+        """Return the normalized team/equipment pair configured by a task.
+
+        Invalid or legacy templates return ``None`` because they do not have
+        a loadout that can safely be reused. The actual application path keeps
+        its existing logging and validation behavior.
+        """
+        macro_name = task.get("macro")
+        if not macro_name:
+            return None
+        from . import templates as tpl
+        data = tpl.load_template(macro_name)
+        blocks = data.get("blocks") or {}
+        if not isinstance(blocks, dict):
+            return None
+        team = blocks.get("team") or ""
+        try:
+            team_num = int(team)
+        except (TypeError, ValueError):
+            return None
+        if not (1 <= team_num <= TEAM_LOADOUT_MAX_SUPPORTED):
+            return None
+        equipment = blocks.get("equipment") if blocks.get("equipment") in ("include", "exclude") else "include"
+        return team_num, equipment
 
     def _apply_team_loadout(self, hwnd, stop_event: threading.Event, task: dict) -> bool:
         """Presses H to open the team-select panel, waits for it to
@@ -2245,6 +2285,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                        f'{TEAM_LOADOUT_MAX_SUPPORTED} are positioned so far) -- skipping.')
             return True
 
+        team_loadout = (team_num, equipment)
+        # A real attempt for a different configuration makes the old success
+        # unusable, even if this attempt later fails.
+        self._last_applied_team_loadout = None
         self._log(f"[Macro] Applying Team Loadout {team_num} (equipment: {equipment})...")
         self._set_status(action=f"Applying Team Loadout {team_num}...")
         self._keyboard.tap(ord("H"))
@@ -2260,7 +2304,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                            f'the team panel never opened. Team Loadout {team_num} was NOT applied.')
             return False
         try:
-            return self._apply_team_loadout_panel(hwnd, stop_event, team_match, team_num, equipment)
+            applied = self._apply_team_loadout_panel(hwnd, stop_event, team_match, team_num, equipment)
+            if applied:
+                self._last_applied_team_loadout = team_loadout
+            return applied
         finally:
             # Every early-return inside the panel flow (scroll landing wrong,
             # Confirm/equipment images never showing up, a checkpoint stop)
@@ -2614,6 +2661,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             return False
 
         self._set_status(action="Disconnected -- rejoining...")
+        # A rejoin creates a fresh game session; the previous team's visual
+        # state cannot be assumed to survive it.
+        self._last_applied_team_loadout = None
         try:
             os.startfile(REJOIN_DEEPLINK)
         except OSError as exc:
