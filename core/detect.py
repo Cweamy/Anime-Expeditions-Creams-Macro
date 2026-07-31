@@ -23,6 +23,32 @@ import ast
 
 from . import vision
 
+DETECT_LOOP_DEFAULT_INTERVAL_MS = 1000
+DETECT_LOOP_MIN_INTERVAL_MS = 100
+DETECT_LOOP_MAX_INTERVAL_MS = 60000
+
+
+def loop_settings(block):
+    """Return (enabled, max_attempts, interval_seconds) for a Detect loop.
+
+    A zero max-attempt value means keep searching until the condition is
+    found. The interval is clamped so a self-loop cannot turn into a tight
+    screen-capture/click poll by accident.
+    """
+    enabled = bool(block.get("loop"))
+    try:
+        max_attempts = max(0, int(block.get("loopAttempts", block.get("loop_attempts", 0)) or 0))
+    except (TypeError, ValueError):
+        max_attempts = 0
+    try:
+        interval_ms = int(block.get(
+            "loopIntervalMs", block.get("loop_interval_ms", DETECT_LOOP_DEFAULT_INTERVAL_MS))
+            or DETECT_LOOP_DEFAULT_INTERVAL_MS)
+    except (TypeError, ValueError):
+        interval_ms = DETECT_LOOP_DEFAULT_INTERVAL_MS
+    interval_ms = max(DETECT_LOOP_MIN_INTERVAL_MS, min(DETECT_LOOP_MAX_INTERVAL_MS, interval_ms))
+    return enabled, max_attempts, interval_ms / 1000.0
+
 
 # ---------------------------------------------------------------------------
 # flatten
@@ -66,6 +92,10 @@ def _flatten_into(blocks, flat, ordinal):
             # block (right after the _jump). With no else blocks that lands on
             # end_index, i.e. straight past the whole construct.
             ctrl["_else_offset"] = (jump_index + 1) - detect_index
+            # A self-looped Detect that has already succeeded must skip both
+            # branches when its containing Loop A/B comes back around. This
+            # offset lands after the complete Detect construct.
+            ctrl["_end_offset"] = end_index - detect_index
             # After the then branch runs and falls through to _jump, skip the
             # else branch entirely.
             jump["_offset"] = end_index - jump_index

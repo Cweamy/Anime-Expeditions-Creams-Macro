@@ -2120,6 +2120,18 @@ li.fail .onb-ingame-name { color: var(--rose); }
 }
 .detect-adv-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--bg-surface); }
 .detect-adv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.detect-loop-box {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 8px 10px; border-radius: 7px;
+  background: color-mix(in srgb, var(--sky) 12%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--sky) 42%, var(--border));
+  border-left: 3px solid var(--sky);
+}
+.detect-loop-box.on { background: color-mix(in srgb, var(--sky) 17%, var(--bg-card)); }
+.detect-loop-head { display: flex; align-items: center; gap: 10px; }
+.detect-loop-title { color: var(--sky); font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.detect-loop-settings { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.detect-loop-help { padding-left: 2px; }
 .detect-img-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .detect-img-chip {
   display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;

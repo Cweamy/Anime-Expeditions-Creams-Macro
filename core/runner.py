@@ -1520,7 +1520,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Loop A / Loop B: their own index+state, ticked and restarted every
         # poll alongside Battle (see _tick_loop_phases).
         loop_blocks = self._load_loop_blocks(task)
-        self._loop_runtime = {key: {"blocks": loop_blocks[key], "index": 0, "state": {}}
+        self._loop_runtime = {key: {"blocks": loop_blocks[key], "index": 0, "state": {},
+                                    "completed_detects": set()}
                               for key in ("loop_a", "loop_b")}
         self._release_quick_place_shift()  # safety net -- never enter a match with Shift stuck down from before
         # exp_extract is a recurring checkpoint choice (Extract AND Continue

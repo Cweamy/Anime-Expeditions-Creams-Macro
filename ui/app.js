@@ -4052,7 +4052,9 @@ function addBlock(type, key, atIndex) {
   if (type === 'detect') {
     Object.assign(block, {
       image: '', advanced: false, mode: 'single', images: [], logic: 'and',
-      expr: '', region: null, threshold: null, showAll: false, then: [], else: [],
+      expr: '', region: null, threshold: null, showAll: false,
+      loop: false, loopAttempts: 0, loopIntervalMs: 1000,
+      then: [], else: [],
     });
   }
   const list = resolveContainer(key);
@@ -4900,10 +4902,23 @@ function renderDetectAdvanced(b) {
     <span class="detect-thr-val" id="detect-thr-${b.id}">${b.threshold == null ? 'default' : pct + '%'}</span>
     ${b.threshold == null ? '' : `<button type="button" class="blk-btn" onclick="clearDetectThreshold('${b.id}')">Default</button>`}`);
   const showAll = `<label class="detect-check"><input type="checkbox" ${b.showAll ? 'checked' : ''} onchange="toggleDetectShowAll('${b.id}')"> Log every match location</label>`;
+  const loopToggle = `<label class="detect-check"><input type="checkbox" ${b.loop ? 'checked' : ''} onchange="toggleDetectLoop('${b.id}')"> Until found</label>`;
+  const loopOptions = b.loop ? `
+    <div class="detect-loop-settings">
+      ${blkField('Max searches', `<input class="block-input" type="number" min="0" step="1" value="${Math.max(0, Number(b.loopAttempts) || 0)}" oninput="updateDetectLoopAttempts('${b.id}', this.value)">`)}
+      ${blkField('Retry every', `<input class="block-input" type="number" min="100" max="60000" step="100" value="${Math.max(100, Number(b.loopIntervalMs) || 1000)}" oninput="updateDetectLoopInterval('${b.id}', this.value)"> <span class="detect-hint">ms</span>`)}
+    </div>` : `<span class="detect-hint">Polls this condition until it is found.</span>`;
+  const loopBox = `
+    <div class="detect-loop-box ${b.loop ? 'on' : ''}">
+      <div class="detect-loop-head"><span class="detect-loop-title">Loop</span>${loopToggle}</div>
+      ${loopOptions}
+      <span class="detect-hint detect-loop-help">0 searches = unlimited. After a limit, Else runs. Then runs once per match.</span>
+    </div>`;
   return `<div class="detect-advanced">
     <div class="detect-adv-seg">${modeSeg}</div>
     ${cond}${regionRow}${thrRow}
     <div class="detect-adv-row">${showAll}</div>
+    ${loopBox}
   </div>`;
 }
 
@@ -4933,6 +4948,13 @@ function toggleDetectAdvanced(id) {
 function setDetectMode(id, mode) { const b = detectBlock(id); if (b) { b.mode = mode; renderPhases(); } }
 function setDetectLogic(id, logic) { const b = detectBlock(id); if (b) { b.logic = logic; renderPhases(); } }
 function toggleDetectShowAll(id) { const b = detectBlock(id); if (b) { b.showAll = !b.showAll; renderPhases(); } }
+function toggleDetectLoop(id) { const b = detectBlock(id); if (b) { b.loop = !b.loop; renderPhases(); } }
+function updateDetectLoopAttempts(id, val) {
+  const b = detectBlock(id); if (b) b.loopAttempts = Math.max(0, Math.floor(Number(val) || 0));
+}
+function updateDetectLoopInterval(id, val) {
+  const b = detectBlock(id); if (b) b.loopIntervalMs = Math.max(100, Math.min(60000, Math.floor(Number(val) || 1000)));
+}
 function removeDetectImage(id, i) { const b = detectBlock(id); if (b) { (b.images || []).splice(i, 1); renderPhases(); } }
 function updateDetectExpr(id, val) { const b = detectBlock(id); if (b) b.expr = val; }  // no re-render -- keep textarea focus
 function clearDetectRegion(id) { const b = detectBlock(id); if (b) { b.region = null; renderPhases(); } }
@@ -6433,6 +6455,9 @@ function serializeBlock(b) {
     out.region = b.region ? { ...b.region } : null;
     out.threshold = typeof b.threshold === 'number' ? b.threshold : null;
     out.showAll = !!b.showAll;
+    out.loop = !!b.loop;
+    out.loopAttempts = Math.max(0, Math.floor(Number(b.loopAttempts) || 0));
+    out.loopIntervalMs = Math.max(100, Math.min(60000, Math.floor(Number(b.loopIntervalMs) || 1000)));
     out.then = (b.then || []).map(serializeBlock);
     out.else = (b.else || []).map(serializeBlock);
   }
@@ -6630,6 +6655,9 @@ function blockFromSaved(b) {
     block.region = (b.region && typeof b.region === 'object') ? { ...b.region } : null;
     block.threshold = typeof b.threshold === 'number' ? b.threshold : null;
     block.showAll = !!b.showAll;
+    block.loop = !!b.loop;
+    block.loopAttempts = Math.max(0, Math.floor(Number(b.loopAttempts) || 0));
+    block.loopIntervalMs = Math.max(100, Math.min(60000, Math.floor(Number(b.loopIntervalMs) || 1000)));
     block.then = (Array.isArray(b.then) ? b.then : []).map(blockFromSaved);
     block.else = (Array.isArray(b.else) ? b.else : []).map(blockFromSaved);
   }
