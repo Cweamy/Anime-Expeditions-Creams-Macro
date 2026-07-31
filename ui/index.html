@@ -722,6 +722,42 @@
             </div>
           </details>
 
+          <!-- Auto Shop -->
+          <details id="resource-card-auto-shop" class="resource-card">
+            <summary class="resource-card-head">
+              <span class="resource-card-icon">S</span>
+              <span class="resource-card-copy">
+                <span class="resource-card-title">Auto Shop</span>
+                <span id="resource-auto-shop-details" class="resource-card-desc">Gold Shop: 0 enabled</span>
+              </span>
+              <span id="resource-auto-shop-summary" class="resource-card-state">Disabled</span>
+              <span class="resource-card-chevron">&#8250;</span>
+            </summary>
+            <div class="resource-card-body">
+              <div class="setting-row" style="padding: 10px 0;">
+                <div>
+                  <div class="setting-label">Enable Auto Shop</div>
+                  <div class="setting-desc">Runs enabled shops at safe Task Queue boundaries and resets daily progress at 00:00 UTC.</div>
+                </div>
+                <button id="toggle-auto-shop-enabled" class="toggle-switch" onclick="toggleAutoShopEnabled(this)"></button>
+              </div>
+
+              <div class="setting-row" style="padding: 10px 0;">
+                <div>
+                  <div class="setting-label">Gold Shop</div>
+                  <div class="setting-desc">Choose how many to buy on each pass. Numeric quantities repeat on later passes until sold out.</div>
+                </div>
+                <button id="toggle-gold-shop-enabled" class="toggle-switch"
+                        onclick="toggleAutoShopShopEnabled('gold_shop', this)"></button>
+              </div>
+
+              <div>
+                <div class="wh-hint" style="margin-bottom: 6px;">Items are checked in this order. Max buys the remaining stock once.</div>
+                <div id="auto-shop-gold-items" class="flex flex-col gap-1.5"></div>
+              </div>
+            </div>
+          </details>
+
           <!-- ── Auto Challenge ── -->
           <details id="resource-card-challenge" class="resource-card">
             <summary class="resource-card-head">
