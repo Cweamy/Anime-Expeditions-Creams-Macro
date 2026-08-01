@@ -40,6 +40,7 @@
 - [Requirements](#requirements)
 - [Download & Install](#download--install)
 - [Usage](#usage)
+- [Full User Guide](docs/USER_GUIDE.md)
 - [Auto-Updater](#auto-updater)
 - [Project Layout](#project-layout)
 - [Contributing](#contributing)
