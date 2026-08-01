@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from core import runner_blocks
 from core import wave
@@ -113,7 +114,11 @@ def test_wait_for_wave_requires_two_target_readings_before_later_blocks(monkeypa
         "get_window_rect_screen",
         lambda _hwnd: (0, 0, 1152, 756),
     )
-    monkeypatch.setattr("core.ocr.capture_region", lambda *_args: np.zeros((61, 104, 3)))
+    monkeypatch.setattr(
+        runner_blocks.vision,
+        "capture_window_region_bgr",
+        lambda _hwnd, _region: np.zeros((61, 104, 3)),
+    )
     monkeypatch.setattr("core.wave.read_wave", lambda _image: next(readings))
 
     # A plausible one-frame jump above the target is not trusted.
@@ -129,6 +134,29 @@ def test_wait_for_wave_requires_two_target_readings_before_later_blocks(monkeypa
     assert runner._run_wait_wave_tick(123, block, 1) is True
 
 
+def test_wait_for_wave_captures_the_roblox_window_not_the_screen(monkeypatch):
+    runner = MacroRunner(MagicMock(), MagicMock(), MagicMock())
+    runner._battle_block_state = {}
+    block = {"params": {"wave": 10}}
+    captured = []
+
+    monkeypatch.setattr(
+        runner_blocks.vision,
+        "capture_window_region_bgr",
+        lambda hwnd, region: captured.append((hwnd, region)) or np.zeros((61, 104, 3)),
+    )
+    monkeypatch.setattr(
+        "core.ocr.capture_region",
+        lambda *_args: pytest.fail("wave OCR must not capture the physical screen"),
+    )
+    monkeypatch.setattr(runner_blocks.time, "time", lambda: 100.0)
+    monkeypatch.setattr("core.wave.read_wave", lambda _image: (10, 15))
+
+    runner._run_wait_wave_tick(123, block, 1)
+
+    assert captured == [(123, runner_blocks.WAVE_REGION)]
+
+
 def test_wait_for_wave_supports_current_only_unlimited_counter(monkeypatch):
     runner = MacroRunner(MagicMock(), MagicMock(), MagicMock())
     runner._battle_block_state = {}
@@ -141,7 +169,11 @@ def test_wait_for_wave_supports_current_only_unlimited_counter(monkeypatch):
         "get_window_rect_screen",
         lambda _hwnd: (0, 0, 1152, 756),
     )
-    monkeypatch.setattr("core.ocr.capture_region", lambda *_args: np.zeros((61, 104, 3)))
+    monkeypatch.setattr(
+        runner_blocks.vision,
+        "capture_window_region_bgr",
+        lambda _hwnd, _region: np.zeros((61, 104, 3)),
+    )
     monkeypatch.setattr("core.wave.read_wave", lambda _image: next(readings))
 
     assert runner._run_wait_wave_tick(123, block, 1) is False
@@ -167,7 +199,11 @@ def test_wait_for_wave_rejects_inconsistent_impossible_unlimited_reads(monkeypat
         "get_window_rect_screen",
         lambda _hwnd: (0, 0, 1152, 756),
     )
-    monkeypatch.setattr("core.ocr.capture_region", lambda *_args: np.zeros((61, 104, 3)))
+    monkeypatch.setattr(
+        runner_blocks.vision,
+        "capture_window_region_bgr",
+        lambda _hwnd, _region: np.zeros((61, 104, 3)),
+    )
     monkeypatch.setattr("core.wave.read_wave", lambda _image: next(readings))
 
     # The impossible first read cannot combine with the real wave 46.
