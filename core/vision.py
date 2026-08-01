@@ -594,8 +594,24 @@ def capture_game_bgr(hwnd: int, region: tuple = None) -> np.ndarray:
     """Color twin of capture_game_gray: a BGR capture normalized to
     reference-space dimensions, for detection that keys off a button's
     COLOR rather than its art (see find_color_run). Same capture-path
-    rules as the grayscale version -- honors the window-capture switch,
-    and a region is reference-space (x, y, w, h)."""
+    rules as the grayscale version, including optional WGC frames and
+    the window-capture switch; a region is reference-space (x, y, w, h)."""
+    _bgr = None
+    try:
+        from . import wgc_capture
+        if wgc_capture.is_enabled():
+            _bgr = wgc_capture.get_grabber().frame()
+    except Exception:
+        _bgr = None
+    if _bgr is not None:
+        if _bgr.shape[:2] != (config.FIXED_WIN_H, config.FIXED_WIN_W):
+            _bgr = cv2.resize(_bgr, (config.FIXED_WIN_W, config.FIXED_WIN_H),
+                              interpolation=cv2.INTER_AREA)
+        if region is not None:
+            rx, ry, rw, rh = (int(v) for v in region)
+            _bgr = _bgr[max(0, ry):ry + rh, max(0, rx):rx + rw]
+        return _bgr
+
     if _use_window_capture:
         bgr = _capture_window_bgr(hwnd, region)
         if bgr is not None:

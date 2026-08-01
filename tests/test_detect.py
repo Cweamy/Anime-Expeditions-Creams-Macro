@@ -216,6 +216,22 @@ def test_render_diagnostic_draws_region_and_best_candidate():
     assert np.any(rendered != frame)
 
 
+def test_render_diagnostic_uses_red_for_accepted_matches():
+    frame = np.zeros((50, 40, 3), dtype=np.uint8)
+    rendered = detect.render_diagnostic(frame, {
+        "found": True,
+        "region": None,
+        "details": [{
+            "name": "nav_play", "matched": True,
+            "match": {"x": 8, "y": 32, "w": 6, "h": 5, "cx": 11, "cy": 34, "score": 0.95},
+            "matches": [],
+        }],
+    })
+
+    red = (rendered[:, :, 2] > 200) & (rendered[:, :, 1] < 50) & (rendered[:, :, 0] < 50)
+    assert red.any()
+
+
 # --------------------------------------------------------------------------
 # raw condition expression -- allowlist
 # --------------------------------------------------------------------------
