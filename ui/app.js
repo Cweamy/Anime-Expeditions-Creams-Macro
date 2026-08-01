@@ -5821,7 +5821,7 @@ const IMAGE_DESCRIPTIONS = {
   chal_select: "The Challenge mode select button.",
   challenge: "The Challenge card on the Play menu.",
   challenge_loaded: "Confirms the Challenge screen finished loading.",
-  click_anywhere_to_close: "The 'Click anywhere to close' popup (e.g. a Raid boss cutscene).",
+  click_anywhere_to_close: "The Spirit City Act 3 Raid popup. Click-text, sword, Lvl 1, and 8th Sword image variants are all fallback signals for dismissing it.",
   confirm: "The Confirm button -- e.g. confirming a Team Loadout.",
   continue_2: "The smaller second 'Continue' button in Expedition wave transitions.",
   defeat: "The Defeat result screen -- how the macro knows a run was lost.",
