@@ -3953,7 +3953,8 @@ def _launch_ui():
                 # slow boot isn't hit with a second launch, and skipped when
                 # other Roblox windows are open -- the deep link's single-
                 # instance handling would force-close them (alt accounts).
-                if not hwnd and api._resume_after_relaunch:
+                if (not hwnd and api._resume_after_relaunch
+                        and not api.runner.is_rejoin_pending()):
                     try:
                         want_reopen = cfg.load().get("auto_relaunch_roblox", True)
                     except Exception:
@@ -3969,6 +3970,8 @@ def _launch_ui():
                             api._roblox_relaunch_at = now  # also rate-limits this log
                             api.push_log("Roblox closed mid-run, but other Roblox windows are open -- "
                                          "not auto-reopening (it would close them).")
+                        elif not api.runner.claim_rejoin_launch():
+                            api.push_log("Roblox rejoin started elsewhere -- not auto-reopening a second instance.")
                         else:
                             from core.runner_constants import REJOIN_DEEPLINK
                             api._roblox_relaunch_at = now
@@ -3976,6 +3979,7 @@ def _launch_ui():
                                 os.startfile(REJOIN_DEEPLINK)
                                 api.push_log("Roblox closed mid-run -- reopening the game automatically...")
                             except OSError as exc:
+                                api.runner.cancel_rejoin_launch()
                                 api.push_log(f"Couldn't auto-reopen Roblox: {exc}")
 
                 if hwnd and (not api.docker.docked or hwnd != api.game_hwnd):

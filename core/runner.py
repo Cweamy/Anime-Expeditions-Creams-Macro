@@ -183,6 +183,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         # path must never start a second launcher while the first one is still
         # waiting on Roblox's single-instance handoff.
         self._rejoin_lock = threading.Lock()
+        self._rejoin_pending = False
         self._left_stage_this_run = False
         # Placed-unit screen positions from THIS match's Pre Start (see
         # _run_place_unit_block), keyed by the unit's #ordinal among place_unit
@@ -225,6 +226,38 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def is_rejoin_pending(self) -> bool:
+        """Whether this runner already handed a deep link to Roblox/Bloxstrap.
+
+        The dock watchdog has its own relaunch path. It must not start a second
+        link while this runner is still waiting on the first handoff, even if
+        Roblox temporarily has no discoverable window.
+        """
+        return self._rejoin_pending or self._rejoin_lock.locked()
+
+    def claim_rejoin_launch(self) -> bool:
+        """Reserve the single rejoin handoff for the dock watchdog.
+
+        The watchdog cannot wait inside ``_attempt_rejoin`` because it also
+        owns the loop that docks newly-created Roblox windows. It can claim
+        the same pending state before launching, though, so the runner and
+        watchdog cannot both open the deep link during a recovery race.
+        """
+        if not self._rejoin_lock.acquire(blocking=False):
+            return False
+        try:
+            if self._rejoin_pending:
+                return False
+            self._rejoin_pending = True
+            return True
+        finally:
+            self._rejoin_lock.release()
+
+    def cancel_rejoin_launch(self) -> None:
+        """Release a watchdog claim when its deep-link launch fails."""
+        with self._rejoin_lock:
+            self._rejoin_pending = False
 
     def is_paused(self) -> bool:
         return self._pause_event.is_set()
@@ -2487,35 +2520,19 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         except Exception as exc:
             self._log(f'[Macro] "{title}" webhook send failed: {exc}')
 
-    def _stop_after_rejoin_failure(self, stop_event: threading.Event, reason: str) -> None:
-        """Make a failed rejoin terminate this run instead of starting another
-        deep-link on the next recovery/queue pass.
-
-        The deep link is delegated to Roblox/Bloxstrap, so the macro cannot
-        prove that a launcher process has exited after its wait expires. The
-        safest behavior is to stop and let the user close the stuck launcher
-        state, rather than piling up another Bloxstrap/Command Prompt window.
-        """
-        if stop_event.is_set():
-            return
-        self._log(f"[Macro] {reason} -- stopping the run to avoid another Roblox rejoin launch.")
-        self._set_status(action="Rejoin failed -- stopped.")
-        stop_event.set()
-
     def _attempt_rejoin(self, hwnd, stop_event: threading.Event) -> bool:
         """Serialize Roblox deep-link rejoin attempts.
 
         Roblox/Bloxstrap owns the actual launcher process and may still be
         waiting on a single-instance handoff after this method times out. A
         non-blocking lock prevents a concurrent caller from launching another
-        link, while the locked implementation stops the run after any failed
-        launch so the outer self-loop cannot retry it indefinitely.
+        link, while a pending flag makes later recovery passes poll the
+        existing handoff instead of launching another link.
         """
         if stop_event.is_set():
             return False
         if not self._rejoin_lock.acquire(blocking=False):
             self._log("[Macro] A Roblox rejoin is already in progress -- not launching another instance.")
-            self._stop_after_rejoin_failure(stop_event, "A Roblox rejoin is already in progress")
             return False
         try:
             return self._attempt_rejoin_locked(hwnd, stop_event)
@@ -2531,48 +2548,54 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         instead of continuing to poll a dead window handle. Updates
         self._current_hwnd on success. Returns whether the lobby was
         actually reached again."""
-        # A deep-link launch invokes Roblox's OWN single-instance handling,
-        # which force-closes every OTHER open Roblox window down to just
-        # the newly launched one -- fine (even desired) on a single-
-        # instance setup, but it was silently taking out someone's other
-        # accounts/windows on a multi-instance one, which is a much worse
-        # outcome than just failing this one rejoin attempt. Only attempt
-        # it when there's nothing else around it could take down (the
-        # window that actually disconnected doesn't count here -- it's
-        # still docked/hidden at this point, not a standalone window
-        # list_roblox_windows would even see).
-        try:
-            other_windows = wm.list_roblox_windows()
-        except Exception:
-            other_windows = []
-        # In cutout mode (e.g. use_wgc_capture) our OWN Roblox stays a
-        # top-level window, so it shows up in list_roblox_windows and this
-        # guard tripped on our own game -- a rejoin would then never fire.
-        # Exclude the window we're farming (list_roblox_windows returns dicts)
-        # so only GENUINELY other Roblox windows (alt accounts) block a rejoin.
-        # Harmless in the normal child-reparent dock, where our own window
-        # isn't top-level and wouldn't be listed here anyway.
-        try:
-            _cur = self._hwnd_getter() if self._hwnd_getter else hwnd
-        except Exception:
-            _cur = hwnd
-        other_windows = [w for w in other_windows
-                         if (w.get("hwnd") if isinstance(w, dict) else w) not in (hwnd, _cur)]
-        if other_windows:
-            self._log("[Macro] Not attempting a deep-link rejoin -- other Roblox windows are open and it "
-                       "would close them. Stopping instead.")
-            self._stop_after_rejoin_failure(
-                stop_event, "Other Roblox windows are open; the rejoin was not attempted")
-            return False
+        if self._rejoin_pending:
+            # The previous call already handed the link to Roblox/Bloxstrap.
+            # Its launcher can remain alive after our timeout, so keep polling
+            # the same handoff instead of opening a second link/instance.
+            self._set_status(action="Rejoin pending -- waiting for the lobby...")
+            self._log("[Macro] A Roblox rejoin is already pending -- waiting on the existing launch "
+                      "instead of opening another instance.")
+        else:
+            # A deep-link launch invokes Roblox's OWN single-instance handling,
+            # which force-closes every OTHER open Roblox window down to just
+            # the newly launched one -- fine (even desired) on a single-
+            # instance setup, but it was silently taking out someone's other
+            # accounts/windows on a multi-instance one, which is a much worse
+            # outcome than just failing this one rejoin attempt. Only attempt
+            # it when there's nothing else around it could take down (the
+            # window that actually disconnected doesn't count here -- it's
+            # still docked/hidden at this point, not a standalone window
+            # list_roblox_windows would even see).
+            try:
+                other_windows = wm.list_roblox_windows()
+            except Exception:
+                other_windows = []
+            # In cutout mode (e.g. use_wgc_capture) our OWN Roblox stays a
+            # top-level window, so it shows up in list_roblox_windows and this
+            # guard tripped on our own game -- a rejoin would then never fire.
+            # Exclude the window we're farming (list_roblox_windows returns dicts)
+            # so only GENUINELY other Roblox windows (alt accounts) block a rejoin.
+            # Harmless in the normal child-reparent dock, where our own window
+            # isn't top-level and wouldn't be listed here anyway.
+            try:
+                _cur = self._hwnd_getter() if self._hwnd_getter else hwnd
+            except Exception:
+                _cur = hwnd
+            other_windows = [w for w in other_windows
+                             if (w.get("hwnd") if isinstance(w, dict) else w) not in (hwnd, _cur)]
+            if other_windows:
+                self._log("[Macro] Not attempting a deep-link rejoin -- other Roblox windows are open and it "
+                           "would close them. Continuing without launching another instance.")
+                return False
 
-        self._set_status(action="Disconnected -- rejoining...")
-        try:
-            _open_deep_link(REJOIN_DEEPLINK)
-        except (OSError, webbrowser.Error) as exc:
-            self._log(f"[Macro] Couldn't launch the rejoin link: {exc}")
-            self._stop_after_rejoin_failure(stop_event, "The Roblox rejoin link could not be launched")
-            return False
-        self._log("[Macro] Rejoin link launched -- waiting for the game to load back in...")
+            self._set_status(action="Disconnected -- rejoining...")
+            try:
+                _open_deep_link(REJOIN_DEEPLINK)
+            except (OSError, webbrowser.Error) as exc:
+                self._log(f"[Macro] Couldn't launch the rejoin link: {exc}")
+                return False
+            self._rejoin_pending = True
+            self._log("[Macro] Rejoin link launched -- waiting for the game to load back in...")
 
         deadline = time.time() + REJOIN_TIMEOUT
         last_hwnd = hwnd
@@ -2591,12 +2614,13 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
             if match is not None:
                 self._log("[Macro] Rejoined -- back on the lobby.")
                 self._current_hwnd = current_hwnd
+                self._rejoin_pending = False
                 return True
         screenshot_path = self._save_debug_screenshot_unconditional(last_hwnd, "rejoin_timeout")
         suffix = f" Debug: {screenshot_path}" if screenshot_path else ""
-        self._log(f"[Macro] Rejoin didn't reach the lobby within {REJOIN_TIMEOUT:.0f}s -- giving up.{suffix}")
-        self._stop_after_rejoin_failure(
-            stop_event, "The Roblox rejoin did not reach the lobby")
+        self._set_status(action="Rejoin pending -- still waiting for the lobby...")
+        self._log(f"[Macro] Rejoin didn't reach the lobby within {REJOIN_TIMEOUT:.0f}s -- keeping the "
+                  f"existing launch pending; no second deep link will be opened.{suffix}")
         return False
 
     def _click_start_and_wait_teleport(self, hwnd, stop_event: threading.Event, webhook: dict = None,
