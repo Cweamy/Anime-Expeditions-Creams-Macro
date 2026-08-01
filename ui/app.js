@@ -760,8 +760,10 @@ function setSettingsCategory(cat) {
 }
 
 // Settings search: filters visible setting-rows by matching their text
-// content (label + description) against the query. Automatically switches
-// to the "All" view so results from every category show. Empty query
+// content (label + description) against the query. Some panels also own
+// controls/descriptions outside a .setting-row (Webhook, Reward Reader and
+// Game Stats), so those panel-owned nodes are searched too. Automatically
+// switches to the "All" view so results from every category show. Empty query
 // restores all rows.
 function filterSettings(query) {
   const q = (query || '').trim().toLowerCase();
@@ -775,16 +777,26 @@ function filterSettings(query) {
     let catHasHit = false;
     catSection.querySelectorAll('.rp-panel').forEach(panel => {
       let panelHasHit = false;
+      // Search content owned directly by the panel without counting row text
+      // twice. A panel-level match keeps its controls visible, just like a
+      // header match; otherwise a query such as "Webhook URL" would hide the
+      // entire panel because that field is not wrapped in .setting-row.
+      const contentCopy = panel.cloneNode(true);
+      contentCopy.querySelector('.rp-panel-head')?.remove();
+      contentCopy.querySelectorAll('.setting-row').forEach(row => row.remove());
+      const panelContentText = (contentCopy.textContent || '').toLowerCase();
+      const panelContentHit = !!q && panelContentText.includes(q);
       panel.querySelectorAll('.setting-row').forEach(row => {
         const text = (row.textContent || '').toLowerCase();
-        const hit = !q || text.includes(q);
+        const hit = !q || panelContentHit || text.includes(q);
         row.classList.toggle('search-hidden', !hit);
-        row.classList.toggle('search-hit', hit && !!q);
+        row.classList.toggle('search-hit', hit && !!q && !panelContentHit);
         if (hit) panelHasHit = true;
       });
       // Also check the panel header text (e.g. "Webhook", "General")
       const headerText = (panel.querySelector('.rp-panel-head')?.textContent || '').toLowerCase();
       if (q && headerText.includes(q)) panelHasHit = true;
+      if (panelContentHit) panelHasHit = true;
       panel.classList.toggle('search-hidden', !panelHasHit && !!q);
       if (panelHasHit) catHasHit = true;
     });
