@@ -17,6 +17,7 @@ import os
 import threading
 import time
 import traceback
+import webbrowser
 from datetime import datetime, timezone
 
 import cv2
@@ -36,6 +37,16 @@ from .runner_challenge import ChallengeOps
 from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
 from .runner_fuel import FuelOps
+
+
+def _open_deep_link(url: str) -> None:
+    """Open an application deep link on Windows and non-Windows systems."""
+    startfile = getattr(os, "startfile", None)
+    if startfile is not None:
+        startfile(url)
+        return
+    if not webbrowser.open(url):
+        raise OSError(f"No application accepted the deep link: {url}")
 
 
 def _find_team_load_button(frame, expected_y):
@@ -2511,8 +2522,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
 
         self._set_status(action="Disconnected -- rejoining...")
         try:
-            os.startfile(REJOIN_DEEPLINK)
-        except OSError as exc:
+            _open_deep_link(REJOIN_DEEPLINK)
+        except (OSError, webbrowser.Error) as exc:
             self._log(f"[Macro] Couldn't launch the rejoin link: {exc}")
             return False
         self._log("[Macro] Rejoin link launched -- waiting for the game to load back in...")

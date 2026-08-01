@@ -247,6 +247,19 @@ def test_recovery_exception_is_logged_without_blocking_later_phases(
     )
 
 
+def test_rejoin_uses_browser_fallback_when_startfile_is_unavailable(monkeypatch):
+    opened = []
+    monkeypatch.delattr(runner_module.os, "startfile", raising=False)
+    monkeypatch.setattr(
+        runner_module.webbrowser, "open",
+        lambda url: opened.append(url) or True,
+    )
+
+    runner_module._open_deep_link("roblox://test")
+
+    assert opened == ["roblox://test"]
+
+
 def test_stop_during_phase_failure_does_not_recover_or_continue(
         monkeypatch, runner):
     _prepare_run_environment(monkeypatch, runner)
