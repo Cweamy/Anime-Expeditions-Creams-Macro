@@ -177,6 +177,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         self._debug_screenshots = False
         self._current_hwnd = None       # set at the top of _run -- lets _checkpoint reach Leave Stage on stop
         self._hwnd_getter = None        # set at the top of _run -- lets _attempt_rejoin find a re-docked hwnd
+        # A deep-link launch is handed to Roblox/Bloxstrap, so there is no
+        # process handle for the runner to wait on or cancel. Keep the launch
+        # section serialized anyway: a manual Force Rejoin or another recovery
+        # path must never start a second launcher while the first one is still
+        # waiting on Roblox's single-instance handoff.
+        self._rejoin_lock = threading.Lock()
         self._left_stage_this_run = False
         # Placed-unit screen positions from THIS match's Pre Start (see
         # _run_place_unit_block), keyed by the unit's #ordinal among place_unit
@@ -2394,10 +2400,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
             self._handle_disconnect(hwnd, stop_event, webhook, task)
             return False
         if result == "timeout" and not stop_event.is_set():
+            screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "teleport_timeout")
+            suffix = f" Debug: {screenshot_path}" if screenshot_path else ""
             self._log(f'[Macro] "nav_unitmanager" not found within {timeout:.0f}s -- never teleported '
                        f'in-game (or the Unit Manager button isn\'t matching your setup -- if you\'re '
                        f'visibly in the match, add your own crop of it via Settings > General > '
-                       f'Image Manager). Stopping.')
+                       f'Image Manager). Stopping.{suffix}')
         return False
 
     def _wait_for_teleport_result(self, hwnd, stop_event: threading.Event, timeout: float) -> str:
@@ -2479,7 +2487,42 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         except Exception as exc:
             self._log(f'[Macro] "{title}" webhook send failed: {exc}')
 
+    def _stop_after_rejoin_failure(self, stop_event: threading.Event, reason: str) -> None:
+        """Make a failed rejoin terminate this run instead of starting another
+        deep-link on the next recovery/queue pass.
+
+        The deep link is delegated to Roblox/Bloxstrap, so the macro cannot
+        prove that a launcher process has exited after its wait expires. The
+        safest behavior is to stop and let the user close the stuck launcher
+        state, rather than piling up another Bloxstrap/Command Prompt window.
+        """
+        if stop_event.is_set():
+            return
+        self._log(f"[Macro] {reason} -- stopping the run to avoid another Roblox rejoin launch.")
+        self._set_status(action="Rejoin failed -- stopped.")
+        stop_event.set()
+
     def _attempt_rejoin(self, hwnd, stop_event: threading.Event) -> bool:
+        """Serialize Roblox deep-link rejoin attempts.
+
+        Roblox/Bloxstrap owns the actual launcher process and may still be
+        waiting on a single-instance handoff after this method times out. A
+        non-blocking lock prevents a concurrent caller from launching another
+        link, while the locked implementation stops the run after any failed
+        launch so the outer self-loop cannot retry it indefinitely.
+        """
+        if stop_event.is_set():
+            return False
+        if not self._rejoin_lock.acquire(blocking=False):
+            self._log("[Macro] A Roblox rejoin is already in progress -- not launching another instance.")
+            self._stop_after_rejoin_failure(stop_event, "A Roblox rejoin is already in progress")
+            return False
+        try:
+            return self._attempt_rejoin_locked(hwnd, stop_event)
+        finally:
+            self._rejoin_lock.release()
+
+    def _attempt_rejoin_locked(self, hwnd, stop_event: threading.Event) -> bool:
         """Launches the Roblox deep link and waits for the lobby (nav_play)
         to come back, polling self._hwnd_getter() rather than trusting the
         original hwnd -- if Roblox had fully closed, the deep link spawns a
@@ -2518,6 +2561,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
         if other_windows:
             self._log("[Macro] Not attempting a deep-link rejoin -- other Roblox windows are open and it "
                        "would close them. Stopping instead.")
+            self._stop_after_rejoin_failure(
+                stop_event, "Other Roblox windows are open; the rejoin was not attempted")
             return False
 
         self._set_status(action="Disconnected -- rejoining...")
@@ -2525,10 +2570,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
             _open_deep_link(REJOIN_DEEPLINK)
         except (OSError, webbrowser.Error) as exc:
             self._log(f"[Macro] Couldn't launch the rejoin link: {exc}")
+            self._stop_after_rejoin_failure(stop_event, "The Roblox rejoin link could not be launched")
             return False
         self._log("[Macro] Rejoin link launched -- waiting for the game to load back in...")
 
         deadline = time.time() + REJOIN_TIMEOUT
+        last_hwnd = hwnd
         while time.time() < deadline:
             if stop_event.is_set():
                 return False
@@ -2536,6 +2583,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
             current_hwnd = self._hwnd_getter() if self._hwnd_getter else hwnd
             if not current_hwnd or not wm.is_window(current_hwnd):
                 continue
+            last_hwnd = current_hwnd
             try:
                 match, _ = vision.find_image_any(current_hwnd, NAV_PLAY_IMAGE_NAMES)
             except vision.TemplateNotFound:
@@ -2544,7 +2592,11 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ExpeditionOps, 
                 self._log("[Macro] Rejoined -- back on the lobby.")
                 self._current_hwnd = current_hwnd
                 return True
-        self._log(f"[Macro] Rejoin didn't reach the lobby within {REJOIN_TIMEOUT:.0f}s -- giving up.")
+        screenshot_path = self._save_debug_screenshot_unconditional(last_hwnd, "rejoin_timeout")
+        suffix = f" Debug: {screenshot_path}" if screenshot_path else ""
+        self._log(f"[Macro] Rejoin didn't reach the lobby within {REJOIN_TIMEOUT:.0f}s -- giving up.{suffix}")
+        self._stop_after_rejoin_failure(
+            stop_event, "The Roblox rejoin did not reach the lobby")
         return False
 
     def _click_start_and_wait_teleport(self, hwnd, stop_event: threading.Event, webhook: dict = None,

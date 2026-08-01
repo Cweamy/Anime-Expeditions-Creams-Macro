@@ -260,6 +260,81 @@ def test_rejoin_uses_browser_fallback_when_startfile_is_unavailable(monkeypatch)
     assert opened == ["roblox://test"]
 
 
+def test_failed_rejoin_stops_run_and_does_not_launch_again(monkeypatch):
+    class _Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def time(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    runner = MacroRunner(Mock(), Mock(), Mock())
+    clock = _Clock()
+    stop_event = threading.Event()
+    launches = []
+    screenshot = Mock(return_value="rejoin_timeout.png")
+
+    monkeypatch.setattr(runner_module.time, "time", clock.time)
+    monkeypatch.setattr(runner_module.time, "sleep", clock.sleep)
+    monkeypatch.setattr(runner_module.wm, "list_roblox_windows", lambda: [])
+    monkeypatch.setattr(runner_module.wm, "is_window", lambda _hwnd: True)
+    monkeypatch.setattr(
+        runner_module.vision,
+        "find_image_any",
+        lambda *_args, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        runner_module.os,
+        "startfile",
+        lambda url: launches.append(url),
+        raising=False,
+    )
+    runner._hwnd_getter = lambda: 123
+    runner._save_debug_screenshot_unconditional = screenshot
+
+    assert runner._attempt_rejoin(123, stop_event) is False
+    assert stop_event.is_set()
+    assert launches == [runner_module.REJOIN_DEEPLINK]
+    screenshot.assert_called_once_with(123, "rejoin_timeout")
+    assert any(
+        "avoid another Roblox rejoin launch" in call_args.args[0]
+        for call_args in runner._log.call_args_list
+    )
+
+    # A later recovery layer must not be able to launch a second deep link
+    # after the first attempt has already stopped the run.
+    assert runner._attempt_rejoin(123, stop_event) is False
+    assert launches == [runner_module.REJOIN_DEEPLINK]
+
+
+def test_rejoin_lock_blocks_concurrent_launcher(monkeypatch):
+    runner = MacroRunner(Mock(), Mock(), Mock())
+    stop_event = threading.Event()
+    launches = []
+    monkeypatch.setattr(
+        runner_module.os,
+        "startfile",
+        lambda url: launches.append(url),
+        raising=False,
+    )
+
+    assert runner._rejoin_lock.acquire(blocking=False)
+    try:
+        assert runner._attempt_rejoin(123, stop_event) is False
+    finally:
+        runner._rejoin_lock.release()
+
+    assert stop_event.is_set()
+    assert launches == []
+    assert any(
+        "already in progress" in call_args.args[0]
+        for call_args in runner._log.call_args_list
+    )
+
+
 def test_stop_during_phase_failure_does_not_recover_or_continue(
         monkeypatch, runner):
     _prepare_run_environment(monkeypatch, runner)
