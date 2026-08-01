@@ -159,6 +159,22 @@ def test_teleport_wrapper_routes_each_result(result, expected, rejoins):
     assert runner._handle_disconnect.call_count == rejoins
 
 
+def test_teleport_timeout_saves_diagnostic_screenshot():
+    runner = MacroRunner(MagicMock(), MagicMock(), MagicMock())
+    runner._wait_for_teleport_result = MagicMock(return_value="timeout")
+    runner._save_debug_screenshot_unconditional = MagicMock(
+        return_value="teleport_timeout.png"
+    )
+
+    assert runner._wait_teleport_in(
+        123, threading.Event(), webhook={}, task={"map": "Map"}, timeout=20.0
+    ) is False
+
+    runner._save_debug_screenshot_unconditional.assert_called_once_with(
+        123, "teleport_timeout"
+    )
+
+
 def test_slow_solo_teleport_waits_across_chunks_without_reclicking(monkeypatch):
     runner = MacroRunner(MagicMock(), MagicMock(), MagicMock())
     match = {"score": 1.0, "x": 1, "y": 2, "w": 3, "h": 4}
