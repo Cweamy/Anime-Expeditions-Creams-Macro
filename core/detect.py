@@ -21,6 +21,8 @@ means the same unit on both sides.
 """
 import ast
 
+import cv2
+
 from . import vision
 
 DETECT_LOOP_DEFAULT_INTERVAL_MS = 1000
@@ -116,6 +118,11 @@ def evaluate(runner, hwnd, block):
     (their "where" isn't a single point)."""
     log = getattr(runner, "_log", None)
     ctx = _Ctx(hwnd, _region_tuple(block.get("region")), block.get("threshold"), log)
+    return _evaluate_context(ctx, block, log)
+
+
+def _evaluate_context(ctx, block, log=None):
+    """Evaluate a block against any context exposing find/count helpers."""
     mode = block.get("mode") or "single"
 
     if mode == "expr":
@@ -138,6 +145,28 @@ def evaluate(runner, hwnd, block):
         return (len(matches) > 0), matches
     match = ctx.find_match(name)
     return (match is not None), ([match] if match else [])
+
+
+def diagnose_frame(frame_bgr, block, log=None):
+    """Evaluate one Detect block against one already-captured full frame.
+
+    The normal runner captures independently on every poll. Diagnostics use a
+    single frame so the returned scores, match boxes, and preview image all
+    describe exactly the same moment. The returned details include the best
+    candidate even when it is below the configured threshold.
+    """
+    if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
+        return {"found": False, "matches": [], "details": [], "region": None}
+    frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    region = _region_tuple(block.get("region"))
+    ctx = _FrameCtx(frame_gray, region, block.get("threshold"), log)
+    found, matches = _evaluate_context(ctx, block, log)
+    return {
+        "found": bool(found),
+        "matches": matches,
+        "details": list(ctx.details.values()),
+        "region": region,
+    }
 
 
 def _region_tuple(region):
@@ -201,6 +230,119 @@ class _Ctx:
             self._missing.add(name)
             self.log(f'[Macro] Detect: no reference image named "{name}" -- treating it as not found. '
                      f'Add one in Image Manager > Detection Images.')
+
+
+class _FrameCtx(_Ctx):
+    """The Detect context used by ``diagnose_frame``."""
+
+    def __init__(self, frame_gray, region, threshold, log):
+        super().__init__(None, region, threshold, log)
+        self.frame_gray = frame_gray
+        self.details = {}
+
+    def _region_frame(self):
+        if self.region is None:
+            return self.frame_gray
+        x, y, w, h = self.region
+        return self.frame_gray[max(0, y):y + h, max(0, x):x + w]
+
+    def _offset(self, match):
+        if match is None or self.region is None:
+            return dict(match) if match is not None else None
+        x, y, _w, _h = self.region
+        result = dict(match)
+        for key in ("x", "cx"):
+            result[key] += x
+        for key in ("y", "cy"):
+            result[key] += y
+        return result
+
+    def _record(self, name, threshold, best=None, match=None, matches=None, error=None):
+        entry = self.details.setdefault(str(name), {
+            "name": str(name), "matched": False, "score": None,
+            "threshold": float(threshold), "best_match": None,
+            "match": None, "matches": [], "error": None,
+        })
+        entry["threshold"] = float(threshold)
+        entry["matched"] = bool(match is not None or matches)
+        entry["score"] = best.get("score") if best else None
+        entry["best_match"] = best
+        entry["match"] = match
+        if matches is not None:
+            entry["matches"] = matches
+        if error:
+            entry["error"] = error
+
+    def find_match(self, name):
+        name = str(name)
+        tdir, raw_threshold = self._dir_and_thr(name)
+        threshold = vision._effective_threshold(name, raw_threshold)
+        try:
+            result = vision.find_in_gray_multiscale_diagnostic(
+                self._region_frame(), name, template_dir=tdir, threshold=threshold)
+        except vision.TemplateNotFound:
+            self._warn_missing(name)
+            self._record(name, threshold, error="missing")
+            return None
+        best = self._offset(result["best"])
+        match = self._offset(result["match"])
+        self._record(name, threshold, best=best, match=match,
+                     matches=[match] if match else [])
+        return match
+
+    def find_all(self, name):
+        name = str(name)
+        tdir, raw_threshold = self._dir_and_thr(name)
+        threshold = vision._effective_threshold(name, raw_threshold)
+        try:
+            matches = vision.find_all_in_gray(
+                self._region_frame(), name, template_dir=tdir,
+                threshold=threshold)
+            best = vision.find_in_gray_multiscale_diagnostic(
+                self._region_frame(), name, template_dir=tdir, threshold=threshold)["best"]
+        except vision.TemplateNotFound:
+            self._warn_missing(name)
+            self._record(name, threshold, error="missing")
+            return []
+        matches = [self._offset(match) for match in matches]
+        self._record(name, threshold, best=self._offset(best),
+                     match=matches[0] if matches else None, matches=matches)
+        return matches
+
+
+def render_diagnostic(frame_bgr, report):
+    """Draw the Detect region, match candidates, and verdict on a frame."""
+    import numpy as np
+
+    image = np.array(frame_bgr, dtype=np.uint8, copy=True, order="C")
+    region = report.get("region")
+    if region is not None:
+        x, y, w, h = region
+        cv2.rectangle(image, (x, y), (x + w, y + h), (255, 190, 0), 2)
+        cv2.putText(image, f"search region {x},{y} {w}x{h}", (x + 4, max(16, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 190, 0), 1, cv2.LINE_AA)
+
+    for detail in report.get("details", []):
+        matched = bool(detail.get("matched"))
+        boxes = detail.get("matches") or []
+        if not boxes and (detail.get("match") or detail.get("best_match")):
+            boxes = [detail.get("match") or detail.get("best_match")]
+        color = (0, 220, 80) if matched else (0, 210, 255)
+        for index, match in enumerate(boxes):
+            x, y = int(match["x"]), int(match["y"])
+            w, h = int(match["w"]), int(match["h"])
+            cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
+            score = float(match.get("score", 0.0))
+            suffix = "" if index == 0 else f" #{index + 1}"
+            cv2.putText(image, f"{detail['name']}{suffix} {score:.2f}",
+                        (x, max(14, y - 5)), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45, color, 1, cv2.LINE_AA)
+
+    status = "FOUND - Then branch" if report.get("found") else "NOT FOUND - Else branch"
+    cv2.rectangle(image, (0, 0), (image.shape[1], 28), (20, 25, 35), -1)
+    cv2.putText(image, status, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                (0, 220, 80) if report.get("found") else (80, 170, 255), 1, cv2.LINE_AA)
+    return image
 
 
 # ---------------------------------------------------------------------------

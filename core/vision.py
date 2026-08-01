@@ -687,8 +687,35 @@ def find_color_run(hwnd: int, region: tuple, mask_fn, min_run: int, min_height: 
     return {"cx": cx + int(region[0]), "cy": cy + int(region[1]), "w": width, "h": height}
 
 
+def best_match_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray,
+                       mask: np.ndarray = None) -> dict:
+    """Return the best finite template match regardless of its score.
+
+    The normal matcher deliberately hides below-threshold candidates. The
+    Detect test tool needs to show those candidates so a user can tell the
+    difference between a wrong region/template and a threshold that is simply
+    too strict. This helper keeps that diagnostic behavior separate from the
+    runtime pass/fail matcher.
+    """
+    th, tw = template_gray.shape[:2]
+    hh, hw = haystack_gray.shape[:2]
+    if th > hh or tw > hw:
+        return None
+    if mask is not None:
+        result = cv2.matchTemplate(haystack_gray, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
+    else:
+        result = cv2.matchTemplate(haystack_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+    result[~np.isfinite(result)] = -1
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    if max_val < 0:
+        return None
+    x, y = max_loc
+    return {"x": x, "y": y, "w": tw, "h": th,
+            "cx": x + tw // 2, "cy": y + th // 2, "score": float(max_val)}
+
+
 def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold: float = DEFAULT_THRESHOLD,
-                  mask: np.ndarray = None) -> dict:
+                 mask: np.ndarray = None) -> dict:
     """One-shot match of template_gray against haystack_gray. Returns the
     best match's box + center in haystack-local pixel coords, or None if its
     score doesn't clear threshold. haystack smaller than template can't be
@@ -701,28 +728,8 @@ def find_in_gray(haystack_gray: np.ndarray, template_gray: np.ndarray, threshold
     masked templates use TM_CCORR_NORMED and only score the pixels the mask
     keeps; a plain rectangular template still gets TM_CCOEFF_NORMED.
     """
-    th, tw = template_gray.shape[:2]
-    hh, hw = haystack_gray.shape[:2]
-    if th > hh or tw > hw:
-        return None
-    if mask is not None:
-        result = cv2.matchTemplate(haystack_gray, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
-    else:
-        result = cv2.matchTemplate(haystack_gray, template_gray, cv2.TM_CCOEFF_NORMED)
-    # The normalized methods divide by the local window's own variance --
-    # a flat/solid-color patch in the haystack (a loading screen, a frame
-    # mid-transition) has zero variance there, so that division is a literal
-    # 0/0 or x/0. OpenCV doesn't clamp this, so it surfaces as a genuine inf
-    # or NaN "score" that then sails past any real threshold check (inf is
-    # >= anything) and gets reported as a confident match against a screen
-    # that was never actually showing the target at all. Reject those
-    # outright rather than trusting them.
-    result[~np.isfinite(result)] = -1
-    _, max_val, _, max_loc = cv2.minMaxLoc(result)
-    if max_val < threshold:
-        return None
-    x, y = max_loc
-    return {"x": x, "y": y, "w": tw, "h": th, "cx": x + tw // 2, "cy": y + th // 2, "score": float(max_val)}
+    match = best_match_in_gray(haystack_gray, template_gray, mask)
+    return match if match is not None and match["score"] >= threshold else None
 
 
 def _scaled_templates(name: str, template_dir: str, scale: float) -> list:
@@ -767,6 +774,31 @@ def find_in_gray_multiscale(haystack_gray: np.ndarray, name: str, template_dir: 
             if match is not None:
                 return match
     return None
+
+
+def find_in_gray_multiscale_diagnostic(haystack_gray: np.ndarray, name: str,
+                                       template_dir: str = UI_ASSETS_DIR,
+                                       threshold: float = DEFAULT_THRESHOLD) -> dict:
+    """Return the runtime match plus the strongest below-threshold candidate.
+
+    ``match`` preserves the normal search order: the first variant/scale that
+    clears the threshold wins. ``best`` is the highest finite score across
+    every variant and supported scale, even when nothing clears the threshold.
+    This is intentionally a manual-diagnostics helper; normal polling keeps
+    using ``find_in_gray_multiscale`` and can stop at its first successful hit.
+    """
+    first_match = None
+    best = None
+    for scale in SCALE_FACTORS:
+        for gray, mask in _scaled_templates(name, template_dir, scale):
+            candidate = best_match_in_gray(haystack_gray, gray, mask)
+            if candidate is None:
+                continue
+            if best is None or candidate["score"] > best["score"]:
+                best = candidate
+            if first_match is None and candidate["score"] >= threshold:
+                first_match = dict(candidate)
+    return {"match": first_match, "best": best}
 
 
 DEBUG_DIR = os.path.join(constants.APP_DIR, "debug")
@@ -910,6 +942,47 @@ def find_bottommost_image(hwnd: int, name: str, region: tuple = None, threshold:
     return None
 
 
+def find_all_in_gray(haystack_gray: np.ndarray, name: str,
+                     template_dir: str = UI_ASSETS_DIR,
+                     threshold: float = DEFAULT_THRESHOLD, max_results: int = 50) -> list:
+    """In-memory counterpart to ``find_image_all``.
+
+    It lets a diagnostic evaluate every Detect mode against one full-window
+    frame, so the preview and the reported score cannot come from different
+    captures.
+    """
+    templates = load_template_grays(name, template_dir)
+    hh, hw = haystack_gray.shape[:2]
+    template_gray, mask = templates[0]
+    th, tw = template_gray.shape[:2]
+    if th > hh or tw > hw:
+        return []
+    if mask is not None:
+        result = cv2.matchTemplate(haystack_gray, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
+    else:
+        result = cv2.matchTemplate(haystack_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+    result[~np.isfinite(result)] = -1
+
+    ys, xs = np.where(result >= threshold)
+    if len(ys) == 0:
+        return []
+    scores = result[ys, xs]
+    order = np.argsort(scores)[::-1]
+    min_dist_sq = (max(tw, th) * 0.5) ** 2
+    kept = []
+    for i in order:
+        x, y = int(xs[i]), int(ys[i])
+        if any((x - k["_rx"]) ** 2 + (y - k["_ry"]) ** 2 < min_dist_sq for k in kept):
+            continue
+        kept.append({"_rx": x, "_ry": y, "x": x, "y": y, "w": tw, "h": th,
+                     "cx": x + tw // 2, "cy": y + th // 2, "score": float(result[y, x])})
+        if len(kept) >= max_results:
+            break
+    for match in kept:
+        del match["_rx"], match["_ry"]
+    return kept
+
+
 def find_image_all(hwnd: int, name: str, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
                     template_dir: str = UI_ASSETS_DIR, max_results: int = 50) -> list:
     """Every distinct on-screen location of `name` at/above threshold, best
@@ -923,42 +996,12 @@ def find_image_all(hwnd: int, name: str, region: tuple = None, threshold: float 
     matched. Only the first (primary) variant is scanned -- the extra
     variants exist to catch DIFFERENT renders of one button, and mixing
     their hits into one count would double-count."""
-    templates = load_template_grays(name, template_dir)
     haystack = capture_game_gray(hwnd, region)
     if haystack is None:
         return []
     threshold = _effective_threshold(name, threshold)
-    hh, hw = haystack.shape[:2]
-    template_gray, mask = templates[0]
-    th, tw = template_gray.shape[:2]
-    if th > hh or tw > hw:
-        return []
-    if mask is not None:
-        result = cv2.matchTemplate(haystack, template_gray, cv2.TM_CCORR_NORMED, mask=mask)
-    else:
-        result = cv2.matchTemplate(haystack, template_gray, cv2.TM_CCOEFF_NORMED)
-    result[~np.isfinite(result)] = -1
-
-    ys, xs = np.where(result >= threshold)
-    if len(ys) == 0:
-        return []
-    # Best score first so non-max suppression keeps the strongest hit of each
-    # overlapping cluster.
-    scores = result[ys, xs]
-    order = np.argsort(scores)[::-1]
-    min_dist_sq = (max(tw, th) * 0.5) ** 2
-    kept = []
-    for i in order:
-        x, y = int(xs[i]), int(ys[i])
-        if any((x - k["_rx"]) ** 2 + (y - k["_ry"]) ** 2 < min_dist_sq for k in kept):
-            continue
-        match = {"_rx": x, "_ry": y, "x": x, "y": y, "w": tw, "h": th,
-                 "cx": x + tw // 2, "cy": y + th // 2, "score": float(result[y, x])}
-        kept.append(match)
-        if len(kept) >= max_results:
-            break
+    kept = find_all_in_gray(haystack, name, template_dir, threshold, max_results)
     for match in kept:
-        del match["_rx"], match["_ry"]
         if region is not None:
             match["x"] += region[0]
             match["y"] += region[1]

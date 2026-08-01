@@ -1275,3 +1275,13 @@ def test_auto_shop_resource_card_has_required_controls():
         assert f'id="{element_id}"' in html
     assert "Numeric quantities repeat on later passes until sold out." in html
 
+
+def test_detect_controls_expose_live_test_button(tmp_path):
+    out = run_js("""
+        function renderDetectImagePick() { return '<image>'; }
+        eval(extract('renderDetectControls'));
+        console.log(JSON.stringify(renderDetectControls({ id: 'd1', advanced: false, image: 'Defense' })));
+    """, tmp_path)
+    assert "testDetect('d1'" in out
+    assert 'Test now' in out
+
