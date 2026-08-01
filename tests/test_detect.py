@@ -1,6 +1,8 @@
 import threading
 from unittest.mock import MagicMock
 
+import numpy as np
+
 from core import detect
 from core import runner_blocks as rb
 from core.runner import MacroRunner
@@ -145,6 +147,89 @@ def test_evaluate_missing_image_is_not_found_and_warns(monkeypatch):
     found, matches = detect.evaluate(runner, 1, {"mode": "single", "image": "ghost"})
     assert found is False and matches == []
     assert any("no reference image" in m for m in logs)
+
+
+def test_diagnose_frame_uses_one_full_frame_and_offsets_region_matches(monkeypatch):
+    local_best = {"x": 2, "y": 3, "w": 8, "h": 6, "cx": 6, "cy": 6, "score": 0.84}
+    monkeypatch.setattr(detect.vision, "detect_template_dir", lambda _name: "detect")
+    monkeypatch.setattr(
+        detect.vision,
+        "find_in_gray_multiscale_diagnostic",
+        lambda *_args, **_kwargs: {"match": None, "best": local_best},
+    )
+    frame = np.zeros((40, 50, 3), dtype=np.uint8)
+
+    report = detect.diagnose_frame(
+        frame,
+        {"mode": "single", "image": "Defense", "region": {"x": 10, "y": 8, "w": 20, "h": 15},
+         "threshold": 0.90},
+    )
+
+    assert report["found"] is False
+    detail = report["details"][0]
+    assert detail["name"] == "Defense"
+    assert detail["score"] == 0.84
+    assert detail["best_match"]["x"] == 12
+    assert detail["best_match"]["y"] == 11
+    assert detail["best_match"]["cx"] == 16
+    assert detail["best_match"]["cy"] == 14
+
+
+def test_diagnose_frame_preserves_multi_image_and_or_logic(monkeypatch):
+    hit = {"x": 1, "y": 2, "w": 4, "h": 5, "cx": 3, "cy": 4, "score": 0.95}
+    monkeypatch.setattr(detect.vision, "detect_template_dir", lambda _name: "detect")
+
+    def diagnose(_frame, name, **_kwargs):
+        match = hit if name == "Defense" else None
+        return {"match": match, "best": match}
+
+    monkeypatch.setattr(detect.vision, "find_in_gray_multiscale_diagnostic", diagnose)
+    frame = np.zeros((20, 30, 3), dtype=np.uint8)
+
+    found_or = detect.diagnose_frame(
+        frame, {"mode": "multi", "images": ["Defense", "Elite"], "logic": "or"})
+    found_and = detect.diagnose_frame(
+        frame, {"mode": "multi", "images": ["Defense", "Elite"], "logic": "and"})
+
+    assert found_or["found"] is True
+    assert found_and["found"] is False
+    assert [detail["name"] for detail in found_and["details"]] == ["Defense", "Elite"]
+
+
+def test_render_diagnostic_draws_region_and_best_candidate():
+    frame = np.zeros((40, 50, 3), dtype=np.uint8)
+    report = {
+        "found": False,
+        "region": (5, 6, 20, 15),
+        "details": [{
+            "name": "Defense", "matched": False, "score": 0.84,
+            "threshold": 0.90, "best_match": {
+                "x": 8, "y": 9, "w": 6, "h": 5, "cx": 11, "cy": 11,
+                "score": 0.84,
+            }, "match": None, "matches": [],
+        }],
+    }
+
+    rendered = detect.render_diagnostic(frame, report)
+
+    assert rendered.shape == frame.shape
+    assert np.any(rendered != frame)
+
+
+def test_render_diagnostic_uses_red_for_accepted_matches():
+    frame = np.zeros((50, 40, 3), dtype=np.uint8)
+    rendered = detect.render_diagnostic(frame, {
+        "found": True,
+        "region": None,
+        "details": [{
+            "name": "nav_play", "matched": True,
+            "match": {"x": 8, "y": 32, "w": 6, "h": 5, "cx": 11, "cy": 34, "score": 0.95},
+            "matches": [],
+        }],
+    })
+
+    red = (rendered[:, :, 2] > 200) & (rendered[:, :, 1] < 50) & (rendered[:, :, 0] < 50)
+    assert red.any()
 
 
 # --------------------------------------------------------------------------

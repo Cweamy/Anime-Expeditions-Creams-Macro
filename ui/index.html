@@ -2267,6 +2267,28 @@
     </div>
   </div>
 
+  <!-- ============ Detect test modal ============
+       Shows one full Roblox-window frame plus the exact Detect verdict and
+       scores, without running either nested branch or changing the macro. -->
+  <div id="detect-test-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) closeDetectTest()">
+    <div class="modal-panel detect-test-panel">
+      <div class="modal-head">
+        <span class="modal-title">Test Detect</span>
+        <span class="modal-close" onclick="closeDetectTest()">&times;</span>
+      </div>
+      <div class="modal-body detect-test-body">
+        <div id="detect-test-status" class="detect-test-status missed">Waiting for test...</div>
+        <div id="detect-test-meta" class="detect-test-meta"></div>
+        <div class="detect-test-layout">
+          <div class="detect-test-preview-wrap">
+            <img id="detect-test-image" class="detect-test-image" alt="Detect test capture">
+          </div>
+          <div id="detect-test-details" class="detect-test-details"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Update popup: shown when the background GitHub check (main._check_for_
        update_background) finds a newer tagged release than VERSION. Update
        downloads the release source and restarts the app to apply it (see

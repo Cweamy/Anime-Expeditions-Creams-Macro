@@ -13,6 +13,11 @@ window.addEventListener('keydown', (e) => {
     const faqModal = document.getElementById('faq-modal');
     if (faqModal && faqModal.style.display !== 'none') {
       closeFaqModal();
+      return;
+    }
+    const detectTestModal = document.getElementById('detect-test-modal');
+    if (detectTestModal && detectTestModal.style.display !== 'none') {
+      closeDetectTest();
     }
   }
 });
@@ -5056,9 +5061,10 @@ function detectBlock(id) {
 }
 
 function renderDetectControls(b) {
+  const testBtn = `<button type="button" class="block-mod-btn detect-test-btn" onclick="testDetect('${b.id}', this)" title="Capture the current Roblox window and test this Detect block without running its branches">Test now</button>`;
   const advBtn = `<button type="button" class="block-mod-btn ${b.advanced ? 'on' : ''}" onclick="toggleDetectAdvanced('${b.id}')" title="Multiple images, a search region, a match threshold, or a raw condition">Advanced</button>`;
-  if (!b.advanced) return `<div class="detect-controls">${renderDetectImagePick(b)}${advBtn}</div>`;
-  return `<div class="detect-controls">${advBtn}</div>${renderDetectAdvanced(b)}`;
+  if (!b.advanced) return `<div class="detect-controls">${renderDetectImagePick(b)}${testBtn}${advBtn}</div>`;
+  return `<div class="detect-controls">${testBtn}${advBtn}</div>${renderDetectAdvanced(b)}`;
 }
 
 function renderDetectImagePick(b) {
@@ -5126,6 +5132,77 @@ function renderDetectExpr(b) {
     <textarea class="block-input detect-expr" rows="2" placeholder="find('boss') and not find('shield')"
               oninput="updateDetectExpr('${b.id}', this.value)">${escapeHtml(b.expr || '')}</textarea>
     <span class="detect-hint">Use <code>find('name')</code> and <code>count('name')</code> with <code>and</code>, <code>or</code>, <code>not</code>, and comparisons.</span>`);
+}
+
+function closeDetectTest() {
+  const modal = document.getElementById('detect-test-modal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  const image = document.getElementById('detect-test-image');
+  if (image) image.removeAttribute('src');
+}
+
+function renderDetectTestResult(result) {
+  const status = document.getElementById('detect-test-status');
+  const meta = document.getElementById('detect-test-meta');
+  const details = document.getElementById('detect-test-details');
+  const image = document.getElementById('detect-test-image');
+  if (!status || !meta || !details || !image) return;
+
+  const found = Boolean(result.found);
+  status.className = `detect-test-status ${found ? 'found' : 'missed'}`;
+  status.textContent = found ? 'FOUND — Then branch would run' : 'NOT FOUND — Else branch would run';
+  const r = result.region;
+  meta.textContent = r
+    ? `Full Roblox window · search region ${r.x}, ${r.y} · ${r.w}×${r.h}`
+    : 'Full Roblox window · whole-window search';
+  image.src = result.data_uri;
+  image.alt = 'Detect test capture with search and match boxes';
+
+  const rows = (result.details || []).map(detail => {
+    const missing = detail.error === 'missing';
+    const matched = Boolean(detail.matched);
+    const state = missing ? 'MISSING' : matched ? 'FOUND' : 'MISS';
+    const score = detail.score == null ? 'no candidate' : `best ${Number(detail.score).toFixed(2)} / required ${Number(detail.threshold).toFixed(2)}`;
+    const best = detail.best_match;
+    const location = best ? ` · best at (${best.cx}, ${best.cy})` : '';
+    const count = detail.matches && detail.matches.length > 1 ? ` · ${detail.matches.length} matches` : '';
+    return `<div class="detect-test-detail ${missing ? 'missing' : matched ? 'found' : 'missed'}">
+      <span class="detect-test-detail-name">${escapeHtml(detail.name)}</span>
+      <span class="detect-test-detail-state">${state}</span>
+      <span class="detect-test-detail-score">${score}${location}${count}</span>
+    </div>`;
+  }).join('');
+  details.innerHTML = rows || '<div class="detect-test-empty">This condition has no image to test yet.</div>';
+}
+
+async function testDetect(id, btn) {
+  const block = detectBlock(id);
+  if (!block || !window.pywebview || !pywebview.api) return;
+  const original = btn ? btn.textContent : 'Test now';
+  if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+  let result = null;
+  try {
+    result = await pywebview.api.debug_test_detect(JSON.parse(JSON.stringify(block)));
+  } catch (e) {
+    addLog('[Debug] Detect test failed -- is Roblox attached?');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+  if (!result || !result.ok) {
+    const reason = result && result.reason === 'no_roblox'
+      ? 'Roblox is not attached.'
+      : `Detect test failed${result && result.reason ? `: ${result.reason}` : '.'}`;
+    addLog(`[Debug] ${reason}`);
+    return;
+  }
+  // Native Roblox paints over DOM on the Dashboard. Move to Settings before
+  // showing the result, just like Image Manager does, while the backend test
+  // itself remains a read-only window capture.
+  if (currentScreen === 'dashboard') switchScreen('settings');
+  renderDetectTestResult(result);
+  const modal = document.getElementById('detect-test-modal');
+  if (modal) modal.style.display = 'flex';
 }
 
 function toggleDetectAdvanced(id) {

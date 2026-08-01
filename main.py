@@ -2887,6 +2887,73 @@ class Api:
         self.push_log(f"[Debug] Saved screenshot to {path}")
         return {"ok": True, "path": path}
 
+    def debug_test_detect(self, block: dict) -> dict:
+        """Test one Detect block against the current full Roblox window.
+
+        This is deliberately read-only: it captures one normalized frame,
+        evaluates the block's existing image/region/threshold logic against
+        that frame, and returns an annotated preview. It never runs either
+        branch or changes the saved macro.
+        """
+        if not isinstance(block, dict):
+            return {"ok": False, "reason": "bad_block"}
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+
+        temporarily_shown = False
+        try:
+            import base64
+            import cv2
+            from core import detect, vision
+
+            # Detect blocks are commonly edited on Settings/Macro Manager,
+            # where the native Roblox child is hidden behind the UI. A screen
+            # grab in that state sees our own panel, not Roblox. Show it only
+            # for this read-only capture and restore the prior visibility
+            # before returning the preview to the frontend.
+            is_visible = getattr(wm, "is_window_visible", None)
+            was_visible = bool(is_visible(hwnd)) if is_visible else True
+            if not was_visible:
+                self.show_game()
+                temporarily_shown = True
+                time.sleep(0.05)
+
+            # capture_game_bgr returns the whole normalized Roblox client in
+            # the same reference space normal Detect searches use. Keeping it
+            # in memory means every score and every drawn box describes the
+            # exact frame shown in the preview.
+            frame = vision.capture_game_bgr(hwnd)
+            if frame is None or frame.size == 0:
+                return {"ok": False, "reason": "capture_failed"}
+            report = detect.diagnose_frame(frame, block)
+            preview = detect.render_diagnostic(frame, report)
+            encoded_ok, encoded = cv2.imencode(".png", preview)
+            if not encoded_ok:
+                return {"ok": False, "reason": "encode_failed"}
+
+            region = report.get("region")
+            self.push_log(
+                f"[Debug] Detect test: {'FOUND' if report['found'] else 'not found'} -- "
+                f"{len(report.get('details', []))} image condition(s) checked."
+            )
+            return {
+                "ok": True,
+                "found": bool(report["found"]),
+                "region": ({"x": region[0], "y": region[1], "w": region[2], "h": region[3]}
+                            if region is not None else None),
+                "details": report.get("details", []),
+                "data_uri": "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii"),
+                "width": int(preview.shape[1]),
+                "height": int(preview.shape[0]),
+            }
+        except Exception as exc:
+            self.push_log(f"[Debug] Detect test failed: {exc}")
+            return {"ok": False, "reason": "test_failed"}
+        finally:
+            if temporarily_shown:
+                self.hide_game()
+
     def debug_test_expedition_wave(self) -> dict:
         # Settings > Debug > "Test Expedition Wave Check": runs one tick of
         # the Expedition nav_start_game/exp_continue/exp_extract check
