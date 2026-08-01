@@ -17,6 +17,7 @@ import os
 import threading
 import time
 import traceback
+import webbrowser
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 
@@ -41,6 +42,16 @@ from .runner_shop import ShopOps
 
 
 MAX_EXTRACT_AFTER = 9999
+
+
+def _open_deep_link(url: str) -> None:
+    """Open an application deep link on Windows and non-Windows systems."""
+    startfile = getattr(os, "startfile", None)
+    if startfile is not None:
+        startfile(url)
+        return
+    if not webbrowser.open(url):
+        raise OSError(f"No application accepted the deep link: {url}")
 
 
 def _parse_extract_after(value, default=1):
@@ -2724,8 +2735,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # state cannot be assumed to survive it.
         self._last_applied_team_loadout = None
         try:
-            os.startfile(REJOIN_DEEPLINK)
-        except OSError as exc:
+            _open_deep_link(REJOIN_DEEPLINK)
+        except (OSError, webbrowser.Error) as exc:
             self._log(f"[Macro] Couldn't launch the rejoin link: {exc}")
             return False
         self._log("[Macro] Rejoin link launched -- waiting for the game to load back in...")
