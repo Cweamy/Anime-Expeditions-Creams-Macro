@@ -69,6 +69,46 @@ def test_new_tasks_have_a_bounded_infinite_wave_default(tmp_path):
     assert out["infinite_wave_limit"] == 20
 
 
+def test_memory_refresh_hours_are_clamped_and_saved(tmp_path):
+    out = run_js("""
+        const calls = [];
+        const pywebview = {api: {set_setting: async (key, value) => calls.push([key, value])}};
+        function addLog() {}
+        eval(extract('saveMemoryRefreshHours'));
+        (async () => {
+          const input = {value: '0.25'};
+          await saveMemoryRefreshHours(input);
+          console.log(JSON.stringify({value: input.value, calls}));
+        })();
+    """, tmp_path)
+    assert out == {
+        "value": 1,
+        "calls": [["memory_refresh_hours", 1]],
+    }
+
+
+def test_extract_after_normalization_preserves_decimal_strings_and_repairs_scientific_notation(
+        tmp_path):
+    out = run_js("""
+        const MAX_EXTRACT_AFTER = 9999;
+        eval(extract('normalizeExtractAfter'));
+        console.log(JSON.stringify([
+          normalizeExtractAfter('25'),
+          normalizeExtractAfter('999999999999999999999999999999999999999999'),
+          normalizeExtractAfter('2.3434734346743343e+43'),
+          normalizeExtractAfter(-1),
+          normalizeExtractAfter(null)
+        ]));
+    """, tmp_path)
+    assert out == [
+        "25",
+        "9999",
+        "9999",
+        "1",
+        "1",
+    ]
+
+
 def test_infinite_task_summary_shows_its_exit_wave(tmp_path):
     out = run_js("""
         const TASK_DATA = { story: { label: 'Story' } };
@@ -193,6 +233,15 @@ def test_settings_search_panel_title_keeps_all_rows_visible(tmp_path):
             return sel === '.rp-panel-head' ? { textContent: 'Control Macro Coordinates' } : null;
           },
           querySelectorAll(sel) { return sel === '.setting-row' ? rows : []; },
+          cloneNode() {
+            return {
+              textContent: '',
+              querySelector(sel) {
+                return sel === '.rp-panel-head' ? { remove() {} } : null;
+              },
+              querySelectorAll() { return []; },
+            };
+          },
         };
         const category = {
           dataset: { cat: 'debug' }, style: {}, classList: classList(),
@@ -220,6 +269,63 @@ def test_settings_search_panel_title_keeps_all_rows_visible(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# filterSettings: panel-owned content outside .setting-row stays searchable
+# ---------------------------------------------------------------------------
+
+def test_settings_search_non_row_panel_content_keeps_controls_visible(tmp_path):
+    out = run_js("""
+        function classList() {
+          const names = new Set();
+          return {
+            toggle(name, on) { if (on) names.add(name); else names.delete(name); },
+            has(name) { return names.has(name); }
+          };
+        }
+        const rows = [
+          { textContent: 'Silent Mode', classList: classList() },
+        ];
+        const panel = {
+          classList: classList(),
+          querySelector(sel) {
+            return sel === '.rp-panel-head' ? { textContent: 'Webhook' } : null;
+          },
+          querySelectorAll(sel) { return sel === '.setting-row' ? rows : []; },
+          cloneNode() {
+            return {
+              textContent: 'Webhook URL Discord User ID',
+              querySelector(sel) {
+                return sel === '.rp-panel-head' ? { remove() {} } : null;
+              },
+              querySelectorAll() { return []; },
+            };
+          },
+        };
+        const category = {
+          dataset: { cat: 'webhook' }, style: {}, classList: classList(),
+          querySelectorAll(sel) { return sel === '.rp-panel' ? [panel] : []; },
+        };
+        const buttons = [
+          { dataset: { cat: 'all' }, classList: classList() },
+          { dataset: { cat: 'webhook' }, classList: classList() },
+        ];
+        const document = {
+          querySelectorAll(sel) {
+            if (sel === '.settings-cat-btn') return buttons;
+            if (sel === '.settings-category') return [category];
+            return [];
+          },
+        };
+        eval(extract('filterSettings'));
+        filterSettings('Webhook URL');
+        console.log(JSON.stringify({
+          rowsHidden: rows.map(row => row.classList.has('search-hidden')),
+          panelHidden: panel.classList.has('search-hidden'),
+        }));
+    """, tmp_path)
+    assert out == {"rowsHidden": [False], "panelHidden": False}
+
+
+# ---------------------------------------------------------------------------
 # importTasks: bundled templates must actually be restored
 # ---------------------------------------------------------------------------
 # exportTasks bundles every template its tasks reference so a shared queue does
@@ -231,6 +337,7 @@ def test_settings_search_panel_title_keeps_all_rows_visible(tmp_path):
 _IMPORT_HARNESS = """
 const world = (data) => new Function('data', `
   const saved = []; const restoredPaths = []; const logs = []; let taskCards = [];
+  const MAX_EXTRACT_AFTER = 9999;
   const enteringTaskIds = new Set();
   function addLog(m) { logs.push(m); }
   function newTaskId() { return 't' + saved.length + Math.random(); }
@@ -245,10 +352,16 @@ const world = (data) => new Function('data', `
       restoredPaths.push([name, events]);
       return { ok: true };
     },
+    import_recordings_bundle: async (bundle) => {
+      restoredPaths.push(...Object.entries(bundle));
+      return { ok: true, added: Object.keys(bundle).length };
+    },
     save_template: async (n, b) => { saved.push(n); return { ok: true }; },
     save_tasks: async () => ({ ok: true }),
   } };
   ${extract('importCustomPaths')}
+  ${extract('normalizeExtractAfter')}
+  ${extract('importCustomRecordings')}
   ${extract('importTasks')}
   return { importTasks, saved, restoredPaths, logs, cards: () => taskCards };
 `)(data);
@@ -398,11 +511,16 @@ def test_macro_manager_export_import_round_trips_custom_path(tmp_path):
               restored.push([name, events]);
               return { ok: true };
             },
+            export_recordings_bundle: async () => ({}),
+            import_recordings_bundle: async () => ({ ok: true, added: 0 }),
             save_template: async () => ({ ok: true }),
           }};
           ${extract('collectCustomPathNames')}
           ${extract('exportCustomPaths')}
           ${extract('importCustomPaths')}
+          ${extract('collectRecordingNames')}
+          ${extract('exportCustomRecordings')}
+          ${extract('importCustomRecordings')}
           ${extract('exportTemplates')}
           ${extract('importTemplates')}
           return {
@@ -519,6 +637,7 @@ _TASK_EXPORT_WORLD = """
 const logs = []; let exported = null;
 global.addLog = m => logs.push(m);
 global.exportCustomPaths = async () => ({});
+global.exportCustomRecordings = async () => ({});
 global.taskCards = %s;
 global.pywebview = { api: {
   list_templates: async () => %s,
@@ -552,9 +671,11 @@ def test_export_stops_when_a_referenced_macro_no_longer_exists(tmp_path):
 
 _TASK_IMPORT_WORLD = """
 const logs = []; const saved = {}; let confirmAnswer = %s;
+const MAX_EXTRACT_AFTER = 9999;
 global.addLog = m => logs.push(m);
 global.confirm = () => confirmAnswer;
 global.importCustomPaths = async () => 0;
+global.importCustomRecordings = async () => 0;
 global.refreshTaskTemplates = async () => {};
 global.renderTaskList = () => {}; global.renderTaskBuilder = () => {};
 global.saveTaskQueue = () => {};
@@ -570,6 +691,7 @@ global.pywebview = { api: {
   list_templates: async () => %s,
   save_template: async (n, b) => { saved[n] = b; },
 }};
+eval(extract('normalizeExtractAfter'));
 eval(extract('importTasks'));
 importTasks().then(() => console.log(JSON.stringify({
   macrosSaved: Object.keys(saved), tasks: taskCards.length,
@@ -640,6 +762,7 @@ let confirmAnswer = %s, confirmsSeen = [], loadedIntoEditor = null;
 global.addLog = m => logs.push(m);
 global.confirm = m => { confirmsSeen.push(m); return confirmAnswer; };
 global.importCustomPaths = async () => 0;
+global.importCustomRecordings = async () => 0;
 global.refreshTemplateList = async () => {};
 global.loadSelectedTemplate = async () => { loadedIntoEditor = selectValue; };
 global.creationEditorHasUnsavedChanges = () => %s;
@@ -1129,6 +1252,7 @@ def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
     };
     global.document = { getElementById: id => mockElements[id] || null };
 
+    eval(extract('renderStoryMapSetupWarning'));
     eval(extract('renderChallengeScreen'));
     renderChallengeScreen();
 
@@ -1142,6 +1266,30 @@ def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
         "summary": "Enabled",
         "details": "Daily: Complete | Regular: #1 0/10, #2 1/10, #3 10/10",
     }
+
+
+def test_story_map_setup_warning_lists_missing_and_invalid_maps(tmp_path):
+    body = """
+    global.escapeHtml = value => String(value);
+    const warning = { innerHTML: '', style: { display: 'none' } };
+    global.document = {
+      getElementById: id => id === 'challenge-setup-warning' ? warning : null
+    };
+
+    eval(extract('renderStoryMapSetupWarning'));
+    renderStoryMapSetupWarning('challenge-setup-warning', {
+      setup_ready: false,
+      missing_maps: ['Flower Forest'],
+      invalid_maps: [{ map: "King's Tomb", macro: 'Broken Operation' }]
+    }, 'Auto Challenge');
+
+    console.log(JSON.stringify({ display: warning.style.display, html: warning.innerHTML }));
+    """
+    out = run_js(body, tmp_path)
+    assert out["display"] == ""
+    assert "Auto Challenge needs a saved Macro Operation for every Story map" in out["html"]
+    assert "Assign: Flower Forest" in out["html"]
+    assert "Repair: King's Tomb (Broken Operation)" in out["html"]
 
 
 def test_fuel_card_summarizes_enabled_resources(tmp_path):
@@ -1181,4 +1329,99 @@ def test_fuel_card_summarizes_enabled_resources(tmp_path):
         "summary": "Enabled",
         "details": "Resource Drill: Ready | Gold Mine: Off",
     }
+
+
+def test_auto_shop_card_renders_catalog_targets_and_daily_status(tmp_path):
+    body = """
+    global.autoShopState = {
+      enabled: true,
+      shops: {
+        gold_shop: {
+          enabled: true,
+          items: [
+            {
+              key: 'cursed_boba', name: 'Cursed Boba', daily_maximum: 50,
+              enabled: true, target: 'max',
+              state: { status: 'completed', attempts: 0 }
+            },
+            {
+              key: 'trait_crystal', name: 'Trait Crystal', daily_maximum: 25,
+              enabled: true, target: 5,
+              state: { status: 'failed_today', attempts: 3 }
+            },
+            {
+              key: 'mana_flask', name: 'Mana Flask', daily_maximum: 150,
+              enabled: true, target: 5,
+              state: { status: 'retry_pending', attempts: 0 }
+            }
+          ]
+        }
+      }
+    };
+    global.escapeHtml = value => String(value);
+    const mockElements = {
+      'resource-auto-shop-summary': {
+        textContent: '', classList: { toggle: () => {} }
+      },
+      'resource-auto-shop-details': { textContent: '', title: '' },
+      'toggle-auto-shop-enabled': { classList: { toggle: () => {} } },
+      'toggle-gold-shop-enabled': { classList: { toggle: () => {} } },
+      'auto-shop-gold-items': { innerHTML: '' }
+    };
+    global.document = { getElementById: id => mockElements[id] || null };
+
+    eval(extract('autoShopStatusLabel'));
+    eval(extract('renderAutoShopScreen'));
+    renderAutoShopScreen();
+
+    const html = mockElements['auto-shop-gold-items'].innerHTML;
+    console.log(JSON.stringify({
+      summary: mockElements['resource-auto-shop-summary'].textContent,
+      details: mockElements['resource-auto-shop-details'].textContent,
+      hasCursedBoba: html.includes('Cursed Boba'),
+      hasTraitCrystal: html.includes('Trait Crystal'),
+      hasMaximum: html.includes('Daily max: 50'),
+      hasMaxTarget: html.includes("setAutoShopItemMax('gold_shop', 'cursed_boba')"),
+      hasNumericTarget: html.includes('value="5"'),
+      hasResetToday: html.includes("resetAutoShopItemToday('gold_shop', 'trait_crystal')"),
+      hasRetryStatus: html.includes('Retry scheduled'),
+      hasRetryReset: html.includes("resetAutoShopItemToday('gold_shop', 'mana_flask')")
+    }));
+    """
+    out = run_js(body, tmp_path)
+    assert out == {
+        "summary": "Enabled",
+        "details": "Gold Shop: 3 enabled | 1 complete",
+        "hasCursedBoba": True,
+        "hasTraitCrystal": True,
+        "hasMaximum": True,
+        "hasMaxTarget": True,
+        "hasNumericTarget": True,
+        "hasResetToday": True,
+        "hasRetryStatus": True,
+        "hasRetryReset": True,
+    }
+
+
+def test_auto_shop_resource_card_has_required_controls():
+    html = open(INDEX_HTML, encoding="utf-8").read()
+    for element_id in (
+        "resource-card-auto-shop",
+        "resource-auto-shop-summary",
+        "toggle-auto-shop-enabled",
+        "toggle-gold-shop-enabled",
+        "auto-shop-gold-items",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "Numeric quantities repeat on later passes until sold out." in html
+
+
+def test_detect_controls_expose_live_test_button(tmp_path):
+    out = run_js("""
+        function renderDetectImagePick() { return '<image>'; }
+        eval(extract('renderDetectControls'));
+        console.log(JSON.stringify(renderDetectControls({ id: 'd1', advanced: false, image: 'Defense' })));
+    """, tmp_path)
+    assert "testDetect('d1'" in out
+    assert 'Test now' in out
 

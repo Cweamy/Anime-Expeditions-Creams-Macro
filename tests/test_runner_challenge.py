@@ -73,7 +73,7 @@ class DailyEntryProbe(ChallengeProbe):
         self._recover_to_lobby = lambda *_args: True
         self._enter_selected_challenge = lambda *_args, **_kwargs: True
 
-    def _click_found_image(self, _hwnd, name, _timeout, _stop):
+    def _click_found_image(self, _hwnd, name, _timeout, _stop, *args, **kwargs):
         self.clicked.append(name)
         return {"score": 0.99}
 

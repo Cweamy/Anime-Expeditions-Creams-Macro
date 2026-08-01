@@ -28,6 +28,8 @@ from core.keyboard import Keyboard
 from core.logger import Logger
 from core.runner import MacroRunner
 from core import updater
+from core import auto_shop
+from core.auto_shop import current_auto_shop_period
 
 # Imported at module scope (not inside the darwin branches that use it) so the
 # macOS-only geometry helpers below can be plain module functions. window_mac
@@ -465,6 +467,7 @@ class Api:
         self.mouse = Mouse()
         self.keyboard = Keyboard()
         self._path_test_stop = None
+        self._pending_recording_events = None  # stopped-but-not-yet-named Record block capture (see stop_input_capture)
         # Apply the persisted Macro Speed delay before anything can click
         # (see core.pacing + set_setting's live-update hook).
         from core import pacing
@@ -496,7 +499,9 @@ class Api:
             self.get_challenge_settings, self.mark_challenge_stage_played, self._run_stats_snapshot,
             self.get_crafting_settings, self.set_crafting_count, self.get_bounty_settings,
             self.set_bounty_remaining, self.get_fuel_settings, self.mark_fuel_refill_result,
-            self.get_hotkeys)
+            self.get_hotkeys,
+            self.get_auto_shop_settings, self._save_auto_shop_item_state,
+            self._save_auto_shop_shop_state)
 
     def _run_stats_snapshot(self) -> dict:
         # Fed to the runner's match-result webhook so it can report the same
@@ -785,6 +790,19 @@ class Api:
             # mid-run (see _dock_watchdog). Default on -- it's the point of an
             # unattended overnight run surviving a Roblox crash.
             "auto_relaunch_roblox": data.get("auto_relaunch_roblox", True),
+            # Optional long-run memory protection. The runner performs this
+            # only at a completed-match/lobby boundary, never from a timer
+            # thread during FPS-sensitive capture or input.
+            "memory_refresh_enabled": data.get("memory_refresh_enabled", False),
+            "memory_refresh_hours": data.get("memory_refresh_hours", 4.0),
+            # Off by default -- see core.runner._apply_team_loadout_panel.
+            # The strict "unitteams" OCR confirmation is correct for most
+            # setups; this loosens it to also accept "teams"/"team"/"loadout"
+            # for whoever's setup renders the Load Team list title in a way
+            # the strict check keeps missing. Opt-in because a looser match
+            # risks confirming the panel open on the WRONG screen right
+            # before a fixed-coordinate row click.
+            "loose_team_ocr_match": data.get("loose_team_ocr_match", False),
         }
 
     def get_tasks(self) -> list:
@@ -936,6 +954,7 @@ class Api:
             saved_map = (saved.get("maps") or {}).get(m) or {}
             merged_maps[m] = {"macro": saved_map.get("macro") or ""}
         merged["maps"] = merged_maps
+        merged.update(self._challenge_macro_setup(merged))
 
         reset_period = _current_challenge_reset_period()
         merged["daily"]["ready"] = merged["daily"]["last_completed_period"] != reset_period
@@ -980,6 +999,26 @@ class Api:
 
     def set_challenge_enabled(self, enabled: bool) -> dict:
         challenge = self.get_challenge_settings()
+        if enabled and not challenge["setup_ready"]:
+            challenge["enabled"] = False
+            cfg.update({"challenge": challenge})
+            missing = ", ".join(challenge["missing_maps"])
+            invalid = ", ".join(
+                f'{item["map"]} ("{item["macro"]}")'
+                for item in challenge["invalid_maps"])
+            details = "; ".join(part for part in (
+                f"unassigned: {missing}" if missing else "",
+                f"missing or old macros: {invalid}" if invalid else "",
+            ) if part)
+            self.push_log(
+                "[Macro] Auto Challenge was not enabled. Assign a saved Macro Operation "
+                f"to every Story map first ({details}).")
+            return {
+                "ok": False,
+                "reason": "incomplete_challenge_maps",
+                "missing_maps": challenge["missing_maps"],
+                "invalid_maps": challenge["invalid_maps"],
+            }
         challenge["enabled"] = bool(enabled)
         cfg.update({"challenge": challenge})
         return {"ok": True}
@@ -994,6 +1033,26 @@ class Api:
 
     def set_daily_challenge_enabled(self, enabled: bool) -> dict:
         challenge = self.get_challenge_settings()
+        if enabled and not challenge["setup_ready"]:
+            challenge["daily"]["enabled"] = False
+            cfg.update({"challenge": challenge})
+            missing = ", ".join(challenge["missing_maps"])
+            invalid = ", ".join(
+                f'{item["map"]} ("{item["macro"]}")'
+                for item in challenge["invalid_maps"])
+            details = "; ".join(part for part in (
+                f"unassigned: {missing}" if missing else "",
+                f"missing or old macros: {invalid}" if invalid else "",
+            ) if part)
+            self.push_log(
+                "[Macro] Daily Challenge was not enabled. Assign a saved Macro Operation "
+                f"to every Story map first ({details}).")
+            return {
+                "ok": False,
+                "reason": "incomplete_challenge_maps",
+                "missing_maps": challenge["missing_maps"],
+                "invalid_maps": challenge["invalid_maps"],
+            }
         challenge["daily"]["enabled"] = bool(enabled)
         cfg.update({"challenge": challenge})
         return {"ok": True}
@@ -1059,8 +1118,18 @@ class Api:
             return {"ok": False, "reason": "bad_map"}
         challenge = self.get_challenge_settings()
         challenge["maps"][map_name]["macro"] = macro or ""
+        setup = self._challenge_macro_setup(challenge)
+        auto_disabled = bool(
+            (challenge.get("enabled") or challenge.get("daily", {}).get("enabled"))
+            and not setup["setup_ready"])
+        if auto_disabled:
+            challenge["enabled"] = False
+            challenge["daily"]["enabled"] = False
+            self.push_log(
+                f'[Macro] Auto Challenge was disabled because "{map_name}" no longer '
+                "has a usable Macro Operation.")
         cfg.update({"challenge": challenge})
-        return {"ok": True}
+        return {"ok": True, "auto_disabled": auto_disabled, **setup}
 
     def reset_challenge_counts(self) -> dict:
         challenge = self.get_challenge_settings()
@@ -1090,20 +1159,19 @@ class Api:
         }
 
     @staticmethod
-    def _bounty_macro_setup(settings: dict) -> dict:
+    def _story_macro_setup(settings: dict, map_names) -> dict:
         """Whether every possible Story destination has a usable macro.
 
-        Auto Bounty does not know which map the board will request until
-        after it opens that objective. Starting with only some maps
-        configured therefore guarantees that a later objective can enter a
-        battle with no Pre Start blocks and no units. Treat the five-map
-        assignment as one required setup instead of discovering the hole
-        after teleporting.
+        Both Auto Bounty and Auto Challenge choose a Story destination at
+        runtime. Starting with only some maps configured therefore guarantees
+        that a later objective can enter a battle with no Pre Start blocks and
+        no units. Treat the full map assignment as one required setup instead
+        of discovering the hole after teleporting.
         """
         maps = settings.get("maps") or {}
         missing_maps = []
         invalid_maps = []
-        for map_name in BOUNTY_STORY_MAPS:
+        for map_name in map_names:
             macro_name = str((maps.get(map_name) or {}).get("macro") or "").strip()
             if not macro_name:
                 missing_maps.append(map_name)
@@ -1119,6 +1187,14 @@ class Api:
             "missing_maps": missing_maps,
             "invalid_maps": invalid_maps,
         }
+
+    @staticmethod
+    def _challenge_macro_setup(settings: dict) -> dict:
+        return Api._story_macro_setup(settings, CHALLENGE_STORY_MAPS)
+
+    @staticmethod
+    def _bounty_macro_setup(settings: dict) -> dict:
+        return Api._story_macro_setup(settings, BOUNTY_STORY_MAPS)
 
     @staticmethod
     def _save_bounty_settings(settings: dict) -> None:
@@ -1398,6 +1474,218 @@ class Api:
         coords = {k: data.get(k, v) for k, v in MACRO_COORD_DEFAULTS.items()}
         return self.runner.start_crafting_test(lambda: self.game_hwnd, coords)
 
+    # -- Auto Shop (see core/auto_shop.py and core/runner_shop.py) --
+
+    @staticmethod
+    def _auto_shop_item_map(items) -> dict:
+        if isinstance(items, dict):
+            return items
+        if isinstance(items, list):
+            return {
+                str(item.get("key")): item
+                for item in items
+                if isinstance(item, dict) and item.get("key")
+            }
+        return {}
+
+    def _canonical_auto_shop_settings(self, source) -> dict:
+        period = current_auto_shop_period()
+        source_shops = source.get("shops") if isinstance(source, dict) else {}
+        source_shops = source_shops if isinstance(source_shops, dict) else {}
+        source_gold = source_shops.get("gold_shop")
+        source_gold = source_gold if isinstance(source_gold, dict) else {}
+        source_items = self._auto_shop_item_map(source_gold.get("items"))
+        normalized = auto_shop.normalize_auto_shop_settings({
+            "enabled": source.get("enabled", False) if isinstance(source, dict) else False,
+            "shops": {
+                "gold_shop": {
+                    **source_gold,
+                    "items": source_items,
+                },
+            },
+        })
+
+        gold_config = normalized["shops"]["gold_shop"]
+        canonical = {
+            "enabled": normalized["enabled"],
+            "shops": {
+                "gold_shop": {
+                    "enabled": gold_config["enabled"],
+                    "state": {},
+                    "items": {},
+                },
+            },
+        }
+        for definition in auto_shop.AUTO_SHOP_ITEMS:
+            item_key = definition["key"]
+            source_item = source_items.get(item_key)
+            source_item = source_item if isinstance(source_item, dict) else {}
+            config_item = gold_config["items"][item_key]
+            canonical["shops"]["gold_shop"]["items"][item_key] = {
+                "enabled": config_item["enabled"],
+                "target": config_item["target"],
+                "state": auto_shop.normalize_item_state(
+                    source_item.get("state"),
+                    period,
+                ),
+            }
+
+        shop_state = auto_shop.normalize_shop_state(
+            source_gold.get("state"),
+            period,
+        )
+        has_pending = any(
+            (item.get("state") or {}).get("status") == auto_shop.STATUS_PENDING
+            for item in canonical["shops"]["gold_shop"]["items"].values()
+        )
+        if has_pending and shop_state.get("status") == auto_shop.STATUS_FAILED_TODAY:
+            shop_state = auto_shop.fresh_shop_state(period)
+        canonical["shops"]["gold_shop"]["state"] = shop_state
+
+        return canonical
+
+    def _save_auto_shop_settings(self, settings: dict) -> dict:
+        canonical = self._canonical_auto_shop_settings(settings)
+        cfg.update({"auto_shop": canonical})
+        return canonical
+
+    def get_auto_shop_settings(self) -> dict:
+        saved = cfg.load().get("auto_shop") or {}
+        canonical = self._canonical_auto_shop_settings(saved)
+        if canonical != saved:
+            cfg.update({"auto_shop": canonical})
+
+        gold_shop = canonical["shops"]["gold_shop"]
+        return {
+            "enabled": canonical["enabled"],
+            "reset_schedule": auto_shop.AUTO_SHOP_RESET_SCHEDULE,
+            "shops": {
+                "gold_shop": {
+                    "name": "Gold Shop",
+                    "enabled": gold_shop["enabled"],
+                    "state": gold_shop["state"],
+                    "items": [
+                        {
+                            "key": definition["key"],
+                            "name": definition["name"],
+                            "daily_maximum": definition["stock"],
+                            **gold_shop["items"][definition["key"]],
+                        }
+                        for definition in auto_shop.AUTO_SHOP_ITEMS
+                    ],
+                },
+            },
+        }
+
+    def set_auto_shop_enabled(self, enabled: bool) -> dict:
+        settings = self.get_auto_shop_settings()
+        settings["enabled"] = bool(enabled)
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def set_auto_shop_shop_enabled(self, shop_key: str, enabled: bool) -> dict:
+        settings = self.get_auto_shop_settings()
+        if shop_key not in settings["shops"]:
+            return {"ok": False, "reason": "bad_shop"}
+        settings["shops"][shop_key]["enabled"] = bool(enabled)
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def set_auto_shop_item_enabled(
+            self, shop_key: str, item_key: str, enabled: bool) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        item = next(
+            (entry for entry in shop["items"] if entry["key"] == item_key),
+            None,
+        )
+        if item is None:
+            return {"ok": False, "reason": "bad_item"}
+        item["enabled"] = bool(enabled)
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def set_auto_shop_item_target(
+            self, shop_key: str, item_key: str, target) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        item = next(
+            (entry for entry in shop["items"] if entry["key"] == item_key),
+            None,
+        )
+        if item is None:
+            return {"ok": False, "reason": "bad_item"}
+        try:
+            normalized_target = auto_shop.normalize_target(
+                target,
+                item["daily_maximum"],
+            )
+        except ValueError:
+            return {"ok": False, "reason": "bad_target"}
+        previous_target = item["target"]
+        item["target"] = normalized_target
+        if (
+                normalized_target != previous_target
+                and (item.get("state") or {}).get("status")
+                == auto_shop.STATUS_COMPLETED):
+            item["state"]["status"] = auto_shop.STATUS_PENDING
+            item["state"]["verification"] = None
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def reset_auto_shop_item_today(
+            self, shop_key: str, item_key: str) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        item = next(
+            (entry for entry in shop["items"] if entry["key"] == item_key),
+            None,
+        )
+        if item is None:
+            return {"ok": False, "reason": "bad_item"}
+        period = current_auto_shop_period()
+        item["state"] = auto_shop.fresh_item_state(period)
+        shop["state"] = auto_shop.fresh_shop_state(period)
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def _save_auto_shop_shop_state(self, shop_key: str, state: dict) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        shop["state"] = auto_shop.normalize_shop_state(
+            state,
+            current_auto_shop_period(),
+        )
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
+    def _save_auto_shop_item_state(
+            self, shop_key: str, item_key: str, state: dict) -> dict:
+        settings = self.get_auto_shop_settings()
+        shop = settings["shops"].get(shop_key)
+        if shop is None:
+            return {"ok": False, "reason": "bad_shop"}
+        item = next(
+            (entry for entry in shop["items"] if entry["key"] == item_key),
+            None,
+        )
+        if item is None:
+            return {"ok": False, "reason": "bad_item"}
+        item["state"] = auto_shop.normalize_item_state(
+            state,
+            current_auto_shop_period(),
+        )
+        self._save_auto_shop_settings(settings)
+        return {"ok": True}
+
     # ── Auto Fuel (see core/runner_fuel.py) ──
 
     @staticmethod
@@ -1454,6 +1742,7 @@ class Api:
             FUEL_PATH_KEYS,
             FUEL_RESOURCES,
             FUEL_RETRY_SECONDS,
+            fuel_refill_interval_seconds,
         )
 
         defaults = self._default_fuel_settings()
@@ -1490,14 +1779,17 @@ class Api:
             except (TypeError, ValueError):
                 next_attempt_at = 0.0
             # Legacy development builds used retry_after only for failures.
-            # Derive the regular 8-hour attempt once when that older shape is read.
+            # Derive the quantity-aware attempt once when that older shape is read.
             if "next_attempt_at" not in saved_source:
                 try:
                     retry_after = max(0.0, float(source.get("retry_after") or 0))
                 except (TypeError, ValueError):
                     retry_after = 0.0
                 next_attempt_at = max(
-                    (last_refilled_at + FUEL_INTERVAL_SECONDS) if last_refilled_at else 0.0,
+                    (
+                        last_refilled_at + fuel_refill_interval_seconds(amount)
+                        if last_refilled_at else 0.0
+                    ),
                     retry_after,
                 )
             resource_enabled = bool(source.get("enabled"))
@@ -1509,6 +1801,7 @@ class Api:
                 "next_attempt_at": next_attempt_at,
                 "next_due_at": next_attempt_at,
                 "remaining_seconds": max(0, int(next_attempt_at - now + 0.999)),
+                "interval_seconds": fuel_refill_interval_seconds(amount),
                 "due": due,
             }
 
@@ -1572,7 +1865,11 @@ class Api:
         return {"ok": True}
 
     def mark_fuel_refill_result(self, resource: str, succeeded: bool) -> dict:
-        from core.runner_constants import FUEL_INTERVAL_SECONDS, FUEL_RESOURCES, FUEL_RETRY_SECONDS
+        from core.runner_constants import (
+            FUEL_RESOURCES,
+            FUEL_RETRY_SECONDS,
+            fuel_refill_interval_seconds,
+        )
 
         if resource not in FUEL_RESOURCES:
             return {"ok": False, "reason": "bad_resource"}
@@ -1581,7 +1878,8 @@ class Api:
         now = time.time()
         if succeeded:
             state["last_refilled_at"] = now
-            state["next_attempt_at"] = now + FUEL_INTERVAL_SECONDS
+            state["next_attempt_at"] = (
+                now + fuel_refill_interval_seconds(state.get("amount")))
         else:
             state["next_attempt_at"] = now + FUEL_RETRY_SECONDS
         self._save_fuel_settings(fuel)
@@ -1611,7 +1909,10 @@ class Api:
             lambda: self.game_hwnd, self.get_tasks, scroll_power, coords, scroll_nudges, debug_screenshots,
             default_walk_paths, webhook_settings,
             expedition_color_buttons=data.get("expedition_color_buttons", True),
-            expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100))
+            expedition_camera_o_ms=data.get("expedition_camera_o_ms", 100),
+            loose_team_ocr_match=data.get("loose_team_ocr_match", False),
+            memory_refresh_enabled=data.get("memory_refresh_enabled", False),
+            memory_refresh_hours=data.get("memory_refresh_hours", 4.0))
 
     def stop_macro(self) -> dict:
         # An explicit Stop cancels any pending auto-reopen/auto-restart -- if
@@ -1820,6 +2121,72 @@ class Api:
         from core import paths
         return paths.list_custom_paths()
 
+    # ------------------------------------------------------------------
+    # Record block (Macro Manager > Setup > Record): a general-purpose
+    # mouse+keyboard recorder -- everything Click/Send Key don't cover on
+    # their own, not just WASD movement (see core.paths above for that).
+    # Same start/stop-then-name/save/discard split as path recording, for
+    # the same reason: naming happens in a dialog AFTER the hooks are torn
+    # down, so typing the name can't leak into the recording.
+    # ------------------------------------------------------------------
+    def start_input_recording(self) -> dict:
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+        wm.show_window(hwnd)
+        wm.activate_window(hwnd)
+
+        from core import input_record
+        try:
+            input_record.start_recording(hwnd)
+        except input_record.RecordingAlreadyActive as exc:
+            return {"ok": False, "reason": str(exc)}
+        except ImportError:
+            return {"ok": False, "reason": "the 'mouse'/'keyboard' packages aren't installed"}
+        return {"ok": True}
+
+    def stop_input_capture(self) -> dict:
+        from core import input_record
+        self._pending_recording_events = input_record.stop_recording()
+        return {"ok": True, "count": len(self._pending_recording_events)}
+
+    def save_pending_recording(self, name: str) -> dict:
+        from core import input_record
+        events = self._pending_recording_events or []
+        if not events:
+            return {"ok": False, "reason": "no_input_recorded"}
+        saved_name = input_record.save_recording(name, events)
+        self._pending_recording_events = None
+        self.push_log(f'[Macro Manager] Recorded input "{saved_name}" ({len(events)} events).')
+        return {"ok": True, "name": saved_name}
+
+    def discard_pending_recording(self) -> dict:
+        from core import input_record
+        input_record.cancel_recording()
+        self._pending_recording_events = None
+        return {"ok": True}
+
+    def list_recordings(self) -> list:
+        from core import input_record
+        return input_record.list_recordings()
+
+    def export_recordings_bundle(self, names) -> dict:
+        # Task/Template file export (ui/app.js's exportCustomRecordings) --
+        # unlike the Share Code path (export_template_code, which already
+        # zlib-compresses the whole payload), the exported .json file isn't
+        # compressed at all otherwise, so a Record block with a dense mouse
+        # path bundled in raw would dominate the file's size on its own.
+        from core import input_record
+        if not isinstance(names, list):
+            return {}
+        return input_record.collect_recordings_compressed(names)
+
+    def import_recordings_bundle(self, bundle: dict) -> dict:
+        from core import input_record
+        if not isinstance(bundle, dict):
+            return {"ok": False, "added": 0}
+        return {"ok": True, "added": input_record.import_recordings_compressed(bundle)}
+
     def set_setting(self, key: str, value) -> dict:
         cfg.update({key: value})  # atomic -- see cfg.update (fixes settings not saving)
         if key == "action_delay_ms":
@@ -1937,9 +2304,9 @@ class Api:
         return {"ok": ok}
 
     def export_template_code(self, names=None) -> dict:
-        from core import paths
+        from core import input_record, paths
 
-        def _bundle(*block_sets):
+        def _bundle_paths(*block_sets):
             # Recorded walks that the macro's custom Walk Path blocks reference,
             # packed alongside so they work on the importer's machine (auto-mode
             # walks use shipped defaults everyone already has -- see
@@ -1948,6 +2315,21 @@ class Api:
             for blocks in block_sets:
                 needed |= share.collect_walk_path_names(blocks)
             return paths.collect_paths(needed)
+
+        def _bundle_recordings(*block_sets):
+            # Same idea for Record block input recordings.
+            needed = set()
+            for blocks in block_sets:
+                needed |= share.collect_recording_names(blocks)
+            return input_record.collect_recordings(needed)
+
+        def _add_bundles(payload, *block_sets):
+            bundled_paths = _bundle_paths(*block_sets)
+            if bundled_paths:
+                payload["paths"] = bundled_paths
+            bundled_recordings = _bundle_recordings(*block_sets)
+            if bundled_recordings:
+                payload["recordings"] = bundled_recordings
 
         if isinstance(names, str) and names.strip():
             if not tpl.template_exists(names):
@@ -1960,9 +2342,7 @@ class Api:
                 "name": names,
                 "blocks": blocks,
             }
-            bundled = _bundle(blocks)
-            if bundled:
-                payload["paths"] = bundled
+            _add_bundles(payload, blocks)
             code = share.encode_template_code(payload)
             return {"ok": True, "code": code, "count": 1}
         elif isinstance(names, list) and len(names) > 0:
@@ -1978,9 +2358,7 @@ class Api:
                     "name": t_name,
                     "blocks": blocks,
                 }
-                bundled = _bundle(blocks)
-                if bundled:
-                    payload["paths"] = bundled
+                _add_bundles(payload, blocks)
                 code = share.encode_template_code(payload)
                 return {"ok": True, "code": code, "count": 1}
             else:
@@ -1995,9 +2373,7 @@ class Api:
                     "version": 1,
                     "templates": templates,
                 }
-                bundled = _bundle(*templates.values())
-                if bundled:
-                    payload["paths"] = bundled
+                _add_bundles(payload, *templates.values())
                 code = share.encode_template_code(payload)
                 return {"ok": True, "code": code, "count": len(templates)}
         else:
@@ -2011,14 +2387,12 @@ class Api:
                 "version": 1,
                 "templates": templates,
             }
-            bundled = _bundle(*templates.values())
-            if bundled:
-                payload["paths"] = bundled
+            _add_bundles(payload, *templates.values())
             code = share.encode_template_code(payload)
             return {"ok": True, "code": code, "count": len(templates)}
 
     def import_template_code(self, code_str: str) -> dict:
-        from core import paths
+        from core import input_record, paths
 
         res = share.decode_template_code(code_str)
         if not res.get("ok"):
@@ -2040,17 +2414,28 @@ class Api:
             if saved_path != pname:
                 rename_map[pname] = saved_path
 
+        # Same recreate-then-remap dance for Record block input recordings.
+        bundled_recordings = res.get("recordings", {}) or {}
+        recording_rename_map = {}
+        for rname, rdata in bundled_recordings.items():
+            events = rdata.get("events", []) if isinstance(rdata, dict) else rdata
+            saved_recording = input_record.import_recording(rname, events)
+            if saved_recording != rname:
+                recording_rename_map[rname] = saved_recording
+
         imported_names = []
         for tname, blocks in templates.items():
             share.remap_walk_path_names(blocks, rename_map)
+            share.remap_recording_names(blocks, recording_rename_map)
             saved = tpl.save_template(tname, blocks)
             imported_names.append(saved)
 
         walk_note = f" (+{len(bundled_paths)} walk path(s))" if bundled_paths else ""
+        rec_note = f" (+{len(bundled_recordings)} recording(s))" if bundled_recordings else ""
         self.push_log(f"Imported {len(imported_names)} template(s) via Share Code: "
-                       f"{', '.join(imported_names)}{walk_note}")
+                       f"{', '.join(imported_names)}{walk_note}{rec_note}")
         return {"ok": True, "count": len(imported_names), "templates": imported_names,
-                "walk_paths": len(bundled_paths)}
+                "walk_paths": len(bundled_paths), "recordings": len(bundled_recordings)}
 
     def preview_template_code(self, code_str: str) -> dict:
         return share.preview_template_code(code_str)
@@ -2559,6 +2944,73 @@ class Api:
 
         self.push_log(f"[Debug] Saved screenshot to {path}")
         return {"ok": True, "path": path}
+
+    def debug_test_detect(self, block: dict) -> dict:
+        """Test one Detect block against the current full Roblox window.
+
+        This is deliberately read-only: it captures one normalized frame,
+        evaluates the block's existing image/region/threshold logic against
+        that frame, and returns an annotated preview. It never runs either
+        branch or changes the saved macro.
+        """
+        if not isinstance(block, dict):
+            return {"ok": False, "reason": "bad_block"}
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+
+        temporarily_shown = False
+        try:
+            import base64
+            import cv2
+            from core import detect, vision
+
+            # Detect blocks are commonly edited on Settings/Macro Manager,
+            # where the native Roblox child is hidden behind the UI. A screen
+            # grab in that state sees our own panel, not Roblox. Show it only
+            # for this read-only capture and restore the prior visibility
+            # before returning the preview to the frontend.
+            is_visible = getattr(wm, "is_window_visible", None)
+            was_visible = bool(is_visible(hwnd)) if is_visible else True
+            if not was_visible:
+                self.show_game()
+                temporarily_shown = True
+                time.sleep(0.05)
+
+            # capture_game_bgr returns the whole normalized Roblox client in
+            # the same reference space normal Detect searches use. Keeping it
+            # in memory means every score and every drawn box describes the
+            # exact frame shown in the preview.
+            frame = vision.capture_game_bgr(hwnd)
+            if frame is None or frame.size == 0:
+                return {"ok": False, "reason": "capture_failed"}
+            report = detect.diagnose_frame(frame, block)
+            preview = detect.render_diagnostic(frame, report)
+            encoded_ok, encoded = cv2.imencode(".png", preview)
+            if not encoded_ok:
+                return {"ok": False, "reason": "encode_failed"}
+
+            region = report.get("region")
+            self.push_log(
+                f"[Debug] Detect test: {'FOUND' if report['found'] else 'not found'} -- "
+                f"{len(report.get('details', []))} image condition(s) checked."
+            )
+            return {
+                "ok": True,
+                "found": bool(report["found"]),
+                "region": ({"x": region[0], "y": region[1], "w": region[2], "h": region[3]}
+                            if region is not None else None),
+                "details": report.get("details", []),
+                "data_uri": "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii"),
+                "width": int(preview.shape[1]),
+                "height": int(preview.shape[0]),
+            }
+        except Exception as exc:
+            self.push_log(f"[Debug] Detect test failed: {exc}")
+            return {"ok": False, "reason": "test_failed"}
+        finally:
+            if temporarily_shown:
+                self.hide_game()
 
     def debug_test_expedition_wave(self) -> dict:
         # Settings > Debug > "Test Expedition Wave Check": runs one tick of
@@ -3953,7 +4405,8 @@ def _launch_ui():
                 # slow boot isn't hit with a second launch, and skipped when
                 # other Roblox windows are open -- the deep link's single-
                 # instance handling would force-close them (alt accounts).
-                if not hwnd and api._resume_after_relaunch:
+                if (not hwnd and api._resume_after_relaunch
+                        and not api.runner.is_rejoin_pending()):
                     try:
                         want_reopen = cfg.load().get("auto_relaunch_roblox", True)
                     except Exception:
@@ -3969,6 +4422,8 @@ def _launch_ui():
                             api._roblox_relaunch_at = now  # also rate-limits this log
                             api.push_log("Roblox closed mid-run, but other Roblox windows are open -- "
                                          "not auto-reopening (it would close them).")
+                        elif not api.runner.claim_rejoin_launch():
+                            api.push_log("Roblox rejoin started elsewhere -- not auto-reopening a second instance.")
                         else:
                             from core.runner_constants import REJOIN_DEEPLINK
                             api._roblox_relaunch_at = now
@@ -3976,6 +4431,7 @@ def _launch_ui():
                                 os.startfile(REJOIN_DEEPLINK)
                                 api.push_log("Roblox closed mid-run -- reopening the game automatically...")
                             except OSError as exc:
+                                api.runner.cancel_rejoin_launch()
                                 api.push_log(f"Couldn't auto-reopen Roblox: {exc}")
 
                 if hwnd and (not api.docker.docked or hwnd != api.game_hwnd):

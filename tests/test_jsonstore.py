@@ -27,6 +27,25 @@ def test_write_json_atomic_round_trip(tmp_path):
     assert not list(tmp_path.glob("*.tmp")), "scratch file left behind"
 
 
+def test_write_json_atomic_compact_drops_indentation(tmp_path):
+    """core.input_record saves Record block events with compact=True -- a
+    dense recording is thousands of small similar objects, and indent=2's
+    pretty-printing whitespace would dominate the file size for no
+    readability benefit at that density."""
+    target = tmp_path / "compact.json"
+    data = {"name": "x", "events": [{"t": 0.0, "type": "move", "x": 1, "y": 2}] * 50}
+
+    write_json_atomic(str(target), data, compact=True)
+    compact_text = target.read_text(encoding="utf-8")
+
+    write_json_atomic(str(target), data, compact=False)
+    pretty_text = target.read_text(encoding="utf-8")
+
+    assert json.loads(compact_text) == data
+    assert "\n" not in compact_text
+    assert len(compact_text) < len(pretty_text)
+
+
 def test_write_json_atomic_leaves_the_old_file_intact(tmp_path, monkeypatch):
     target = tmp_path / "thing.json"
     write_json_atomic(str(target), {"version": "original"})

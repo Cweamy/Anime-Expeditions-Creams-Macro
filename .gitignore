@@ -14,6 +14,10 @@ Assets/stage_data.json
 debug/
 Paths/*
 Templates/
+# Record block input recordings (core/input_record.py) -- personal, no
+# shipped-defaults exception like Paths/defaults/ below (there's no
+# game-wide "known good" recording to ship; every one is bespoke).
+Recordings/*
 
 # Paths/defaults/ is the exception -- known-good walk paths for specific
 # maps/acts (Fairy King Forest, King's Tomb, Spirit City Act 3) that the

@@ -490,8 +490,8 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .rh-map { font-weight: 600; color: var(--text-dim); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rh-meta { font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .rh-empty { padding: 16px; font-size: 11px; color: var(--text-muted); text-align: center; }
-.bounty-setup-warning {
-  margin-bottom: 8px;
+.resource-setup-warning {
+  margin: 10px 0 0;
   padding: 9px 11px;
   border: 1px solid color-mix(in srgb, var(--rose) 55%, var(--border));
   border-radius: 7px;
@@ -2165,6 +2165,35 @@ li.fail .onb-ingame-name { color: var(--rose); }
 .blk-btn:active { transform: scale(0.95); }
 .detect-pick { color: var(--text); border-color: color-mix(in srgb, var(--sky) 45%, var(--border)); }
 .detect-pick.unset { color: var(--text-muted); border-style: dashed; }
+.detect-test-btn { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 45%, var(--border)); }
+.detect-test-btn:disabled { opacity: .65; cursor: wait; }
+
+/* Full-frame Detect diagnostics. The screenshot stays visible beside the
+   score list so a wrong region and a merely-too-strict threshold look
+   different immediately. */
+.detect-test-panel { width: min(1180px, 96vw); max-width: 96vw; }
+.detect-test-body { display: flex; flex-direction: column; gap: 8px; max-height: 88vh; overflow: auto; }
+.detect-test-status { font-size: 13px; font-weight: 800; }
+.detect-test-status.found { color: var(--teal); }
+.detect-test-status.missed { color: var(--rose); }
+.detect-test-meta { color: var(--text-muted); font-size: 11px; }
+.detect-test-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 12px; align-items: start; }
+.detect-test-preview-wrap { min-width: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); }
+.detect-test-image { display: block; width: 100%; height: auto; }
+.detect-test-details { display: flex; flex-direction: column; gap: 6px; }
+.detect-test-detail { display: flex; flex-direction: column; gap: 2px; padding: 8px; border-radius: 7px; border-left: 3px solid var(--text-muted); background: var(--bg-surface); }
+.detect-test-detail.found { border-left-color: var(--teal); }
+.detect-test-detail.missed { border-left-color: var(--rose); }
+.detect-test-detail.missing { border-left-color: var(--brand); }
+.detect-test-detail-name { font-size: 12px; font-weight: 800; color: var(--text); overflow-wrap: anywhere; }
+.detect-test-detail-state { font-size: 10px; font-weight: 800; color: var(--text-dim); }
+.detect-test-detail.found .detect-test-detail-state { color: var(--teal); }
+.detect-test-detail.missed .detect-test-detail-state { color: var(--rose); }
+.detect-test-detail-score { font-size: 10px; color: var(--text-muted); line-height: 1.35; }
+.detect-test-empty { padding: 10px; color: var(--text-muted); font-size: 11px; }
+@media (max-width: 820px) {
+  .detect-test-layout { grid-template-columns: 1fr; }
+}
 
 /* Image Manager: Detection Images badge, pick-mode banner, and Use button */
 .im-badge-detect { background: color-mix(in srgb, var(--sky) 22%, var(--bg-surface)); color: var(--sky); }

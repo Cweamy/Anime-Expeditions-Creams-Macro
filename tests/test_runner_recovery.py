@@ -247,6 +247,134 @@ def test_recovery_exception_is_logged_without_blocking_later_phases(
     )
 
 
+def test_open_deep_link_uses_startfile_when_available(monkeypatch):
+    opened = []
+    monkeypatch.setattr(runner_module.os, "startfile", opened.append, raising=False)
+    monkeypatch.setattr(
+        runner_module.webbrowser,
+        "open",
+        lambda _url: pytest.fail("browser fallback should not run on Windows"),
+    )
+
+    runner_module._open_deep_link("roblox://test")
+
+    assert opened == ["roblox://test"]
+
+
+def test_open_deep_link_uses_browser_fallback_without_startfile(monkeypatch):
+    opened = []
+    monkeypatch.delattr(runner_module.os, "startfile", raising=False)
+    monkeypatch.setattr(
+        runner_module.webbrowser,
+        "open",
+        lambda url: opened.append(url) or True,
+    )
+
+    runner_module._open_deep_link("roblox://test")
+
+    assert opened == ["roblox://test"]
+
+
+def test_failed_rejoin_stays_pending_and_does_not_launch_again(monkeypatch):
+    class _Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def time(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    runner = MacroRunner(Mock(), Mock(), Mock())
+    clock = _Clock()
+    stop_event = threading.Event()
+    launches = []
+    screenshot = Mock(return_value="rejoin_timeout.png")
+    monkeypatch.setattr(runner_module, "REJOIN_TIMEOUT", 5.0)
+    monkeypatch.setattr(runner_module, "REJOIN_POLL_INTERVAL", 1.0)
+
+    monkeypatch.setattr(runner_module.time, "time", clock.time)
+    monkeypatch.setattr(runner_module.time, "sleep", clock.sleep)
+    monkeypatch.setattr(runner_module.wm, "list_roblox_windows", lambda: [])
+    monkeypatch.setattr(runner_module.wm, "is_window", lambda _hwnd: True)
+    def find_lobby_after_existing_launch(*_args, **_kwargs):
+        if clock.now >= 6.0:
+            return ({"score": 1.0}, "nav_play")
+        return (None, None)
+
+    monkeypatch.setattr(runner_module.vision, "find_image_any", find_lobby_after_existing_launch)
+    monkeypatch.setattr(
+        runner_module.os,
+        "startfile",
+        lambda url: launches.append(url),
+        raising=False,
+    )
+    runner._hwnd_getter = lambda: 123
+    runner._save_debug_screenshot_unconditional = screenshot
+
+    assert runner._attempt_rejoin(123, stop_event) is False
+    assert not stop_event.is_set()
+    assert launches == [runner_module.REJOIN_DEEPLINK]
+    assert runner.is_rejoin_pending()
+    screenshot.assert_called_once_with(123, "rejoin_timeout")
+    assert any(
+        "no second deep link will be opened" in call_args.args[0]
+        for call_args in runner._log.call_args_list
+    )
+
+    # A later recovery pass waits on the same launcher. Once it exposes the
+    # lobby, the run can continue and the pending guard clears.
+    assert runner._attempt_rejoin(123, stop_event) is True
+    assert launches == [runner_module.REJOIN_DEEPLINK]
+    assert not runner.is_rejoin_pending()
+    assert runner._current_hwnd == 123
+
+
+def test_rejoin_lock_blocks_concurrent_launcher(monkeypatch):
+    runner = MacroRunner(Mock(), Mock(), Mock())
+    stop_event = threading.Event()
+    launches = []
+    monkeypatch.setattr(
+        runner_module.os,
+        "startfile",
+        lambda url: launches.append(url),
+        raising=False,
+    )
+
+    assert runner._rejoin_lock.acquire(blocking=False)
+    try:
+        assert runner._attempt_rejoin(123, stop_event) is False
+    finally:
+        runner._rejoin_lock.release()
+
+    assert not stop_event.is_set()
+    assert launches == []
+    assert any(
+        "already in progress" in call_args.args[0]
+        for call_args in runner._log.call_args_list
+    )
+
+
+def test_watchdog_rejoin_claim_is_single_use():
+    runner = MacroRunner(Mock(), Mock(), Mock())
+
+    assert runner.claim_rejoin_launch() is True
+    assert runner.is_rejoin_pending()
+    assert runner.claim_rejoin_launch() is False
+
+    runner.cancel_rejoin_launch()
+    assert not runner.is_rejoin_pending()
+    assert runner.claim_rejoin_launch() is True
+    runner.cancel_rejoin_launch()
+
+def test_open_deep_link_reports_rejected_link(monkeypatch):
+    monkeypatch.delattr(runner_module.os, "startfile", raising=False)
+    monkeypatch.setattr(runner_module.webbrowser, "open", lambda _url: False)
+
+    with pytest.raises(OSError, match="No application accepted"):
+        runner_module._open_deep_link("roblox://test")
+
 def test_stop_during_phase_failure_does_not_recover_or_continue(
         monkeypatch, runner):
     _prepare_run_environment(monkeypatch, runner)

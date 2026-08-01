@@ -21,6 +21,11 @@ VK_RIGHT = 0x27
 VK_DOWN = 0x28
 VK_INSERT = 0x2D
 VK_DELETE = 0x2E
+VK_PAUSE = 0x13
+VK_SNAPSHOT = 0x2C  # Print Screen
+VK_NUMLOCK = 0x90
+VK_SCROLL = 0x91  # Scroll Lock
+VK_APPS = 0x5D  # the context-menu key
 
 VK_F1 = 0x70
 VK_F2 = 0x71
@@ -60,6 +65,24 @@ _SPECIAL_KEY_NAMES = {
     "tab": VK_TAB, "enter": VK_RETURN, "backspace": VK_BACK, "delete": VK_DELETE,
     "home": VK_HOME, "end": VK_END, "pageup": VK_PRIOR, "pagedown": VK_NEXT,
     "insert": VK_INSERT, "capslock": VK_CAPITAL,
+    # Aliases for the names the `keyboard` package's global hook reports
+    # (core.input_record's Record block) -- a different vocabulary than
+    # mapKeyName's (spaced, side-specific modifiers, "escape" not "esc",
+    # ...), so both spellings resolve to the same VK here rather than
+    # needing two lookup tables.
+    "escape": VK_ESCAPE, "return": VK_RETURN,
+    "left shift": VK_SHIFT, "right shift": VK_SHIFT,
+    "left ctrl": VK_CONTROL, "right ctrl": VK_CONTROL,
+    "left alt": VK_MENU, "right alt": VK_MENU, "alt gr": VK_MENU,
+    "page up": VK_PRIOR, "page down": VK_NEXT,
+    "caps lock": VK_CAPITAL,
+    # The remaining non-character keys the Record block's global keyboard
+    # hook can emit (see core.input_record). Without these here a recorded
+    # press of one would map to None and be silently skipped on replay --
+    # "the keyboard didn't play back right." The context-menu key is "menu"
+    # in the keyboard library's vocabulary (not Alt, which is "alt").
+    "pause": VK_PAUSE, "print screen": VK_SNAPSHOT,
+    "num lock": VK_NUMLOCK, "scroll lock": VK_SCROLL, "menu": VK_APPS,
 }
 _F_KEY_NAMES = {f"f{i}": globals()[f"VK_F{i}"] for i in range(1, 13)}
 # Keyed by the literal character JS's KeyboardEvent.key reports for these --

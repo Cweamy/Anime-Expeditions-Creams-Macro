@@ -17,6 +17,30 @@ def _runner():
     return runner
 
 
+def test_stop_does_not_click_leave_stage_or_return_to_lobby(monkeypatch):
+    """F2/Stop must just stop -- it must not try to quit the current match
+    out to the lobby first. Reported live: Stop was leaving a live match
+    instead of simply halting where it was."""
+    runner = MacroRunner(object(), object(), lambda *_a, **_kw: None)
+    runner._current_hwnd = 123
+    runner._stop_logged = False
+    runner._paused_logged = False
+    runner._pause_event.clear()
+
+    searched = []
+    monkeypatch.setattr(
+        runner_module.vision, "find_image",
+        lambda *_a, **_kw: searched.append("find_image") or LEAVE_MATCH)
+    monkeypatch.setattr(
+        runner_module.vision, "click_match",
+        lambda *_a, **_kw: searched.append("click_match"))
+
+    stop_event = threading.Event()
+    stop_event.set()
+    assert runner._checkpoint(stop_event) is True
+    assert searched == [], "Stop must not search for or click Leave Stage/Return to Lobby"
+
+
 def test_leave_stage_stops_retrying_when_return_modal_appears(monkeypatch):
     clicks = []
     searched = []
