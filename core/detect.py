@@ -327,7 +327,9 @@ def render_diagnostic(frame_bgr, report):
         boxes = detail.get("matches") or []
         if not boxes and (detail.get("match") or detail.get("best_match")):
             boxes = [detail.get("match") or detail.get("best_match")]
-        color = (0, 220, 80) if matched else (0, 210, 255)
+        # BGR colors: accepted matches are red so they stand out from the
+        # cyan/yellow near-miss boxes and the cyan search-region outline.
+        color = (0, 0, 255) if matched else (0, 210, 255)
         for index, match in enumerate(boxes):
             x, y = int(match["x"]), int(match["y"])
             w, h = int(match["w"]), int(match["h"])
