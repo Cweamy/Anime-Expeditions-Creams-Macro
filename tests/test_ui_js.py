@@ -171,6 +171,55 @@ def test_remove_block_still_works_one_at_a_time(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# filterSettings: matching a panel title must not hide its controls
+# ---------------------------------------------------------------------------
+
+def test_settings_search_panel_title_keeps_all_rows_visible(tmp_path):
+    out = run_js("""
+        function classList() {
+          const names = new Set();
+          return {
+            toggle(name, on) { if (on) names.add(name); else names.delete(name); },
+            has(name) { return names.has(name); }
+          };
+        }
+        const rows = [
+          { textContent: 'Story Card fallback click', classList: classList() },
+          { textContent: 'Story Stage Rows row height', classList: classList() },
+        ];
+        const panel = {
+          classList: classList(),
+          querySelector(sel) {
+            return sel === '.rp-panel-head' ? { textContent: 'Control Macro Coordinates' } : null;
+          },
+          querySelectorAll(sel) { return sel === '.setting-row' ? rows : []; },
+        };
+        const category = {
+          dataset: { cat: 'debug' }, style: {}, classList: classList(),
+          querySelectorAll(sel) { return sel === '.rp-panel' ? [panel] : []; },
+        };
+        const buttons = [
+          { dataset: { cat: 'all' }, classList: classList() },
+          { dataset: { cat: 'debug' }, classList: classList() },
+        ];
+        const document = {
+          querySelectorAll(sel) {
+            if (sel === '.settings-cat-btn') return buttons;
+            if (sel === '.settings-category') return [category];
+            return [];
+          },
+        };
+        eval(extract('filterSettings'));
+        filterSettings('Macro Coordinates');
+        console.log(JSON.stringify({
+          rowsHidden: rows.map(row => row.classList.has('search-hidden')),
+          panelHidden: panel.classList.has('search-hidden'),
+        }));
+    """, tmp_path)
+    assert out == {"rowsHidden": [False, False], "panelHidden": False}
+
+
+# ---------------------------------------------------------------------------
 # importTasks: bundled templates must actually be restored
 # ---------------------------------------------------------------------------
 # exportTasks bundles every template its tasks reference so a shared queue does

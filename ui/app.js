@@ -775,16 +775,21 @@ function filterSettings(query) {
     let catHasHit = false;
     catSection.querySelectorAll('.rp-panel').forEach(panel => {
       let panelHasHit = false;
+      // A search for a panel's own title (for example "Macro Coordinates")
+      // should show the panel's controls, not leave only its header and
+      // description visible. The old code kept the panel because the header
+      // matched, but had already hidden every row because none of the row
+      // labels matched the same query.
+      const headerText = (panel.querySelector('.rp-panel-head')?.textContent || '').toLowerCase();
+      const headerHit = !!q && headerText.includes(q);
       panel.querySelectorAll('.setting-row').forEach(row => {
         const text = (row.textContent || '').toLowerCase();
-        const hit = !q || text.includes(q);
+        const hit = !q || headerHit || text.includes(q);
         row.classList.toggle('search-hidden', !hit);
-        row.classList.toggle('search-hit', hit && !!q);
+        row.classList.toggle('search-hit', hit && !!q && !headerHit);
         if (hit) panelHasHit = true;
       });
-      // Also check the panel header text (e.g. "Webhook", "General")
-      const headerText = (panel.querySelector('.rp-panel-head')?.textContent || '').toLowerCase();
-      if (q && headerText.includes(q)) panelHasHit = true;
+      if (headerHit) panelHasHit = true;
       panel.classList.toggle('search-hidden', !panelHasHit && !!q);
       if (panelHasHit) catHasHit = true;
     });
