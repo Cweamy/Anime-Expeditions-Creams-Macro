@@ -2901,10 +2901,23 @@ class Api:
         if not hwnd or not wm.is_window(hwnd):
             return {"ok": False, "reason": "no_roblox"}
 
+        temporarily_shown = False
         try:
             import base64
             import cv2
             from core import detect, vision
+
+            # Detect blocks are commonly edited on Settings/Macro Manager,
+            # where the native Roblox child is hidden behind the UI. A screen
+            # grab in that state sees our own panel, not Roblox. Show it only
+            # for this read-only capture and restore the prior visibility
+            # before returning the preview to the frontend.
+            is_visible = getattr(wm, "is_window_visible", None)
+            was_visible = bool(is_visible(hwnd)) if is_visible else True
+            if not was_visible:
+                self.show_game()
+                temporarily_shown = True
+                time.sleep(0.05)
 
             # capture_game_bgr returns the whole normalized Roblox client in
             # the same reference space normal Detect searches use. Keeping it
@@ -2937,6 +2950,9 @@ class Api:
         except Exception as exc:
             self.push_log(f"[Debug] Detect test failed: {exc}")
             return {"ok": False, "reason": "test_failed"}
+        finally:
+            if temporarily_shown:
+                self.hide_game()
 
     def debug_test_expedition_wave(self) -> dict:
         # Settings > Debug > "Test Expedition Wave Check": runs one tick of
