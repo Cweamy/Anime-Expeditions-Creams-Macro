@@ -38,37 +38,62 @@ class ChallengeOps:
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f'[Macro] Challenge map detected: "{map_name}" (score {match["score"]:.2f}).{suffix}')
             return map_name
+        
         return self._detect_challenge_map_ocr(hwnd)
 
     def _detect_challenge_map_ocr(self, hwnd) -> str:
-        """Fallback for the tiny Daily Challenge map label shown in-game."""
+        """ Detects the map through OCR, and avoids issues with images that don't work with other devices. Returns the map name if detected, or None if not detected. """
         frame = vision.capture_game_bgr(hwnd)
         if frame is None:
             return None
 
-        # Anchor the crop to Daily Challenge's green HUD label instead of a
-        # fixed map-name position; longer names extend farther left.
-        try:
-            hud_match = vision.find_in_gray_multiscale(
-                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), "daily_challenge_hud")
-        except vision.TemplateNotFound:
-            return None
-        if hud_match is None:
-            return None
-        x = max(0, hud_match["x"] + hud_match["w"] - 5)
-        y = max(0, hud_match["y"] - 7)
-        crop = frame[y:min(frame.shape[0], y + 43), x:frame.shape[1]]
+        height, width = frame.shape[:2]
+        column_start = (3 * width) // 4  #
+        row_start = height // 3          
+        row_end = (2 * height) // 3      
+        crop = frame[row_start:row_end, column_start:]  
         if crop.size == 0:
             return None
 
-        # The raw glyphs are only around 10px tall. Color upscaling preserves
-        # their white fill and dark outline better than a global threshold.
-        candidates = [
-            cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_CUBIC),
-            cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_LANCZOS4),
-        ]
+        crop_h, crop_w = crop.shape[:2]
+
+        subcol_start = crop_w // 2        
+        row_height = crop_h // 6          
+        subrow_start = row_height * 2     #
+        subrow_end = row_height * 3
+        crop = crop[subrow_start:subrow_end, subcol_start:]
+        if crop.size == 0:
+            return None
+
+        crop_h, crop_w = crop.shape[:2]
+        candidates = []
+
+        for scale in [8, 12, 16]:
+            for interp in [cv2.INTER_CUBIC, cv2.INTER_LANCZOS4, cv2.INTER_LINEAR]:
+                upscaled = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=interp)
+                candidates.append(upscaled)
+
+                blurred = cv2.GaussianBlur(upscaled, (0, 0), 3)
+                sharpened = cv2.addWeighted(upscaled, 1.5, blurred, -0.5, 0)
+                candidates.append(sharpened)
+
+                lab = cv2.cvtColor(upscaled, cv2.COLOR_BGR2LAB)
+                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+                enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+                candidates.append(enhanced)
+
         candidates.extend(ocr.candidate_masks(crop, upscale=8))
-        texts = [ocr_windows.ocr_image(candidate) for candidate in candidates]
+
+
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            rapid_ocr = RapidOCR()
+            use_rapid = True
+        except ImportError:
+            use_rapid = False
+            ocr_available = ocr_windows.is_available()
+
         aliases = {
             "School Grounds": "grounds",
             "Rose Kingdom": "kingdom",
@@ -76,8 +101,13 @@ class ChallengeOps:
             "King's Tomb": "tomb",
             "Flower Forest": "flower",
         }
-        for text in texts:
+
+        def check_match(text, candidate_idx):
+            if not text or not text.strip():
+                return None
+
             tokens = re.findall(r"[a-z]+", text.lower())
+
             scores = sorted(
                 (
                     max((difflib.SequenceMatcher(None, alias, token).ratio() for token in tokens), default=0),
@@ -85,14 +115,72 @@ class ChallengeOps:
                 )
                 for map_name, alias in aliases.items()
             )
+
+            scores_str = ", ".join([f"{m}={s:.2f}" for s, m in scores])
+
             best_score, best_map = scores[-1]
             runner_up = scores[-2][0]
-            if best_score >= 0.65 and best_score - runner_up >= 0.12:
-                self._log(
-                    f'[Macro] Challenge map OCR: "{text.strip()}" -> '
-                    f'"{best_map}" (score {best_score:.2f}).')
+            margin = best_score - runner_up
+
+            if best_score >= 0.65 and margin >= 0.12:
                 return best_map
-        return None
+            else:
+                reason = "score too low" if best_score < 0.65 else "margin too small"
+                return None
+
+        if use_rapid:
+            for i, candidate in enumerate(candidates):
+                try:
+                    if not candidate.flags['C_CONTIGUOUS']:
+                        candidate = np.ascontiguousarray(candidate)
+
+                    rgb_candidate = cv2.cvtColor(candidate, cv2.COLOR_BGR2RGB)
+
+                    result, elapse = rapid_ocr(rgb_candidate)
+                    if result:
+                        text = " ".join([line[1] for line in result])
+
+                        try:
+                            confidences = [float(line[2]) for line in result]
+                            confidence = sum(confidences) / len(confidences) if confidences else 0.0
+                        except (ValueError, TypeError):
+                            confidence = 0.0
+
+                        total_time = sum(elapse) if isinstance(elapse, list) else float(elapse)
+
+                        matched_map = check_match(text, i)
+                        if matched_map:
+                            return matched_map
+                    else:
+                        pass
+                except Exception as e:
+                    pass
+            return None
+
+        elif ocr_available:
+            texts = [ocr_windows.ocr_image(candidate) for candidate in candidates]
+            for idx, text in enumerate(texts):
+                matched_map = check_match(text, idx)
+                if matched_map:
+                    return matched_map
+            return None
+        else:
+            try:
+                import pytesseract
+                for i, candidate in enumerate(candidates[:5]):
+                    try:
+                        rgb = cv2.cvtColor(candidate, cv2.COLOR_BGR2RGB)
+                        text = pytesseract.image_to_string(rgb, config='--psm 7')
+                        self._log(f"[OCR Debug] Tesseract candidate {i}: {repr(text)}")
+                        matched_map = check_match(text, i)
+                        if matched_map:
+                            return matched_map
+                    except Exception as e:
+                        pass
+                return None
+            except ImportError:
+                return None
+
 
     def _challenge_has_ready_stage(self) -> bool:
         """Quick side-effect-free check for whether Challenge automation
@@ -347,7 +435,7 @@ class ChallengeOps:
         if not self._open_challenge_screen(hwnd, stop_event):
             return None
         try:
-            unavailable = vision.find_image(hwnd, "daily_challenge_unavailable", threshold=0.75)
+            unavailable = vision.find_image(hwnd, "daily_challenge_unavailable")
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] Can't check Daily Challenge availability: {exc}")
             return None
@@ -360,33 +448,17 @@ class ChallengeOps:
             return "unavailable" if self._recover_to_lobby(hwnd, stop_event) else None
 
         self._set_status(action="Clicking Daily Challenge...")
-        avail_match = self._click_found_image(
-            hwnd, "daily_challenge_available", CHALLENGE_SCREEN_TIMEOUT, stop_event, threshold=0.75)
-        if avail_match is None:
-            if stop_event is not None and stop_event.is_set():
-                return None
-            # Fallback: click Daily Challenge tab on left sidebar
-            tab_x, tab_y = self._cxy("daily_challenge_tab")
-            self._log(f'[Macro] "daily_challenge_available" template missed -- using fallback tab click at ({tab_x}, {tab_y}).')
-            left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            self._mouse.click(left + tab_x, top + tab_y)
-            time.sleep(0.5)
-
+        if self._click_found_image(
+                hwnd, "daily_challenge_available", CHALLENGE_SCREEN_TIMEOUT, stop_event) is None:
+            self._log('[Macro] Daily Challenge was neither available nor unavailable -- stopping.')
+            return None
         if self._checkpoint(stop_event):
             return None
         self._set_status(action="Selecting Daily Challenge stage...")
-        stage_match = self._click_found_image(
-            hwnd, "daily_challenge_stage", CHALLENGE_SCREEN_TIMEOUT, stop_event, threshold=0.75)
-        if stage_match is None:
-            if stop_event is not None and stop_event.is_set():
-                return None
-            # Fallback: click Daily Challenge stage card on right panel
-            card_x, card_y = self._cxy("daily_challenge_stage")
-            self._log(f'[Macro] "daily_challenge_stage" template missed -- using fallback card click at ({card_x}, {card_y}).')
-            left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            self._mouse.click(left + card_x, top + card_y)
-            time.sleep(0.5)
-
+        if self._click_found_image(
+                hwnd, "daily_challenge_stage", CHALLENGE_SCREEN_TIMEOUT, stop_event) is None:
+            self._log('[Macro] Daily Challenge stage card never appeared -- stopping.')
+            return None
         if self._checkpoint(stop_event):
             return None
         if not self._enter_selected_challenge(hwnd, stop_event, play_mode, coords, webhook, daily=True):
