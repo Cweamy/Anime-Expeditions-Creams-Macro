@@ -520,9 +520,15 @@ function switchScreen(name) {
     }
   } catch (e) {}
 
-  if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); }
+  if (name === 'creation') { refreshTemplateList(); refreshSavedPaths(); refreshSavedRecordings(); }
   if (name === 'task') refreshTaskQueue();
-  if (name === 'resource') { refreshCraftingScreen(); refreshFuelScreen(); refreshChallengeScreen(); refreshBountyScreen(); }
+  if (name === 'resource') {
+    refreshCraftingScreen();
+    refreshFuelScreen();
+    refreshAutoShopScreen();
+    refreshChallengeScreen();
+    refreshBountyScreen();
+  }
   if (name === 'settings') { refreshSavedPaths(); loadMacroCoords(); loadRewardTestMaps(); }
 
   // The Process Log only exists on the Dashboard, and a display:none element
@@ -813,6 +819,18 @@ async function saveActionDelay(input) {
   } catch (e) {}
 }
 
+// Settings > General > Roblox controls: the runner samples this only at
+// completed-match boundaries. Keeping the interval here (rather than in a
+// task) makes it apply consistently across every queued task and repeat pass.
+async function saveMemoryRefreshHours(input) {
+  const hours = Math.min(12, Math.max(1, parseFloat(input.value) || 4));
+  input.value = hours;
+  try {
+    await pywebview.api.set_setting('memory_refresh_hours', hours);
+    addLog(`[Settings] Periodic Roblox refresh set to ${hours} hour${hours === 1 ? '' : 's'}.`);
+  } catch (e) {}
+}
+
 async function toggleSetting(key, btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
@@ -1062,10 +1080,16 @@ async function loadSettingsUI() {
     const autoRelaunchEl = document.getElementById('toggle-auto-relaunch-roblox');
     // Default ON -- absent key means enabled.
     if (autoRelaunchEl) autoRelaunchEl.classList.toggle('on', s.auto_relaunch_roblox !== false);
+    const memoryRefreshEl = document.getElementById('toggle-memory-refresh');
+    if (memoryRefreshEl) memoryRefreshEl.classList.toggle('on', !!s.memory_refresh_enabled);
+    const memoryRefreshHoursEl = document.getElementById('setting-memory-refresh-hours');
+    if (memoryRefreshHoursEl) memoryRefreshHoursEl.value = s.memory_refresh_hours ?? 4;
     const actionDelayEl = document.getElementById('setting-action-delay');
     if (actionDelayEl) actionDelayEl.value = s.action_delay_ms || 0;
     const debugScreenshotsEl = document.getElementById('toggle-debug-screenshots');
     if (debugScreenshotsEl) debugScreenshotsEl.classList.toggle('on', !!s.debug_screenshots);
+    const looseTeamOcrEl = document.getElementById('toggle-loose-team-ocr-match');
+    if (looseTeamOcrEl) looseTeamOcrEl.classList.toggle('on', !!s.loose_team_ocr_match);
     const expColorEl = document.getElementById('toggle-expedition-color');
     // Default ON -- the key is simply absent until the user first flips it.
     if (expColorEl) expColorEl.classList.toggle('on', s.expedition_color_buttons !== false);
@@ -2150,6 +2174,7 @@ let enteringTaskIds = new Set();
 let taskTemplates = [];  // Macro Manager template names, for the Macro Operation picker
 let taskSaveTimer = null;
 const DEFAULT_INFINITE_WAVE_LIMIT = 20;
+const MAX_EXTRACT_AFTER = 9999;
 
 function newTaskId() {
   return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -2168,6 +2193,17 @@ function defaultTask() {
     // nothing like Acts 1-3). See runner._run_act4_diversion.
     act4_on_drop: false, act4_mode: 'once', act4_macro: '',
   };
+}
+
+function normalizeExtractAfter(value) {
+  // Number inputs serialize absurd values in scientific notation. Treat them
+  // as "run as far as supported" instead of saving a value Python's int parser
+  // cannot read when battle begins.
+  const text = String(value ?? '').trim();
+  if (!text) return '1';
+  const number = Number(text);
+  if (!Number.isFinite(number) || !Number.isInteger(number) || number < 0) return '1';
+  return String(Math.min(number, MAX_EXTRACT_AFTER));
 }
 
 function findTask(id) { return taskCards.find(t => t.id === id); }
@@ -2228,6 +2264,59 @@ async function importCustomPaths(paths) {
     } catch (e) {}
   }
   return added;
+}
+
+// Record block counterpart of collectCustomPathNames/exportCustomPaths/
+// importCustomPaths above. Unlike that one, this recurses into a Detect
+// block's then/else branches -- Record blocks running in Battle/Loop
+// commonly sit inside one (see core.share._iter_blocks, the same
+// traversal the Python side of the Share Code export already uses).
+function collectRecordingNames(templates) {
+  const names = new Set();
+  const walk = (blocks) => {
+    for (const block of blocks || []) {
+      if (!block) continue;
+      if (block.type === 'record' && block.params && block.params.recording) {
+        names.add(block.params.recording);
+      } else if (block.type === 'detect') {
+        walk(block.then);
+        walk(block.else);
+      }
+    }
+  };
+  for (const template of Object.values(templates || {})) {
+    const root = template && template.blocks != null ? template.blocks : template;
+    const lists = Array.isArray(root) ? [root] : Object.values(root || {}).filter(Array.isArray);
+    for (const blocks of lists) walk(blocks);
+  }
+  return [...names];
+}
+
+// Unlike exportCustomPaths/importCustomPaths above, this bundles and
+// restores recordings' events zlib-compressed (see
+// core.input_record.collect_recordings_compressed) in one batched call --
+// a dense mouse-move recording is thousands of small similar objects, and
+// the plain-JSON task/template export this feeds isn't compressed
+// otherwise, so an uncompressed recording could dominate the file's size
+// on its own.
+async function exportCustomRecordings(templates) {
+  const names = collectRecordingNames(templates);
+  if (names.length === 0) return {};
+  try {
+    return await pywebview.api.export_recordings_bundle(names) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+async function importCustomRecordings(recordings) {
+  if (!recordings || Object.keys(recordings).length === 0) return 0;
+  try {
+    const result = await pywebview.api.import_recordings_bundle(recordings);
+    return (result && result.ok) ? result.added : 0;
+  } catch (e) {
+    return 0;
+  }
 }
 
 async function exportSettings() {
@@ -2305,9 +2394,10 @@ async function exportTasks() {
     }
   }
   const paths = await exportCustomPaths(templates);
+  const recordings = await exportCustomRecordings(templates);
   const payload = {
     kind: 'anime-expeditions-tasks', version: 2, exported: new Date().toISOString(),
-    tasks: taskCards, templates, paths,
+    tasks: taskCards, templates, paths, recordings,
   };
   let result = null;
   try { result = await pywebview.api.export_tasks_file(payload); } catch (e) {}
@@ -2349,6 +2439,7 @@ async function importTasks() {
     return;
   }
   const pathAdded = await importCustomPaths(data.paths);
+  const recordingAdded = await importCustomRecordings(data.recordings);
   let tplAdded = 0;
   try {
     for (const [name, t] of bundled) {
@@ -2365,6 +2456,7 @@ async function importTasks() {
   let added = 0;
   for (const t of data.tasks) {
     const newTask = { ...defaultTask(), ...t, id: newTaskId() };
+    newTask.extract_after = normalizeExtractAfter(newTask.extract_after);
     taskCards.push(newTask);
     enteringTaskIds.add(newTask.id);
     added++;
@@ -2373,7 +2465,7 @@ async function importTasks() {
   renderTaskList();
   renderTaskBuilder();
   saveTaskQueue();
-  addLog(`[Task] Imported ${added} task(s)${tplAdded ? `, ${tplAdded} macro template(s)` : ''}${pathAdded ? `, and ${pathAdded} custom path(s)` : ''}.`);
+  addLog(`[Task] Imported ${added} task(s)${tplAdded ? `, ${tplAdded} macro template(s)` : ''}${pathAdded ? `, ${pathAdded} custom path(s)` : ''}${recordingAdded ? `, and ${recordingAdded} recording(s)` : ''}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -2453,7 +2545,10 @@ async function loadTaskPreset() {
            + `entries) -- the queue was left as it was.`);
     return;
   }
-  usable.forEach(t => { t.stage = String(t.stage); });
+  usable.forEach(t => {
+    t.stage = String(t.stage);
+    t.extract_after = normalizeExtractAfter(t.extract_after);
+  });
 
   // Replaces the queue rather than appending -- Import appends (you're
   // merging someone else's tasks into yours), but loading a preset means
@@ -2716,8 +2811,9 @@ function renderTaskBuilder() {
   }
 
   if (t.mode === 'expedition') {
-    fields.push(field('Extract After', `<input type="number" class="block-input" min="0" value="${t.extract_after}"
-      oninput="setTaskProp('${t.id}', 'extract_after', String(Math.max(0, parseInt(this.value, 10) || 0)))">`, 'Number of extraction prompts to decline before extracting'));
+    fields.push(field('Extract After', `<input type="number" class="block-input" min="0" max="${MAX_EXTRACT_AFTER}" step="1" value="${t.extract_after}"
+      onchange="this.value = normalizeExtractAfter(this.value); setTaskProp('${t.id}', 'extract_after', this.value)">`,
+      `Number of extraction prompts to decline before extracting (maximum ${MAX_EXTRACT_AFTER})`));
   }
 
   // Tournament has no Solo/Matchmaking choice -- "Solo Tournament" is already
@@ -2814,9 +2910,15 @@ async function refreshTaskQueue() {
     // undefined and throw, which aborts renderTaskList() mid-map and leaves
     // the whole list blank while the header still shows a count.
     const dropped = rawTasks.filter(t => !TASK_DATA[t.mode]).length;
+    let repairedExtractAfter = 0;
     taskCards = rawTasks.filter(t => TASK_DATA[t.mode]).map(saved => {
       const t = { ...defaultTask(), ...saved };
       if (t.team == null) t.team = '';
+      const normalizedExtractAfter = normalizeExtractAfter(t.extract_after);
+      if (String(t.extract_after ?? '').trim() !== normalizedExtractAfter) {
+        repairedExtractAfter++;
+      }
+      t.extract_after = normalizedExtractAfter;
       t.stage = String(t.stage);
       if (t.difficulty === 'Infinite' || t.difficulty === 'Mastery') {
         t.stage = t.difficulty;
@@ -2824,8 +2926,13 @@ async function refreshTaskQueue() {
       }
       return t;
     });
-    if (dropped) {
-      addLog(`[Task] Removed ${dropped} task(s) with an unrecognized mode (e.g. old Challenge/Bounty entries).`);
+    if (dropped || repairedExtractAfter) {
+      if (dropped) {
+        addLog(`[Task] Removed ${dropped} task(s) with an unrecognized mode (e.g. old Challenge/Bounty entries).`);
+      }
+      if (repairedExtractAfter) {
+        addLog(`[Task] Adjusted invalid or oversized Expedition "Extract After" value(s) to the supported range.`);
+      }
       saveTaskQueue();
     }
   } catch (e) {
@@ -3376,6 +3483,173 @@ function renderFuelPaths() {
 
 setInterval(renderFuelTimers, 1000);
 
+// ---------------------------------------------------------------------------
+// Auto Shop screen. The backend owns the catalog and daily state; the UI only
+// edits stable shop/item identifiers and their requested daily targets.
+// ---------------------------------------------------------------------------
+let autoShopState = null;
+
+function autoShopStatusLabel(status) {
+  return {
+    completed: 'Complete',
+    out_of_stock: 'Out of stock',
+    max_inventory: 'Max inventory',
+    failed_today: 'Failed today',
+    pending_verification: 'Verifying',
+    retry_pending: 'Retry scheduled',
+    pending: 'Pending',
+  }[status] || 'Pending';
+}
+
+async function refreshAutoShopScreen() {
+  try {
+    autoShopState = await pywebview.api.get_auto_shop_settings();
+  } catch (e) {
+    autoShopState = null;
+  }
+  renderAutoShopScreen();
+}
+
+function renderAutoShopScreen() {
+  const state = autoShopState;
+  const goldShop = state && state.shops ? state.shops.gold_shop : null;
+  const items = (goldShop && goldShop.items) || [];
+  const enabledItems = items.filter(item => item.enabled);
+  const completeItems = enabledItems.filter(
+    item => ['completed', 'out_of_stock', 'max_inventory'].includes(
+      (item.state || {}).status
+    )
+  );
+
+  const summary = document.getElementById('resource-auto-shop-summary');
+  if (summary) {
+    summary.textContent = state && state.enabled ? 'Enabled' : 'Disabled';
+    summary.classList.toggle('active', !!(state && state.enabled));
+  }
+  const details = document.getElementById('resource-auto-shop-details');
+  if (details) {
+    details.textContent = `Gold Shop: ${enabledItems.length} enabled | ${completeItems.length} complete`;
+    details.title = details.textContent;
+  }
+  document.getElementById('toggle-auto-shop-enabled')?.classList.toggle(
+    'on',
+    !!(state && state.enabled)
+  );
+  document.getElementById('toggle-gold-shop-enabled')?.classList.toggle(
+    'on',
+    !!(goldShop && goldShop.enabled)
+  );
+
+  const list = document.getElementById('auto-shop-gold-items');
+  if (!list) return;
+  if (!goldShop) {
+    list.innerHTML = '<div class="rh-empty">Couldn\'t load Auto Shop settings.</div>';
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const isMax = String(item.target).toLowerCase() === 'max';
+    const numericTarget = isMax ? '' : item.target;
+    const runtime = item.state || {};
+    const attempts = Number(runtime.attempts || 0);
+    const status = autoShopStatusLabel(runtime.status);
+    const isCompleted = runtime.status === 'completed' || runtime.status === 'out_of_stock' || runtime.status === 'max_inventory';
+    const resetToday = runtime.status && runtime.status !== 'pending'
+      ? `<button type="button" class="block-mod-btn" style="padding: 3px 10px; font-size: 11px; border-color: rgba(224, 86, 122, 0.4); color: var(--rose);"
+                 onclick="resetAutoShopItemToday('gold_shop', '${item.key}')">Reset Today</button>`
+      : '';
+    return `
+      <div class="task-card" data-key="${escapeHtml(item.key)}" style="--tqc: var(--amber); cursor: default; padding: 10px 14px; margin-bottom: 6px;">
+        <div class="tq-text" style="width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+          <div style="display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1;">
+            <button class="toggle-switch ${item.enabled ? 'on' : ''}"
+                    onclick="toggleAutoShopItem('gold_shop', '${item.key}', this)"></button>
+            <div style="min-width: 0; flex: 1;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="tq-title" style="font-weight: 600; font-size: 14px; color: var(--text);">${escapeHtml(item.name)}</span>
+                ${resetToday}
+              </div>
+              <div class="setting-desc" style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">
+                Daily max: ${item.daily_maximum} | <span style="color: ${isCompleted ? 'var(--teal)' : 'var(--text-muted)'};">${status}</span>${attempts ? ` | ${attempts}/3 attempts` : ''}
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+            <div class="seg-toggle" style="width: auto;">
+              <button type="button" value="max" class="seg-btn ${isMax ? 'active' : ''}"
+                      onclick="setAutoShopItemMax('gold_shop', '${item.key}')">Max</button>
+              <button type="button" class="seg-btn ${isMax ? '' : 'active'}"
+                      onclick="setAutoShopItemNumberMode('gold_shop', '${item.key}')">Number</button>
+            </div>
+            <input type="number" class="block-input" min="1" max="${item.daily_maximum}"
+                   style="width: 58px; text-align: center; ${isMax ? 'visibility: hidden;' : ''}"
+                   value="${numericTarget}" placeholder="Qty"
+                   onchange="setAutoShopItemTarget('gold_shop', '${item.key}', this.value, ${item.daily_maximum})">
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function toggleAutoShopEnabled(button) {
+  const enabled = !button.classList.contains('on');
+  button.classList.toggle('on', enabled);
+  bounceToggle(button);
+  try { await pywebview.api.set_auto_shop_enabled(enabled); } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function toggleAutoShopShopEnabled(shopKey, button) {
+  const enabled = !button.classList.contains('on');
+  button.classList.toggle('on', enabled);
+  bounceToggle(button);
+  try { await pywebview.api.set_auto_shop_shop_enabled(shopKey, enabled); } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function toggleAutoShopItem(shopKey, itemKey, button) {
+  const enabled = !button.classList.contains('on');
+  button.classList.toggle('on', enabled);
+  bounceToggle(button);
+  try {
+    await pywebview.api.set_auto_shop_item_enabled(shopKey, itemKey, enabled);
+  } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function setAutoShopItemMax(shopKey, itemKey) {
+  try {
+    await pywebview.api.set_auto_shop_item_target(shopKey, itemKey, 'max');
+  } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function setAutoShopItemNumberMode(shopKey, itemKey) {
+  const shop = autoShopState && autoShopState.shops
+    ? autoShopState.shops[shopKey]
+    : null;
+  const item = ((shop && shop.items) || []).find(entry => entry.key === itemKey);
+  const target = item && String(item.target).toLowerCase() !== 'max' ? item.target : 1;
+  await setAutoShopItemTarget(shopKey, itemKey, target, item ? item.daily_maximum : 1);
+}
+
+async function setAutoShopItemTarget(shopKey, itemKey, value, dailyMaximum) {
+  const target = Math.max(1, Math.min(
+    Number(dailyMaximum) || 1,
+    parseInt(value, 10) || 1
+  ));
+  try {
+    await pywebview.api.set_auto_shop_item_target(shopKey, itemKey, target);
+  } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
+async function resetAutoShopItemToday(shopKey, itemKey) {
+  try {
+    await pywebview.api.reset_auto_shop_item_today(shopKey, itemKey);
+  } catch (e) {}
+  await refreshAutoShopScreen();
+}
+
 // Auto Crafting screen (see core/runner_crafting.py). Interleaved like
 // Challenge: after every N qualifying wins it runs one crafting pass. The
 // label map mirrors CRAFT_SPRITE_LABELS in core/runner_constants.py -- same
@@ -3705,6 +3979,15 @@ const BLOCK_TYPES = {
   // button + an optional hold time. See renderSendKeyControls / the runner's
   // _run_send_key_tick.
   send_key:           { label: 'Send Key',          group: 'Setup',  color: 'var(--brand)', params: [{ key: 'hold_ms', type: 'number', placeholder: 'hold ms', default: 0 }] },
+  // Records a whole mouse+keyboard input sequence (movement, clicks, scroll,
+  // any key -- not just WASD or one Click/Send Key at a time) via its own
+  // Record/Stop button, then replays it with the original timing. The
+  // general-purpose escape hatch Click/Send Key don't cover on their own:
+  // a multi-step UI interaction, a precisely-timed combo, ... Bespoke
+  // controls: renderRecordControls(); recording/replay live in
+  // core.input_record, runs via core.runner_blocks._run_record_macro_tick.
+  // Allowed in both phases, same as Walk.
+  record:             { label: 'Record',            group: 'Setup',  color: 'var(--rose)',  params: [] },
   // Detect: search for an image (or a combination, or a raw condition) and run
   // one of two nested block groups -- Then when found, Else when not. The
   // macro's one branching block. Bespoke controls: renderDetectControls();
@@ -3734,7 +4017,7 @@ const PHASE_ALLOWED = {
   // path) is a normal addable block, allowed in BOTH phases -- you can drop
   // several into Pre Start to walk between multiple starter-placement spots
   // before the match begins. The Loop phases take the same set as Battle.
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'click', 'wait_ms', 'send_key', 'detect'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'record', 'click', 'wait_ms', 'send_key', 'detect'],
   battle: _BATTLE_ALLOWED,
   loop_a: _BATTLE_ALLOWED,
   loop_b: _BATTLE_ALLOWED,
@@ -3745,6 +4028,13 @@ let phaseCollapsed = { prestart: false, battle: false, loop_a: false, loop_b: fa
 let recordingBlockId = null;
 let recordingFuelPathKey = null;
 let savedPaths = [];
+// Record block (mouse+keyboard input recordings) -- kept separate from the
+// Walk Path/Walk recorder state above rather than generalizing it, so this
+// new recorder can't accidentally interact with the existing, already-
+// working path-recording flow.
+let recordingMacroBlockId = null;
+let pendingMacroRecordingTarget = null;
+let savedRecordings = [];
 
 // renderPhases() rebuilds the ENTIRE block list via innerHTML on nearly every
 // Macro Manager interaction (toggling Once, clone/remove, drag-drop reorder,
@@ -3980,6 +4270,14 @@ async function refreshSavedPaths() {
   await loadDefaultWalkPaths();
 }
 
+async function refreshSavedRecordings() {
+  try {
+    savedRecordings = await pywebview.api.list_recordings();
+  } catch (e) {
+    savedRecordings = [];
+  }
+}
+
 // Settings > Debug > "Default Auto Walk": map name -> saved path, so a
 // template's Walk Path can stay on Auto for a map that already has a good
 // recorded route instead of every template needing the same Custom path
@@ -4128,10 +4426,11 @@ let pendingRecordingTarget = null;
 function stopActiveRecording() {
   if (recordingBlockId) toggleRecordPath(recordingBlockId);
   else if (recordingFuelPathKey) toggleRecordFuelPath(recordingFuelPathKey);
+  else if (recordingMacroBlockId) toggleRecordMacro(recordingMacroBlockId);
 }
 
 async function startRecordingTarget(target) {
-  if (recordingBlockId || recordingFuelPathKey) return;
+  if (recordingBlockId || recordingFuelPathKey || recordingMacroBlockId) return;
   closeFuelPaths();
   switchScreen('dashboard');
   await new Promise(resolve => setTimeout(resolve, 200));
@@ -4140,6 +4439,8 @@ async function startRecordingTarget(target) {
     if (result.ok) {
       if (target.kind === 'fuel') recordingFuelPathKey = target.pathKey;
       else recordingBlockId = target.blockId;
+      const textEl = document.getElementById('rec-popout-text');
+      if (textEl) textEl.textContent = 'Recording path (WASD + I/O) - timer starts on your first key';
       document.getElementById('rec-popout').style.display = 'flex';
       addLog(`[${target.kind === 'fuel' ? 'Fuel' : 'Macro Manager'}] Recording path -- walk with WASD (I/O also recorded, timer starts on your first key), then click Stop Recording.`);
     } else {
@@ -4235,6 +4536,82 @@ async function discardPathRecording() {
   try { await pywebview.api.discard_pending_path(); } catch (e) {}
   pendingRecordingTarget = null;
   addLog('[Path Recorder] Recording discarded.');
+  renderPhases();
+}
+
+// ---------------------------------------------------------------------------
+// Record block (mouse+keyboard input recording) -- a separate flow from the
+// Walk Path/Walk recorder above (own state, own naming modal) rather than a
+// generalization of it, so this new recorder can't regress the existing,
+// already-working WASD path recording.
+// ---------------------------------------------------------------------------
+async function toggleRecordMacro(blockId) {
+  if (recordingMacroBlockId === blockId) {
+    pendingMacroRecordingTarget = { blockId };
+    recordingMacroBlockId = null;
+    document.getElementById('rec-popout').style.display = 'none';
+    let stopResult = null;
+    try { stopResult = await pywebview.api.stop_input_capture(); } catch (e) {}
+    renderPhases();
+    switchScreen('creation');
+    if (!stopResult || !stopResult.count) {
+      addLog('[Input Recorder] Nothing recorded -- no mouse/keyboard input detected.');
+      try { await pywebview.api.discard_pending_recording(); } catch (e) {}
+      pendingMacroRecordingTarget = null;
+      return;
+    }
+    const input = document.getElementById('macro-record-name-input');
+    if (input) { input.value = ''; }
+    document.getElementById('macro-record-name-modal').style.display = 'flex';
+    setTimeout(() => { if (input) { input.focus(); } }, 50);
+    return;
+  }
+  if (recordingBlockId || recordingFuelPathKey || recordingMacroBlockId) return;
+  switchScreen('dashboard');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  try {
+    const result = await pywebview.api.start_input_recording();
+    if (result.ok) {
+      recordingMacroBlockId = blockId;
+      const textEl = document.getElementById('rec-popout-text');
+      if (textEl) textEl.textContent = 'Recording mouse + keyboard input inside the game window';
+      document.getElementById('rec-popout').style.display = 'flex';
+      addLog('[Macro Manager] Recording input -- act inside the Roblox window, then click Stop Recording.');
+    } else {
+      addLog(`[Input Recorder] Couldn't start recording: ${result.reason || 'error'}`);
+    }
+  } catch (e) {}
+  renderPhases();
+}
+
+async function saveMacroRecordingName() {
+  const input = document.getElementById('macro-record-name-input');
+  const name = input ? input.value.trim() : '';
+  if (!name) return;
+  document.getElementById('macro-record-name-modal').style.display = 'none';
+  restoreGameIfDashboard();
+  try {
+    const result = await pywebview.api.save_pending_recording(name);
+    if (result.ok) {
+      await refreshSavedRecordings();
+      const blockId = pendingMacroRecordingTarget && pendingMacroRecordingTarget.blockId;
+      const loc = blockId ? findBlockLocation(blockId) : null;
+      if (loc) loc.container[loc.idx].params.recording = result.name;
+      addLog(`[Macro Manager] Saved recording "${result.name}".`);
+    } else {
+      addLog(`[Input Recorder] Couldn't save recording: ${result.reason || 'error'}`);
+    }
+  } catch (e) {}
+  pendingMacroRecordingTarget = null;
+  renderPhases();
+}
+
+async function discardMacroRecording() {
+  document.getElementById('macro-record-name-modal').style.display = 'none';
+  restoreGameIfDashboard();
+  try { await pywebview.api.discard_pending_recording(); } catch (e) {}
+  pendingMacroRecordingTarget = null;
+  addLog('[Input Recorder] Recording discarded.');
   renderPhases();
 }
 
@@ -4470,6 +4847,20 @@ function setWalkPathPath(id, name) {
   renderPhases();
 }
 
+// Record block: a saved input recording (mouse+keyboard, see
+// core.input_record) picked from a dropdown, same Record/Stop button
+// pattern as renderWalkControls but backed by toggleRecordMacro/the
+// recordingMacroBlockId state above instead of the Walk Path recorder.
+function renderRecordControls(b) {
+  const isRecording = recordingMacroBlockId === b.id;
+  const options = savedRecordings.map(n => `<option value="${escapeHtml(n)}" ${n === b.params.recording ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
+  return `
+    <button type="button" class="block-mod-btn ${isRecording ? 'on' : ''}" onclick="toggleRecordMacro('${b.id}')">${isRecording ? 'Stop' : 'Record'}</button>
+    <select class="block-input" style="width:auto;" onchange="updateBlockParam('${b.id}', 'recording', this.value)">
+      <option value="">Pick saved recording...</option>${options}
+    </select>`;
+}
+
 // Every Place Unit block as {n, name}, in the same #1, #2, ... routine order
 // placeUnitOrdinal() numbers rows with -- the option list for any control
 // that targets an already-placed unit.
@@ -4559,6 +4950,7 @@ function renderBlockRow(b, key) {
     : b.type === 'send_key' ? renderSendKeyControls(b)
     : b.type === 'walk' ? renderWalkControls(b)
     : b.type === 'walk_path' ? renderWalkPathControls(b)
+    : b.type === 'record' ? renderRecordControls(b)
     : b.type === 'upgrade_unit' ? renderUpgradeControls(b)
     : b.type === 'auto_upgrade_unit' ? renderAutoUpgradeControls(b)
     : b.type === 'sell_unit' ? renderSellUnitControls(b)
@@ -5958,9 +6350,10 @@ function renderCreationLoadout() {
   const el = document.getElementById('creation-loadout');
   if (!el) return;
   const teams = ['', '1', '2', '3', '4', '5', '6', '7', '8'];
+  // Ensure string conversion so numeric values (e.g. 2) match dropdown option strings
   const teamSel = `
     <select class="task-select" onchange="creationTeam = this.value; renderCreationLoadout()">
-      ${teams.map(v => `<option value="${v}" ${v === creationTeam ? 'selected' : ''}>${v === '' ? 'No Team' : 'Team ' + v}</option>`).join('')}
+      ${teams.map(v => `<option value="${v}" ${v === String(creationTeam) ? 'selected' : ''}>${v === '' ? 'No Team' : 'Team ' + v}</option>`).join('')}
     </select>`;
   const eqSeg = creationTeam === '' ? '' : `
     <span class="palette-group-label" style="margin: 0; white-space: nowrap; flex-shrink: 0;">Equipment :</span>
@@ -6338,8 +6731,10 @@ async function exportTemplates() {
     try { templates[name] = await pywebview.api.load_template(name); } catch (e) {}
   }
   const paths = await exportCustomPaths(templates);
+  const recordings = await exportCustomRecordings(templates);
   const payload = {
-    kind: 'anime-expeditions-templates', version: 2, exported: new Date().toISOString(), templates, paths,
+    kind: 'anime-expeditions-templates', version: 2, exported: new Date().toISOString(),
+    templates, paths, recordings,
   };
   let result = null;
   try { result = await pywebview.api.export_tasks_file(payload, 'templates'); } catch (e) {}
@@ -6383,6 +6778,7 @@ async function importTemplates() {
     + '\n\nReplace them with the imported versions? '
     + 'Choose Cancel to keep yours and import only the new ones.');
   const pathAdded = await importCustomPaths(data.paths);
+  const recordingAdded = await importCustomRecordings(data.recordings);
   const imported = [];
   let replaced = 0;
   for (const [name, t] of entries) {
@@ -6409,7 +6805,8 @@ async function importTemplates() {
   addLog(`[Macro Manager] Imported ${imported.length} macro(s)`
     + `${replaced ? ` (${replaced} replaced)` : ''}`
     + `${kept ? `; kept your existing ${kept}` : ''}`
-    + `${pathAdded ? ` and ${pathAdded} custom path(s)` : ''}.`);
+    + `${pathAdded ? `, ${pathAdded} custom path(s)` : ''}`
+    + `${recordingAdded ? `, and ${recordingAdded} recording(s)` : ''}.`);
 }
 
 async function refreshTemplateList() {
@@ -6573,6 +6970,7 @@ window.addEventListener('pywebviewready', async () => {
   renderPalette();
   renderPhases();
   refreshSavedPaths();
+  refreshSavedRecordings();
   loadSettingsUI();
 
   refreshTaskQueue();
@@ -6679,7 +7077,8 @@ async function updateImportPreview() {
       }
       if (countEl) {
         const walkNote = res.walk_paths ? ` + ${res.walk_paths} walk path(s)` : '';
-        countEl.textContent = `${res.total_templates} template(s)${walkNote}`;
+        const recNote = res.recordings ? ` + ${res.recordings} recording(s)` : '';
+        countEl.textContent = `${res.total_templates} template(s)${walkNote}${recNote}`;
       }
 
       if (itemsEl) {

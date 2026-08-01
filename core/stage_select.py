@@ -92,7 +92,8 @@ def find_and_click_map(mouse, hwnd, map_name: str, log, stop_event=None, scroll_
                 log(f"[Macro] {exc}")
                 return False
             if match is not None:
-                debug_path = vision.save_match_debug(hwnd, found_name, match) if debug_screenshots else None
+                debug_path = vision.save_match_debug(
+                    hwnd, found_name, match, log=log) if debug_screenshots else None
                 suffix = f" Debug: {debug_path}" if debug_path else ""
                 log(f'[Macro] Found "{found_name}" (score {match["score"]:.2f}) -- clicking it.{suffix}')
                 vision.click_match(mouse, hwnd, match)

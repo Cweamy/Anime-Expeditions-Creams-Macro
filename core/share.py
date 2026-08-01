@@ -187,6 +187,34 @@ def remap_walk_path_names(blocks, rename_map) -> None:
                 b["pathName"] = new
 
 
+def collect_recording_names(blocks) -> set:
+    """Names of Record block input recordings referenced anywhere in a
+    template (including inside Detect then/else branches, via _iter_blocks)
+    -- the general mouse+keyboard counterpart of collect_walk_path_names."""
+    names = set()
+    for b in _iter_blocks(blocks):
+        if b.get("type") == "record":
+            name = (b.get("params", {}).get("recording") or "").strip()
+            if name:
+                names.add(name)
+    return names
+
+
+def remap_recording_names(blocks, rename_map) -> None:
+    """Rewrite Record block recording names in place from rename_map --
+    mirrors remap_walk_path_names for the same reason (a bundled recording
+    that collided with an existing one on import was saved under a
+    different name; the block needs to follow it)."""
+    if not rename_map:
+        return
+    for b in _iter_blocks(blocks):
+        if b.get("type") == "record":
+            params = b.get("params") or {}
+            new = rename_map.get((params.get("recording") or "").strip())
+            if new:
+                params["recording"] = new
+
+
 def _parse_payload(payload: dict) -> dict:
     """Parses and validates a decoded payload dictionary."""
     if not isinstance(payload, dict):
@@ -200,6 +228,10 @@ def _parse_payload(payload: dict) -> dict:
     bundled_paths = payload.get("paths")
     if not isinstance(bundled_paths, dict):
         bundled_paths = {}
+    # Same idea for Record block input recordings (see collect_recording_names).
+    bundled_recordings = payload.get("recordings")
+    if not isinstance(bundled_recordings, dict):
+        bundled_recordings = {}
 
     # Multi-template pack
     if kind == "anime-expeditions-template-pack" or "templates" in payload:
@@ -211,14 +243,16 @@ def _parse_payload(payload: dict) -> dict:
                     templates[str(tname)] = blocks
                 elif isinstance(tval, list):
                     templates[str(tname)] = tval
-        return {"ok": True, "type": "pack", "templates": templates, "paths": bundled_paths}
+        return {"ok": True, "type": "pack", "templates": templates,
+                "paths": bundled_paths, "recordings": bundled_recordings}
 
     # Single template
     if "name" in payload or "blocks" in payload:
         name = str(payload.get("name", "Imported Template"))
         blocks = payload.get("blocks", {})
         templates[name] = blocks
-        return {"ok": True, "type": "single", "templates": templates, "paths": bundled_paths}
+        return {"ok": True, "type": "single", "templates": templates,
+                "paths": bundled_paths, "recordings": bundled_recordings}
 
     return {"ok": False, "reason": "Unrecognized template schema."}
 
@@ -243,4 +277,5 @@ def preview_template_code(input_str: str) -> dict:
         "total_templates": len(items),
         "items": items,
         "walk_paths": len(res.get("paths", {})),
+        "recordings": len(res.get("recordings", {})),
     }

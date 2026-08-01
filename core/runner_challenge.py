@@ -347,7 +347,7 @@ class ChallengeOps:
         if not self._open_challenge_screen(hwnd, stop_event):
             return None
         try:
-            unavailable = vision.find_image(hwnd, "daily_challenge_unavailable")
+            unavailable = vision.find_image(hwnd, "daily_challenge_unavailable", threshold=0.75)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] Can't check Daily Challenge availability: {exc}")
             return None
@@ -360,17 +360,33 @@ class ChallengeOps:
             return "unavailable" if self._recover_to_lobby(hwnd, stop_event) else None
 
         self._set_status(action="Clicking Daily Challenge...")
-        if self._click_found_image(
-                hwnd, "daily_challenge_available", CHALLENGE_SCREEN_TIMEOUT, stop_event) is None:
-            self._log('[Macro] Daily Challenge was neither available nor unavailable -- stopping.')
-            return None
+        avail_match = self._click_found_image(
+            hwnd, "daily_challenge_available", CHALLENGE_SCREEN_TIMEOUT, stop_event, threshold=0.75)
+        if avail_match is None:
+            if stop_event is not None and stop_event.is_set():
+                return None
+            # Fallback: click Daily Challenge tab on left sidebar
+            tab_x, tab_y = self._cxy("daily_challenge_tab")
+            self._log(f'[Macro] "daily_challenge_available" template missed -- using fallback tab click at ({tab_x}, {tab_y}).')
+            left, top, _, _ = wm.get_window_rect_screen(hwnd)
+            self._mouse.click(left + tab_x, top + tab_y)
+            time.sleep(0.5)
+
         if self._checkpoint(stop_event):
             return None
         self._set_status(action="Selecting Daily Challenge stage...")
-        if self._click_found_image(
-                hwnd, "daily_challenge_stage", CHALLENGE_SCREEN_TIMEOUT, stop_event) is None:
-            self._log('[Macro] Daily Challenge stage card never appeared -- stopping.')
-            return None
+        stage_match = self._click_found_image(
+            hwnd, "daily_challenge_stage", CHALLENGE_SCREEN_TIMEOUT, stop_event, threshold=0.75)
+        if stage_match is None:
+            if stop_event is not None and stop_event.is_set():
+                return None
+            # Fallback: click Daily Challenge stage card on right panel
+            card_x, card_y = self._cxy("daily_challenge_stage")
+            self._log(f'[Macro] "daily_challenge_stage" template missed -- using fallback card click at ({card_x}, {card_y}).')
+            left, top, _, _ = wm.get_window_rect_screen(hwnd)
+            self._mouse.click(left + card_x, top + card_y)
+            time.sleep(0.5)
+
         if self._checkpoint(stop_event):
             return None
         if not self._enter_selected_challenge(hwnd, stop_event, play_mode, coords, webhook, daily=True):

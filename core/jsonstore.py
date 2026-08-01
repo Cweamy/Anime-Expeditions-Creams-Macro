@@ -26,10 +26,19 @@ _REPLACE_ATTEMPTS = 5
 _REPLACE_BACKOFF = 0.02  # seconds, multiplied by the attempt number
 
 
-def write_json_atomic(path: str, data) -> None:
+def write_json_atomic(path: str, data, compact: bool = False) -> None:
     """Serialize `data` to `path` as JSON, atomically. Raises whatever the
     write would have raised (a caller that can't write at all should still
-    hear about it) but never leaves a partial file behind."""
+    hear about it) but never leaves a partial file behind.
+
+    compact=True drops the indent=2 pretty-printing (one line, no extra
+    whitespace) -- for a file meant to be hand-read/edited (a Macro Operation
+    template, settings.json) indent=2 is worth the size; for one that's just
+    a dense stream of small similar objects (a Record block's captured
+    events, potentially thousands of them) the indentation alone can be the
+    majority of the file's size for zero readability benefit at that
+    density, so core.input_record opts into this instead.
+    """
     # A UNIQUE scratch file per writer, not a fixed "<path>.tmp": two threads
     # writing the same target shared one temp name, so they interleaved into
     # each other's buffer and then raced os.replace -- which on Windows
@@ -40,7 +49,10 @@ def write_json_atomic(path: str, data) -> None:
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            if compact:
+                json.dump(data, f, separators=(",", ":"))
+            else:
+                json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
         # Windows only: MoveFileEx can come back ACCESS_DENIED/SHARING_VIOLATION

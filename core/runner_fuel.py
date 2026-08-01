@@ -299,7 +299,6 @@ class FuelOps:
         self._paused_logged = False
         self._stop_logged = False
         self._current_hwnd = None
-        self._left_stage_this_run = True
         self._thread = threading.Thread(
             target=self._run_fuel_test,
             args=(hwnd_getter, self._stop_event),

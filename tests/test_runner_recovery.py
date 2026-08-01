@@ -247,11 +247,26 @@ def test_recovery_exception_is_logged_without_blocking_later_phases(
     )
 
 
-def test_rejoin_uses_browser_fallback_when_startfile_is_unavailable(monkeypatch):
+def test_open_deep_link_uses_startfile_when_available(monkeypatch):
+    opened = []
+    monkeypatch.setattr(runner_module.os, "startfile", opened.append, raising=False)
+    monkeypatch.setattr(
+        runner_module.webbrowser,
+        "open",
+        lambda _url: pytest.fail("browser fallback should not run on Windows"),
+    )
+
+    runner_module._open_deep_link("roblox://test")
+
+    assert opened == ["roblox://test"]
+
+
+def test_open_deep_link_uses_browser_fallback_without_startfile(monkeypatch):
     opened = []
     monkeypatch.delattr(runner_module.os, "startfile", raising=False)
     monkeypatch.setattr(
-        runner_module.webbrowser, "open",
+        runner_module.webbrowser,
+        "open",
         lambda url: opened.append(url) or True,
     )
 
@@ -353,6 +368,12 @@ def test_watchdog_rejoin_claim_is_single_use():
     assert runner.claim_rejoin_launch() is True
     runner.cancel_rejoin_launch()
 
+def test_open_deep_link_reports_rejected_link(monkeypatch):
+    monkeypatch.delattr(runner_module.os, "startfile", raising=False)
+    monkeypatch.setattr(runner_module.webbrowser, "open", lambda _url: False)
+
+    with pytest.raises(OSError, match="No application accepted"):
+        runner_module._open_deep_link("roblox://test")
 
 def test_stop_during_phase_failure_does_not_recover_or_continue(
         monkeypatch, runner):

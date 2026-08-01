@@ -32,6 +32,13 @@ MAP_SELECT_RETRY_ATTEMPTS = 3
 # bad match doesn't end an unattended overnight run.
 TASK_RECOVERY_ATTEMPTS = 3
 
+# Optional full-client refresh for long unattended runs. The runner only
+# checks this at a completed-match boundary, so it never adds a polling loop
+# or competes with the capture/input path while a match is active.
+MEMORY_REFRESH_DEFAULT_HOURS = 4.0
+MEMORY_REFRESH_MIN_HOURS = 1.0
+MEMORY_REFRESH_MAX_HOURS = 12.0
+
 # Fail-safe: losing the SAME map this many times in a row usually means
 # something's actually wrong (a bad team loadout, a stuck client, a map
 # that's genuinely too hard) rather than plain bad luck -- rather than just
@@ -314,6 +321,14 @@ SOLO_START_TIMEOUT = 10.0  # Solo mode's direct Start button, in place of Enter 
 # (see MATCHMAKING_TELEPORT_TIMEOUT below) -- that one's a genuinely
 # different wait, not just a longer version of this one.
 TELEPORT_IN_TIMEOUT = 30.0
+# nav_unitmanager (the "teleport finished" confirmation above) is a HUD
+# element -- it can render before the character/camera controller has
+# actually finished attaching to the freshly-spawned avatar, which the Pre
+# Start camera drag doesn't wait on or verify at all (it's a blind
+# right-click-and-move sequence). Reported live, rarely: the camera drag
+# fires a beat too early and the right-click-drag/scroll doesn't register
+# that time. This settle is the fix -- see _run_prestart.
+CAMERA_SETUP_SETTLE = 0.6
 # Clicking Enter Matchmaking doesn't teleport you in on its own -- it only
 # happens once the lobby actually FILLS with real players, which can take
 # anywhere from seconds to several minutes depending on server population,
@@ -568,6 +583,8 @@ DEFAULT_COORDS = {
     "team_loadout_row_height": TEAM_LOADOUT_ROW_HEIGHT,
     "screen_middle_x": SCREEN_MIDDLE_CLICK[0], "screen_middle_y": SCREEN_MIDDLE_CLICK[1],
     "unit_info_reset_x": UNIT_INFO_RESET_CLICK[0], "unit_info_reset_y": UNIT_INFO_RESET_CLICK[1],
+    "daily_challenge_tab_x": 250, "daily_challenge_tab_y": 315,
+    "daily_challenge_stage_x": 650, "daily_challenge_stage_y": 360,
 }
 
 # Victory/Defeat: no fixed timeout makes sense for "how long can a battle
@@ -624,8 +641,11 @@ FUEL_PATH_KEYS = (
     "hub_to_gold_mine",
     "resource_drill_to_gold_mine",
 )
+FUEL_UNIT_SECONDS = 5 * 60
+FUEL_MIN_SAFETY_SECONDS = 5 * 60
+FUEL_SAFETY_RATIO = 0.04
 FUEL_INTERVAL_SECONDS = 8 * 60 * 60
-FUEL_RETRY_SECONDS = 15 * 60
+FUEL_RETRY_SECONDS = 5 * 60
 FUEL_AMOUNT_MAX = 100
 FUEL_AREA_TIMEOUT = 10.0
 FUEL_LOAD_TIMEOUT = 60.0
@@ -635,4 +655,18 @@ FUEL_ACTION_TIMEOUT = 15.0
 FUEL_CONFIRM_TIMEOUT = 20.0
 FUEL_CLOSE_TIMEOUT = 2.0
 
+
+def fuel_refill_interval_seconds(amount) -> int:
+    """Return a safe refill interval for Max or a numeric fuel amount."""
+    if str(amount).lower() == "max":
+        return FUEL_INTERVAL_SECONDS
+
+    try:
+        units = min(FUEL_AMOUNT_MAX, max(1, int(amount)))
+    except (TypeError, ValueError):
+        return FUEL_INTERVAL_SECONDS
+
+    coverage = units * FUEL_UNIT_SECONDS
+    safety = max(FUEL_MIN_SAFETY_SECONDS, int(coverage * FUEL_SAFETY_RATIO))
+    return max(FUEL_UNIT_SECONDS, coverage - safety)
 
