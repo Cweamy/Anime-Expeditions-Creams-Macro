@@ -131,28 +131,24 @@ def test_daily_challenge_unavailable_marks_current_game_day_complete():
     ),
 )
 def test_challenge_map_ocr_uses_unique_map_words(monkeypatch, ocr_text, expected):
+    import sys
     probe = ChallengeProbe()
     frame = np.zeros((756, 1152, 3), dtype=np.uint8)
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", None)
     monkeypatch.setattr(vision, "capture_game_bgr", lambda _hwnd: frame)
-    monkeypatch.setattr(
-        vision,
-        "find_in_gray_multiscale",
-        lambda *_args, **_kwargs: {"x": 895, "y": 348, "w": 123, "h": 21},
-    )
+    monkeypatch.setattr(ocr_windows, "is_available", lambda: True)
     monkeypatch.setattr(ocr_windows, "ocr_image", lambda _image: ocr_text)
 
     assert ChallengeOps._detect_challenge_map_ocr(probe, 123) == expected
 
 
 def test_challenge_map_ocr_does_not_guess_from_shared_forest_word(monkeypatch):
+    import sys
     probe = ChallengeProbe()
     frame = np.zeros((756, 1152, 3), dtype=np.uint8)
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", None)
     monkeypatch.setattr(vision, "capture_game_bgr", lambda _hwnd: frame)
-    monkeypatch.setattr(
-        vision,
-        "find_in_gray_multiscale",
-        lambda *_args, **_kwargs: {"x": 895, "y": 348, "w": 123, "h": 21},
-    )
+    monkeypatch.setattr(ocr_windows, "is_available", lambda: True)
     monkeypatch.setattr(ocr_windows, "ocr_image", lambda _image: "Forest - Act 1")
 
     assert ChallengeOps._detect_challenge_map_ocr(probe, 123) is None

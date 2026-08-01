@@ -12,6 +12,7 @@ import threading
 import time
 
 import cv2
+import numpy as np
 
 from . import ocr
 from . import vision
