@@ -1137,6 +1137,7 @@ def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
     };
     global.document = { getElementById: id => mockElements[id] || null };
 
+    eval(extract('renderStoryMapSetupWarning'));
     eval(extract('renderChallengeScreen'));
     renderChallengeScreen();
 
@@ -1150,6 +1151,30 @@ def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
         "summary": "Enabled",
         "details": "Daily: Complete | Regular: #1 0/10, #2 1/10, #3 10/10",
     }
+
+
+def test_story_map_setup_warning_lists_missing_and_invalid_maps(tmp_path):
+    body = """
+    global.escapeHtml = value => String(value);
+    const warning = { innerHTML: '', style: { display: 'none' } };
+    global.document = {
+      getElementById: id => id === 'challenge-setup-warning' ? warning : null
+    };
+
+    eval(extract('renderStoryMapSetupWarning'));
+    renderStoryMapSetupWarning('challenge-setup-warning', {
+      setup_ready: false,
+      missing_maps: ['Flower Forest'],
+      invalid_maps: [{ map: "King's Tomb", macro: 'Broken Operation' }]
+    }, 'Auto Challenge');
+
+    console.log(JSON.stringify({ display: warning.style.display, html: warning.innerHTML }));
+    """
+    out = run_js(body, tmp_path)
+    assert out["display"] == ""
+    assert "Auto Challenge needs a saved Macro Operation for every Story map" in out["html"]
+    assert "Assign: Flower Forest" in out["html"]
+    assert "Repair: King's Tomb (Broken Operation)" in out["html"]
 
 
 def test_fuel_card_summarizes_enabled_resources(tmp_path):

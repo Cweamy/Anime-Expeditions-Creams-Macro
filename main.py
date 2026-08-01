@@ -954,6 +954,7 @@ class Api:
             saved_map = (saved.get("maps") or {}).get(m) or {}
             merged_maps[m] = {"macro": saved_map.get("macro") or ""}
         merged["maps"] = merged_maps
+        merged.update(self._challenge_macro_setup(merged))
 
         reset_period = _current_challenge_reset_period()
         merged["daily"]["ready"] = merged["daily"]["last_completed_period"] != reset_period
@@ -998,6 +999,26 @@ class Api:
 
     def set_challenge_enabled(self, enabled: bool) -> dict:
         challenge = self.get_challenge_settings()
+        if enabled and not challenge["setup_ready"]:
+            challenge["enabled"] = False
+            cfg.update({"challenge": challenge})
+            missing = ", ".join(challenge["missing_maps"])
+            invalid = ", ".join(
+                f'{item["map"]} ("{item["macro"]}")'
+                for item in challenge["invalid_maps"])
+            details = "; ".join(part for part in (
+                f"unassigned: {missing}" if missing else "",
+                f"missing or old macros: {invalid}" if invalid else "",
+            ) if part)
+            self.push_log(
+                "[Macro] Auto Challenge was not enabled. Assign a saved Macro Operation "
+                f"to every Story map first ({details}).")
+            return {
+                "ok": False,
+                "reason": "incomplete_challenge_maps",
+                "missing_maps": challenge["missing_maps"],
+                "invalid_maps": challenge["invalid_maps"],
+            }
         challenge["enabled"] = bool(enabled)
         cfg.update({"challenge": challenge})
         return {"ok": True}
@@ -1012,6 +1033,26 @@ class Api:
 
     def set_daily_challenge_enabled(self, enabled: bool) -> dict:
         challenge = self.get_challenge_settings()
+        if enabled and not challenge["setup_ready"]:
+            challenge["daily"]["enabled"] = False
+            cfg.update({"challenge": challenge})
+            missing = ", ".join(challenge["missing_maps"])
+            invalid = ", ".join(
+                f'{item["map"]} ("{item["macro"]}")'
+                for item in challenge["invalid_maps"])
+            details = "; ".join(part for part in (
+                f"unassigned: {missing}" if missing else "",
+                f"missing or old macros: {invalid}" if invalid else "",
+            ) if part)
+            self.push_log(
+                "[Macro] Daily Challenge was not enabled. Assign a saved Macro Operation "
+                f"to every Story map first ({details}).")
+            return {
+                "ok": False,
+                "reason": "incomplete_challenge_maps",
+                "missing_maps": challenge["missing_maps"],
+                "invalid_maps": challenge["invalid_maps"],
+            }
         challenge["daily"]["enabled"] = bool(enabled)
         cfg.update({"challenge": challenge})
         return {"ok": True}
@@ -1077,8 +1118,18 @@ class Api:
             return {"ok": False, "reason": "bad_map"}
         challenge = self.get_challenge_settings()
         challenge["maps"][map_name]["macro"] = macro or ""
+        setup = self._challenge_macro_setup(challenge)
+        auto_disabled = bool(
+            (challenge.get("enabled") or challenge.get("daily", {}).get("enabled"))
+            and not setup["setup_ready"])
+        if auto_disabled:
+            challenge["enabled"] = False
+            challenge["daily"]["enabled"] = False
+            self.push_log(
+                f'[Macro] Auto Challenge was disabled because "{map_name}" no longer '
+                "has a usable Macro Operation.")
         cfg.update({"challenge": challenge})
-        return {"ok": True}
+        return {"ok": True, "auto_disabled": auto_disabled, **setup}
 
     def reset_challenge_counts(self) -> dict:
         challenge = self.get_challenge_settings()
@@ -1108,20 +1159,19 @@ class Api:
         }
 
     @staticmethod
-    def _bounty_macro_setup(settings: dict) -> dict:
+    def _story_macro_setup(settings: dict, map_names) -> dict:
         """Whether every possible Story destination has a usable macro.
 
-        Auto Bounty does not know which map the board will request until
-        after it opens that objective. Starting with only some maps
-        configured therefore guarantees that a later objective can enter a
-        battle with no Pre Start blocks and no units. Treat the five-map
-        assignment as one required setup instead of discovering the hole
-        after teleporting.
+        Both Auto Bounty and Auto Challenge choose a Story destination at
+        runtime. Starting with only some maps configured therefore guarantees
+        that a later objective can enter a battle with no Pre Start blocks and
+        no units. Treat the full map assignment as one required setup instead
+        of discovering the hole after teleporting.
         """
         maps = settings.get("maps") or {}
         missing_maps = []
         invalid_maps = []
-        for map_name in BOUNTY_STORY_MAPS:
+        for map_name in map_names:
             macro_name = str((maps.get(map_name) or {}).get("macro") or "").strip()
             if not macro_name:
                 missing_maps.append(map_name)
@@ -1137,6 +1187,14 @@ class Api:
             "missing_maps": missing_maps,
             "invalid_maps": invalid_maps,
         }
+
+    @staticmethod
+    def _challenge_macro_setup(settings: dict) -> dict:
+        return Api._story_macro_setup(settings, CHALLENGE_STORY_MAPS)
+
+    @staticmethod
+    def _bounty_macro_setup(settings: dict) -> dict:
+        return Api._story_macro_setup(settings, BOUNTY_STORY_MAPS)
 
     @staticmethod
     def _save_bounty_settings(settings: dict) -> None:
