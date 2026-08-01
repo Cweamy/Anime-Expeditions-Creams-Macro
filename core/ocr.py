@@ -104,13 +104,13 @@ def get_rapidocr():
     English language only to avoid loading 6k+ Chinese character models
     (significant performance impact).
     """
-    global _rapid_ocr_engine 
+    global _rapid_ocr_engine
 
     if _rapid_ocr_engine:
         return _rapid_ocr_engine
     if _rapid_ocr_engine == "":
         raise ImportError("RapidOCR is not available")
-    
+
     try:
         from rapidocr_onnxruntime import RapidOCR
         _rapid_ocr_engine = RapidOCR(lang=["en"])
@@ -287,28 +287,28 @@ def ocr_lines(img: np.ndarray) -> list:
 
     if img is None or img.size == 0:
         return []
-    
+
     if is_rapidocr_available():
         try:
             rapid_engine = get_rapidocr()
 
             if not img.flags['C_CONTIGUOUS']:
                 img = np.ascontiguousarray(img)
-            
+
             if img.ndim == 2:
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
             else:
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            
-            result,_elapse = rapid_engine(rgb_img)
+
+            result, _elapse = rapid_engine(rgb_img)
             if result:
                 lines = []
-                for idx, item in enumrate(result):
-                    bbox, text, confidence = item
+                for item in result:
+                    bbox, text, _confidence = item
 
                     xs = [int(p[0]) for p in bbox]
                     ys = [int(p[1]) for p in bbox]
-                    x1, x2 = mins(xs), max(xs)
+                    x1, x2 = min(xs), max(xs)
                     y1, y2 = min(ys), max(ys)
 
                     line_dict = {
@@ -320,21 +320,12 @@ def ocr_lines(img: np.ndarray) -> list:
                     }
                     lines.append(line_dict)
                 return lines
-            else:
-                # RapidOCR returned no text, fall through to Windows OCR
-                pass
-        except Exception as e:
+        except Exception:
             # Fall through to Windows OCR on any RapidOCR error
             pass
-    
-    from core import ocr_windows
-    lines = ocr_windows.ocr_lines(img)
 
-    for idx, line in enumerate(lines):
-        text = line.get("text", "")
-        x, y, w, h = line.get("x", 0), line.get("y", 0), line.get("w", 0), line.get("h", 0)
-    
-    return lines
+    from core import ocr_windows
+    return ocr_windows.ocr_lines(img)
 
 def score_text(text: str, valid_pattern) -> tuple:
     """Ranks a candidate OCR result: a string that actually matches the
