@@ -3034,6 +3034,26 @@ const CHALLENGE_STAGE_SLOTS = ['1', '2', '3'];
 const CHALLENGE_STORY_MAPS = ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb", 'Flower Forest'];
 let challengeState = null;
 
+function renderStoryMapSetupWarning(id, state, featureName) {
+  const warning = document.getElementById(id);
+  if (!warning) return;
+  if (!state || state.setup_ready !== false) {
+    warning.innerHTML = '';
+    warning.style.display = 'none';
+    return;
+  }
+  const missing = state.missing_maps || [];
+  const invalid = state.invalid_maps || [];
+  const problems = [];
+  if (missing.length) problems.push(`Assign: ${missing.map(escapeHtml).join(', ')}`);
+  if (invalid.length) {
+    problems.push(`Repair: ${invalid.map(item =>
+      `${escapeHtml(item.map)} (${escapeHtml(item.macro)})`).join(', ')}`);
+  }
+  warning.innerHTML = `<strong>Setup required:</strong> ${featureName} needs a saved Macro Operation for every Story map. ${problems.join('. ')}.`;
+  warning.style.display = '';
+}
+
 async function refreshChallengeScreen() {
   try {
     challengeState = await pywebview.api.get_challenge_settings();
@@ -3046,6 +3066,7 @@ async function refreshChallengeScreen() {
 
 function renderChallengeScreen() {
   const s = challengeState;
+  renderStoryMapSetupWarning('challenge-setup-warning', s, 'Auto Challenge');
   const daily = (s && s.daily) || { enabled: false, ready: true };
   const dailyEnabledBtn = document.getElementById('toggle-daily-challenge-enabled');
   if (dailyEnabledBtn) dailyEnabledBtn.classList.toggle('on', !!daily.enabled);
@@ -3154,7 +3175,12 @@ async function toggleChallengeEnabled(btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
-  try { await pywebview.api.set_challenge_enabled(isOn); } catch (e) {}
+  try {
+    const result = await pywebview.api.set_challenge_enabled(isOn);
+    if (!result.ok && result.reason === 'incomplete_challenge_maps') {
+      addLog('[Macro] Auto Challenge needs a saved Macro Operation for every Story map before it can be enabled.');
+    }
+  } catch (e) {}
   await refreshChallengeScreen();
 }
 
@@ -3167,7 +3193,12 @@ async function toggleDailyChallengeEnabled(btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
-  try { await pywebview.api.set_daily_challenge_enabled(isOn); } catch (e) {}
+  try {
+    const result = await pywebview.api.set_daily_challenge_enabled(isOn);
+    if (!result.ok && result.reason === 'incomplete_challenge_maps') {
+      addLog('[Macro] Daily Challenge needs a saved Macro Operation for every Story map before it can be enabled.');
+    }
+  } catch (e) {}
   await refreshChallengeScreen();
 }
 
@@ -3186,7 +3217,13 @@ async function toggleChallengeStage(stage, btn) {
 }
 
 async function setChallengeMapMacro(map, value) {
-  try { await pywebview.api.set_challenge_map_macro(map, value); } catch (e) {}
+  try {
+    const result = await pywebview.api.set_challenge_map_macro(map, value);
+    if (result.auto_disabled) {
+      addLog(`[Macro] Auto Challenge disabled: ${map} no longer has a usable Macro Operation.`);
+    }
+  } catch (e) {}
+  await refreshChallengeScreen();
 }
 
 async function setChallengeStageCount(stage, value) {
@@ -3223,6 +3260,7 @@ async function refreshBountyScreen() {
 
 function renderBountyScreen() {
   const s = bountyState;
+  renderStoryMapSetupWarning('bounty-setup-warning', s, 'Auto Bounty');
   const summary = document.getElementById('resource-bounty-summary');
   if (summary) {
     const remaining = s ? `${s.remaining}/${s.total} left` : '';
@@ -3249,21 +3287,6 @@ function renderBountyScreen() {
   if (!s) {
     list.innerHTML = '<div class="rh-empty">Couldn\'t load Auto Bounty settings.</div>';
     return;
-  }
-  const warning = document.getElementById('bounty-setup-warning');
-  if (warning) {
-    const missing = s.missing_maps || [];
-    const invalid = s.invalid_maps || [];
-    const problems = [];
-    if (missing.length) problems.push(`Assign: ${missing.map(escapeHtml).join(', ')}`);
-    if (invalid.length) {
-      problems.push(`Repair: ${invalid.map(item =>
-        `${escapeHtml(item.map)} (${escapeHtml(item.macro)})`).join(', ')}`);
-    }
-    warning.innerHTML = s.setup_ready
-      ? ''
-      : `<strong>Setup required:</strong> Auto Bounty needs a saved Macro Operation for every Story map. ${problems.join('. ')}.`;
-    warning.style.display = s.setup_ready ? 'none' : '';
   }
   const macroOpts = current => `<option value="">No Macro</option>` +
     taskTemplates.map(name =>
