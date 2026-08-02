@@ -855,6 +855,22 @@
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
+              <div class="setting-label">Auto Mythic Bounty</div>
+              <div class="setting-desc">Rerolls each eligible card until its card title verifies as Mythic.</div>
+            </div>
+            <button id="toggle-bounty-mythic" class="toggle-switch" onclick="toggleBountyMythic(this)"></button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Mythic Reroll Safety Limit</div>
+              <div class="setting-desc">Maximum rerolls for one card before Auto Bounty leaves it unclaimed. Allowed range: 1–100.</div>
+            </div>
+            <input id="bounty-mythic-max-rerolls" class="block-input" style="width: 64px;" type="number" min="1" max="100" value="20" onchange="setBountyMythicMaxRerolls(this.value)">
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
               <div class="setting-label">Play Mode</div>
               <div class="setting-desc">Solo or Matchmaking for bounty stages.</div>
             </div>

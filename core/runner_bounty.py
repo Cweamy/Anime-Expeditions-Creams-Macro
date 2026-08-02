@@ -25,6 +25,114 @@ class BountyOps:
             self._log(f"[Macro] Couldn't read Auto Bounty settings: {exc}")
             return {}
 
+    def _ensure_mythic_bounty(
+            self, hwnd, stop_event, frame, drag, card_no,
+            ocr_lines=None) -> dict:
+        """Reroll one card until its locally-read title is Mythic."""
+        settings = self._bounty_settings()
+        try:
+            max_rerolls = max(
+                BOUNTY_MYTHIC_MIN_REROLLS,
+                min(
+                    BOUNTY_MYTHIC_MAX_REROLLS,
+                    int(settings.get(
+                        "mythic_max_rerolls", BOUNTY_MYTHIC_DEFAULT_REROLLS)),
+                ),
+            )
+        except (TypeError, ValueError):
+            max_rerolls = BOUNTY_MYTHIC_DEFAULT_REROLLS
+        card = drag.get("card") or ()
+        if (frame is None or not hasattr(frame, "shape")
+                or len(card) < 4):
+            return {"status": "unknown", "card": int(card_no), "rerolls": 0}
+
+        rarity = bounty.read_card_rarity(frame, card, ocr_lines)
+        if rarity == "mythic":
+            return {"status": "ready", "card": int(card_no), "rerolls": 0}
+        if rarity != "other":
+            self._log(
+                f"[Macro] Auto Mythic could not read the rarity of card "
+                f"{card_no}; it will not click an unverified reroll button.")
+            return {"status": "unknown", "card": int(card_no), "rerolls": 0}
+
+        current_frame = frame
+        for reroll_no in range(1, max_rerolls + 1):
+            if self._checkpoint(stop_event):
+                return {"status": "stopped", "card": int(card_no),
+                        "rerolls": reroll_no - 1}
+            buttons = bounty.detect_reroll_buttons(current_frame, [drag])
+            if not buttons:
+                self._log(
+                    f"[Macro] Auto Mythic found a non-Mythic card {card_no}, "
+                    "but its active gold reroll button was not detected; "
+                    "leaving the card untouched.")
+                return {"status": "unavailable", "card": int(card_no),
+                        "rerolls": reroll_no - 1}
+            button = buttons[0]
+            self._log(
+                f"[Macro] Auto Mythic: card {card_no} is not Mythic; "
+                f"rerolling ({reroll_no}/{max_rerolls}).")
+            wm.activate_window(hwnd)
+            self._interruptible_sleep(BOUNTY_CLICK_FOCUS_SETTLE, stop_event)
+            self._click_ref(hwnd, button["cx"], button["cy"], hold=0.1)
+            self._interruptible_sleep(BOUNTY_MYTHIC_REROLL_SETTLE, stop_event)
+
+            deadline = time.time() + BOUNTY_MYTHIC_REROLL_VERIFY_TIMEOUT
+            next_frame = None
+            next_rarity = None
+            while time.time() < deadline:
+                if self._checkpoint(stop_event):
+                    return {"status": "stopped", "card": int(card_no),
+                            "rerolls": reroll_no}
+                next_frame = vision.capture_game_bgr(hwnd)
+                if (next_frame is not None
+                        and hasattr(next_frame, "shape")):
+                    next_rarity = bounty.read_card_rarity(next_frame, card)
+                    if next_rarity is not None:
+                        break
+                self._interruptible_sleep(BOUNTY_MYTHIC_REROLL_POLL, stop_event)
+            if next_rarity == "mythic":
+                self._log(
+                    f"[Macro] Auto Mythic: card {card_no} is Mythic after "
+                    f"{reroll_no} reroll(s); rescanning its new objectives.")
+                return {"status": "rerolled", "card": int(card_no),
+                        "rerolls": reroll_no}
+            if next_rarity != "other":
+                self._log(
+                    f"[Macro] Auto Mythic could not verify card {card_no} "
+                    "after the reroll; leaving it unclaimed for a safe retry.")
+                return {"status": "unknown", "card": int(card_no),
+                        "rerolls": reroll_no}
+            current_frame = next_frame
+            rarity = next_rarity
+
+        self._log(
+            f"[Macro] Auto Mythic reached the {max_rerolls}-reroll "
+            f"safety limit for card {card_no}; leaving it unclaimed.")
+        return {"status": "exhausted", "card": int(card_no),
+                "rerolls": max_rerolls}
+
+    def _prepare_mythic_card(
+            self, hwnd, stop_event, frame, drag, card_no, ocr_lines=None):
+        """Return a scan sentinel when Mythic mode changes or blocks a card."""
+        result = self._ensure_mythic_bounty(
+            hwnd, stop_event, frame, drag, card_no, ocr_lines)
+        status = result.get("status")
+        if status == "ready":
+            return None
+        if status == "rerolled":
+            return {
+                "kind": "mythic_rerolled",
+                "card": card_no,
+                "rerolls": result.get("rerolls", 0),
+            }
+        return {
+            "kind": "mythic_blocked",
+            "reason": f"mythic_{status}",
+            "card": card_no,
+            "rerolls": result.get("rerolls", 0),
+        }
+
     @staticmethod
     def _line_named(lines: list, wanted: str):
         target = re.sub(r"\s+", " ", wanted).strip().lower()
@@ -196,6 +304,7 @@ class BountyOps:
         self._interruptible_sleep(BOUNTY_SCROLL_SETTLE, stop_event)
 
         summon_sightings = []
+        mythic_only = bool(self._bounty_settings().get("mythic_only"))
         for scroll_no in range(BOUNTY_HORIZONTAL_SCROLL_STEPS + 1):
             if self._checkpoint(stop_event):
                 return None
@@ -206,24 +315,44 @@ class BountyOps:
                 # before considering the next card. Card positions are
                 # detected from the current frame; no bounty/map coordinates
                 # or assumed card ordering are baked in.
-                for drag in sorted(drags, key=lambda item: item["card"][0]):
+                for card_no, drag in enumerate(
+                        sorted(drags, key=lambda item: item["card"][0]), 1):
                     if self._checkpoint(stop_event):
                         return None
                     card_x, card_y, card_w, card_h = drag["card"]
+                    mythic_checked = not mythic_only
+
+                    def prepare_mythic(current_frame):
+                        nonlocal mythic_checked
+                        if mythic_checked:
+                            return None
+                        result = self._prepare_mythic_card(
+                            hwnd, stop_event, current_frame, drag,
+                            card_no)
+                        if result is None:
+                            mythic_checked = True
+                        return result
+
                     for claim in bounty.detect_claim_buttons(frame, [drag]):
                         return claim
-                    summon_sightings.extend(
-                        bounty.detect_summon_objectives(frame, [drag]))
+                    card_summons = bounty.detect_summon_objectives(frame, [drag])
+                    summon_sightings.extend(card_summons)
                     for objective in bounty.detect_objectives(frame):
                         if (card_x <= objective["cx"] <= card_x + card_w
                                 and card_y <= objective["cy"] <= card_y + card_h
                                 and not self._bounty_was_attempted(
                                     objective["signature"], attempted)):
+                            mythic_result = prepare_mythic(frame)
+                            if mythic_result is not None:
+                                return mythic_result
                             return objective
                     if not drag.get("has_scrollbar", True):
                         # Every visible objective was already inspected and
                         # this card has no private bar, so there is no hidden
                         # content to reveal. Move directly to the next card.
+                        mythic_result = prepare_mythic(frame)
+                        if mythic_result is not None:
+                            return mythic_result
                         continue
                     x1, y1 = vision.ref_to_screen(hwnd, drag["x"], drag["from_y"])
                     x2, y2 = vision.ref_to_screen(hwnd, drag["x"], drag["to_y"])
@@ -238,7 +367,13 @@ class BountyOps:
                                     and card_y <= objective["cy"] <= card_y + card_h
                                     and not self._bounty_was_attempted(
                                         objective["signature"], attempted)):
+                                mythic_result = prepare_mythic(frame)
+                                if mythic_result is not None:
+                                    return mythic_result
                                 return objective
+                        mythic_result = prepare_mythic(frame)
+                        if mythic_result is not None:
+                            return mythic_result
                 if not drags:
                     claims = bounty.detect_claim_buttons(frame, [])
                     if claims:
@@ -563,6 +698,18 @@ class BountyOps:
                 board_open = True
 
             objective = self._find_next_bounty(hwnd, stop_event, attempted)
+            if objective and objective.get("kind") == "mythic_rerolled":
+                # Rerolling replaces the card's objectives. The board stays
+                # open, so rescan before using any pre-reroll coordinates.
+                continue
+            if objective and objective.get("kind") == "mythic_blocked":
+                self._log(
+                    f"[Macro] Auto Mythic could not safely process card "
+                    f"{objective.get('card')}; leaving it unclaimed.")
+                self._leave_bounty_board(hwnd, stop_event)
+                self._set_status(
+                    action="Auto Mythic stopped safely; card needs review...")
+                return True
             if objective is None:
                 frame = vision.capture_game_bgr(hwnd)
                 remaining = (
