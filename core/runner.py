@@ -2542,7 +2542,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if self._checkpoint(stop_event):
             return False
 
-        left, top, _, _ = wm.get_window_rect_screen(hwnd)
         row1_x, row1_y = self._cxy("team_loadout")  # Loadout 1's row (Settings > Debug > Macro Coordinates)
         row_x = row1_x + TEAM_LOADOUT_BUTTON_CENTER_X_OFFSET
         if team_num > 3:
@@ -2553,8 +2552,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             # over the real scrollbar and send ordinary wheel notches
             # instead. Each notch shifts the rows by a stable 100px.
             scroll_steps = min(team_num, TEAM_LOADOUT_WHEEL_MAX_STEPS)
-            hover_x = left + TEAM_LOADOUT_SCROLLBAR_HOVER[0]
-            hover_y = top + TEAM_LOADOUT_SCROLLBAR_HOVER[1]
+            hover_x, hover_y = vision.ref_to_screen(hwnd, *TEAM_LOADOUT_SCROLLBAR_HOVER)
             self._mouse.move_to(hover_x, hover_y)
             time.sleep(TEAM_LOADOUT_SCROLL_HOVER_SETTLE)
             self._mouse.nudge()

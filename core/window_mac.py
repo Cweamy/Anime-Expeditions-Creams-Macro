@@ -169,6 +169,16 @@ def get_window_rect_screen(window_id: int):
     return left, top, right, bottom
 
 
+def get_client_rect_screen(window_id: int):
+    """Return the game content rectangle in screen points.
+
+    macOS's window rectangle helper already excludes the estimated title bar,
+    so this mirrors the Windows client-area API without changing the existing
+    macOS coordinate convention.
+    """
+    return get_window_rect_screen(window_id)
+
+
 def _ax_first_window(window_id: int):
     """The AXUIElement for this pid's first window. Matching a specific
     CGWindowID to its AX element has no public API -- Roblox only ever has
