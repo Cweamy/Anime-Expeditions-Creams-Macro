@@ -2465,14 +2465,17 @@ class Api:
             "enabled": data.get("webhook_enabled", False),
             "silent": data.get("webhook_silent", False),
             "mention_id": data.get("webhook_mention_id", ""),
+            "progress": data.get("webhook_progress_enabled", False),
         }
 
-    def save_webhook_settings(self, url: str, enabled: bool, silent: bool, mention_id: str = "") -> dict:
+    def save_webhook_settings(self, url: str, enabled: bool, silent: bool, mention_id: str = "",
+                              progress: bool = False) -> dict:
         cfg.update({
             "webhook_url": url or "",
             "webhook_enabled": bool(enabled),
             "webhook_silent": bool(silent),
             "webhook_mention_id": (mention_id or "").strip(),
+            "webhook_progress_enabled": bool(progress),
         })
         return {"ok": True}
 

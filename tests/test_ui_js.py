@@ -325,6 +325,37 @@ def test_settings_search_non_row_panel_content_keeps_controls_visible(tmp_path):
     assert out == {"rowsHidden": [False], "panelHidden": False}
 
 
+def test_webhook_progress_toggle_is_saved_with_other_webhook_settings(tmp_path):
+    out = run_js("""
+        const calls = [];
+        const elements = {
+          'webhook-url': { value: 'https://discord.com/api/webhooks/123/token' },
+          'webhook-mention-id': { value: '456' },
+          'toggle-webhook-enabled': { classList: { contains: () => true } },
+          'toggle-webhook-silent': { classList: { contains: () => false } },
+          'toggle-webhook-progress': { classList: { contains: () => true } },
+        };
+        const document = { getElementById: id => elements[id] };
+        const pywebview = { api: {
+          save_webhook_settings: async (...args) => calls.push(args),
+        }};
+        function updateWebhookValidity() {}
+        function setWebhookStatus() {}
+        eval(extract('saveWebhookSettings'));
+        (async () => {
+          await saveWebhookSettings(true);
+          console.log(JSON.stringify(calls));
+        })();
+    """, tmp_path)
+    assert out == [[
+        "https://discord.com/api/webhooks/123/token",
+        True,
+        False,
+        "456",
+        True,
+    ]]
+
+
 # ---------------------------------------------------------------------------
 # importTasks: bundled templates must actually be restored
 # ---------------------------------------------------------------------------

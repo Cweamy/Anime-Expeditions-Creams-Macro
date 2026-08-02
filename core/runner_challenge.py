@@ -243,29 +243,97 @@ class ChallengeOps:
         just doesn't consume a daily-cap count -- see
         mark_challenge_stage_played's count_play); only None leaves the
         slot ready, so a technical failure can be retried this window."""
+        progress_task = {
+            "mode": "challenge", "map": f"Challenge #{slot}",
+            "stage": str(slot), "play_mode": play_mode,
+        }
+        self._send_progress_webhook(
+            webhook,
+            progress_task,
+            f"Challenge #{slot} Started",
+            f"Starting Challenge #{slot} ({play_mode}).",
+            0x5865F2,
+            extra_fields=[{"name": "Play Mode", "value": play_mode, "inline": True}],
+            current_action=f"Challenge #{slot} -- entering ({play_mode})",
+            next_phase="Identify the assigned map, then start the battle",
+        )
         self._log(f"[Macro] Challenge #{slot}: entering ({play_mode})...")
         self._set_status(current_task=f"Challenge #{slot}", map="-", action="Entering Challenge...",
                           mode="challenge", stage="-", difficulty="-", play_mode=play_mode, macro="-")
-        if not self._enter_challenge_stage(hwnd, stop_event, slot, play_mode, coords, webhook):
-            return None
-        if self._checkpoint(stop_event):
-            return None
-        return self._run_challenge_battle(
-            hwnd, stop_event, f"Challenge #{slot}", play_mode, challenge, default_walk_paths, webhook)
+        result = None
+        try:
+            if not self._enter_challenge_stage(hwnd, stop_event, slot, play_mode, coords, webhook):
+                return None
+            if self._checkpoint(stop_event):
+                return None
+            result = self._run_challenge_battle(
+                hwnd, stop_event, f"Challenge #{slot}", play_mode, challenge, default_walk_paths, webhook)
+            return result
+        finally:
+            self._send_challenge_progress_finished(
+                webhook, progress_task, f"Challenge #{slot}", play_mode, result, stop_event)
 
     def _run_one_daily_challenge(self, hwnd, stop_event: threading.Event, play_mode: str,
                                   challenge: dict, coords: dict, default_walk_paths: dict,
                                   webhook: dict) -> str:
+        progress_task = {
+            "mode": "challenge", "map": "Daily Challenge",
+            "stage": "Daily", "play_mode": play_mode,
+        }
+        self._send_progress_webhook(
+            webhook,
+            progress_task,
+            "Daily Challenge Started",
+            f"Starting Daily Challenge ({play_mode}).",
+            0x5865F2,
+            extra_fields=[{"name": "Play Mode", "value": play_mode, "inline": True}],
+            current_action=f"Daily Challenge -- entering ({play_mode})",
+            next_phase="Identify the assigned map, then start the battle",
+        )
         self._log(f"[Macro] Daily Challenge: entering ({play_mode})...")
         self._set_status(current_task="Daily Challenge", map="-", action="Entering Daily Challenge...",
                           mode="challenge", stage="Daily", difficulty="-", play_mode=play_mode, macro="-")
-        entry = self._enter_daily_challenge_stage(hwnd, stop_event, play_mode, coords, webhook)
-        if entry != "entered":
-            return entry
-        if self._checkpoint(stop_event):
-            return None
-        return self._run_challenge_battle(
-            hwnd, stop_event, "Daily Challenge", play_mode, challenge, default_walk_paths, webhook)
+        result = None
+        try:
+            entry = self._enter_daily_challenge_stage(hwnd, stop_event, play_mode, coords, webhook)
+            if entry != "entered":
+                result = entry
+                return entry
+            if self._checkpoint(stop_event):
+                return None
+            result = self._run_challenge_battle(
+                hwnd, stop_event, "Daily Challenge", play_mode, challenge, default_walk_paths, webhook)
+            return result
+        finally:
+            self._send_challenge_progress_finished(
+                webhook, progress_task, "Daily Challenge", play_mode, result, stop_event)
+
+    def _send_challenge_progress_finished(self, webhook: dict, task: dict, label: str,
+                                           play_mode: str, result: str,
+                                           stop_event: threading.Event) -> None:
+        if result == "win":
+            status, color = "Victory", 0x3FBF6F
+        elif result == "loss":
+            status, color = "Defeat", 0xE05A6D
+        elif result == "unavailable":
+            status, color = "Unavailable", 0xE8935A
+        elif stop_event.is_set():
+            status, color = "Stopped", 0xE8935A
+        else:
+            status, color = "Failed", 0xE05A6D
+        self._send_progress_webhook(
+            webhook,
+            task,
+            f"{label} Finished",
+            f"{label} finished: **{status}**.",
+            color,
+            extra_fields=[
+                {"name": "Status", "value": status, "inline": True},
+                {"name": "Play Mode", "value": play_mode, "inline": True},
+            ],
+            current_action=f"{label} -- {status}",
+            next_phase=self._next_challenge_progress(),
+        )
 
     def _run_challenge_battle(self, hwnd, stop_event: threading.Event, label: str, play_mode: str,
                                challenge: dict, default_walk_paths: dict, webhook: dict) -> str:
