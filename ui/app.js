@@ -2000,6 +2000,7 @@ async function loadWebhookUI() {
     document.getElementById('webhook-mention-id').value = wh.mention_id || '';
     document.getElementById('toggle-webhook-enabled').classList.toggle('on', !!wh.enabled);
     document.getElementById('toggle-webhook-silent').classList.toggle('on', !!wh.silent);
+    document.getElementById('toggle-webhook-progress').classList.toggle('on', !!wh.progress);
     updateWebhookValidity(wh.url || '');
   } catch (e) {}
 }
@@ -2110,8 +2111,9 @@ async function saveWebhookSettings(silentSave) {
   const mentionId = document.getElementById('webhook-mention-id').value.trim();
   const enabled = document.getElementById('toggle-webhook-enabled').classList.contains('on');
   const silent = document.getElementById('toggle-webhook-silent').classList.contains('on');
+  const progress = document.getElementById('toggle-webhook-progress').classList.contains('on');
   try {
-    await pywebview.api.save_webhook_settings(url, enabled, silent, mentionId);
+    await pywebview.api.save_webhook_settings(url, enabled, silent, mentionId, progress);
     updateWebhookValidity(url);
     if (!silentSave) setWebhookStatus('Saved.', 'var(--teal)');
   } catch (e) {

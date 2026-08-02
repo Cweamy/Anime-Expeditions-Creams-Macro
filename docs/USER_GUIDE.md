@@ -98,6 +98,9 @@ Open **Settings > General** and check the following:
 3. Use the test action before a real run.
 4. Treat the URL like a password. Regenerate it in Discord if it is exposed.
 
+Optional **Progress Updates** can send task and challenge start/finish notifications
+as the macro moves through the queue.
+
 ## 4. Build a reusable macro operation
 
 Open **Macro Manager** and create the actions that should happen before or
