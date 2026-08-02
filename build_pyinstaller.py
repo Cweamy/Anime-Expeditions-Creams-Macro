@@ -193,6 +193,16 @@ for mod in HIDDEN_IMPORTS:
 # explicitly or Windows OCR silently falls back to Tesseract in the build.
 if sys.platform != "darwin":
     cmd += ["--collect-submodules=winsdk"]
+
+# RapidOCR's config.yaml and ONNX model files must be bundled explicitly --
+# PyInstaller collects the Python code but misses package data files, which
+# causes RapidOCR.__init__ to fail with "config.yaml does not exist!" at runtime.
+try:
+    import rapidocr_onnxruntime
+    cmd += ["--collect-data=rapidocr_onnxruntime"]
+except ImportError:
+    print("rapidocr_onnxruntime isn't installed -- building without RapidOCR support. "
+          "Install it (`pip install rapidocr_onnxruntime`) for better OCR accuracy.")
 for src, dest in ADD_DATA:
     # --add-data's separator is ';' on Windows but ':' on POSIX -- exactly
     # what os.pathsep is. Hardcoded ';' was the mac CI build's first

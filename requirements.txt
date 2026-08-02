@@ -12,6 +12,8 @@ pytesseract    # OCR FALLBACK -- Windows uses the built-in Windows.Media.Ocr (se
                # below); Tesseract is only used when that isn't available (older Windows,
                # macOS). Its engine binary can't be pip-installed:
                # https://github.com/UB-Mannheim/tesseract/wiki  (macOS: `brew install tesseract`)
+rapidocr_onnxruntime    # RAPID OCR -- Should be the default engine.
+                        # Works better on stylized text than windows and tessearct.
 
 # Windows only -- the built-in Windows OCR (Windows.Media.Ocr) projection, the
 # PREFERRED OCR engine on Win10/11 (see core/ocr_windows.py). Ships in the

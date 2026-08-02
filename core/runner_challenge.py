@@ -12,6 +12,7 @@ import threading
 import time
 
 import cv2
+import numpy as np
 
 from . import ocr
 from . import vision
@@ -38,37 +39,61 @@ class ChallengeOps:
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f'[Macro] Challenge map detected: "{map_name}" (score {match["score"]:.2f}).{suffix}')
             return map_name
+
         return self._detect_challenge_map_ocr(hwnd)
 
     def _detect_challenge_map_ocr(self, hwnd) -> str:
-        """Fallback for the tiny Daily Challenge map label shown in-game."""
+        """ Detects the map through OCR, and avoids issues with images that don't work with other devices. Returns the map name if detected, or None if not detected. """
         frame = vision.capture_game_bgr(hwnd)
         if frame is None:
             return None
 
-        # Anchor the crop to Daily Challenge's green HUD label instead of a
-        # fixed map-name position; longer names extend farther left.
-        try:
-            hud_match = vision.find_in_gray_multiscale(
-                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), "daily_challenge_hud")
-        except vision.TemplateNotFound:
-            return None
-        if hud_match is None:
-            return None
-        x = max(0, hud_match["x"] + hud_match["w"] - 5)
-        y = max(0, hud_match["y"] - 7)
-        crop = frame[y:min(frame.shape[0], y + 43), x:frame.shape[1]]
+        height, width = frame.shape[:2]
+        column_start = (3 * width) // 4
+        row_start = height // 3
+        row_end = (2 * height) // 3
+        crop = frame[row_start:row_end, column_start:]
         if crop.size == 0:
             return None
 
-        # The raw glyphs are only around 10px tall. Color upscaling preserves
-        # their white fill and dark outline better than a global threshold.
-        candidates = [
-            cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_CUBIC),
-            cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_LANCZOS4),
-        ]
+        crop_h, crop_w = crop.shape[:2]
+
+        subcol_start = crop_w // 2
+        row_height = crop_h // 6
+        subrow_start = row_height * 2
+        subrow_end = row_height * 3
+        crop = crop[subrow_start:subrow_end, subcol_start:]
+        if crop.size == 0:
+            return None
+
+        crop_h, crop_w = crop.shape[:2]
+        candidates = []
+
+        for scale in [8, 12, 16]:
+            for interp in [cv2.INTER_CUBIC, cv2.INTER_LANCZOS4, cv2.INTER_LINEAR]:
+                upscaled = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=interp)
+                candidates.append(upscaled)
+
+                blurred = cv2.GaussianBlur(upscaled, (0, 0), 3)
+                sharpened = cv2.addWeighted(upscaled, 1.5, blurred, -0.5, 0)
+                candidates.append(sharpened)
+
+                lab = cv2.cvtColor(upscaled, cv2.COLOR_BGR2LAB)
+                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+                enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+                candidates.append(enhanced)
+
         candidates.extend(ocr.candidate_masks(crop, upscale=8))
-        texts = [ocr_windows.ocr_image(candidate) for candidate in candidates]
+
+        # Use the centralized RapidOCR check/getter for consistent error handling
+        # and to share the cached engine instance configured with lang=["en"].
+        use_rapid = ocr.is_rapidocr_available()
+        if use_rapid:
+            rapid_ocr = ocr.get_rapidocr()
+        else:
+            ocr_available = ocr_windows.is_available()
+
         aliases = {
             "School Grounds": "grounds",
             "Rose Kingdom": "kingdom",
@@ -76,8 +101,13 @@ class ChallengeOps:
             "King's Tomb": "tomb",
             "Flower Forest": "flower",
         }
-        for text in texts:
+
+        def check_match(text, _candidate_idx):
+            if not text or not text.strip():
+                return None
+
             tokens = re.findall(r"[a-z]+", text.lower())
+
             scores = sorted(
                 (
                     max((difflib.SequenceMatcher(None, alias, token).ratio() for token in tokens), default=0),
@@ -85,14 +115,58 @@ class ChallengeOps:
                 )
                 for map_name, alias in aliases.items()
             )
+
             best_score, best_map = scores[-1]
             runner_up = scores[-2][0]
-            if best_score >= 0.65 and best_score - runner_up >= 0.12:
-                self._log(
-                    f'[Macro] Challenge map OCR: "{text.strip()}" -> '
-                    f'"{best_map}" (score {best_score:.2f}).')
+            margin = best_score - runner_up
+
+            if best_score >= 0.65 and margin >= 0.12:
                 return best_map
-        return None
+            return None
+
+        if use_rapid:
+            for i, candidate in enumerate(candidates):
+                try:
+                    if not candidate.flags['C_CONTIGUOUS']:
+                        candidate = np.ascontiguousarray(candidate)
+
+                    rgb_candidate = cv2.cvtColor(candidate, cv2.COLOR_BGR2RGB)
+
+                    result, elapse = rapid_ocr(rgb_candidate)
+                    if result:
+                        text = " ".join([line[1] for line in result])
+
+                        matched_map = check_match(text, i)
+                        if matched_map:
+                            return matched_map
+                except Exception:
+                    pass
+            return None
+
+        elif ocr_available:
+            texts = [ocr_windows.ocr_image(candidate) for candidate in candidates]
+            for idx, text in enumerate(texts):
+                matched_map = check_match(text, idx)
+                if matched_map:
+                    return matched_map
+            return None
+        else:
+            try:
+                import pytesseract
+                for i, candidate in enumerate(candidates[:5]):
+                    try:
+                        rgb = cv2.cvtColor(candidate, cv2.COLOR_BGR2RGB)
+                        text = pytesseract.image_to_string(rgb, config='--psm 7')
+                        self._log(f"[OCR Debug] Tesseract candidate {i}: {repr(text)}")
+                        matched_map = check_match(text, i)
+                        if matched_map:
+                            return matched_map
+                    except Exception:
+                        pass
+                return None
+            except ImportError:
+                return None
+
 
     def _challenge_has_ready_stage(self) -> bool:
         """Quick side-effect-free check for whether Challenge automation
