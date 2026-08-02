@@ -1829,6 +1829,19 @@
 
           <div class="setting-row" style="padding: 14px;">
             <div>
+              <div class="setting-label">Teams Button Click</div>
+              <div class="setting-desc">Optional manual point inside the Teams button. Pick the lower/inner part if the image-match center misses; Auto uses the detected image center.</div>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <input id="coord-team_button_x" class="block-input" style="width: 56px;" type="number" placeholder="Auto" onchange="setMacroCoord('team_button_x', this.value)">
+              <input id="coord-team_button_y" class="block-input" style="width: 56px;" type="number" placeholder="Auto" onchange="setMacroCoord('team_button_y', this.value)">
+              <button onclick="openCoordPicker('team_button')" class="text-xs font-semibold px-2 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);" title="Capture the Roblox screen and pick a point inside the Teams button">Pick</button>
+              <button onclick="clearMacroCoord('team_button')" class="text-xs font-semibold px-2 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);" title="Use the detected Teams image center again">Auto</button>
+            </div>
+          </div>
+
+          <div class="setting-row" style="padding: 14px;">
+            <div>
               <div class="setting-label">Neutral Clicks</div>
               <div class="setting-desc">Middle: dismisses popups. Corner: closes the unit info panel.</div>
             </div>

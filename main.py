@@ -189,6 +189,11 @@ MACRO_COORD_DEFAULTS = {
     "challenge_stage_3_x": 460, "challenge_stage_3_y": 533,
     "expedition_difficulty_x": 441, "expedition_difficulty_y": 524,
     "team_loadout_x": 800, "team_loadout_y": 324, "team_loadout_row_height": 126,
+    # Optional override for the first Teams click. None means use the live
+    # image match center; the Macro Coordinates picker can save a safer point
+    # inside the button for layouts where its lower/inner area registers more
+    # reliably.
+    "team_button_x": None, "team_button_y": None,
     "screen_middle_x": 576, "screen_middle_y": 378,
     "unit_info_reset_x": 3, "unit_info_reset_y": 3,
 }
@@ -837,6 +842,13 @@ class Api:
         if clean:
             cfg.update(clean)
         return {"ok": True, "saved": list(clean)}
+
+    def clear_macro_coord(self, prefix: str) -> dict:
+        """Clear an optional coordinate override back to automatic behavior."""
+        if prefix != "team_button":
+            return {"ok": False, "reason": "not_optional"}
+        cfg.update({"team_button_x": None, "team_button_y": None})
+        return {"ok": True, "cleared": ["team_button_x", "team_button_y"]}
 
     def reset_macro_coords(self) -> dict:
         cfg.update(dict(MACRO_COORD_DEFAULTS))

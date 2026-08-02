@@ -157,6 +157,35 @@ def test_retries_teams_click_until_loadout_list_is_visually_open(monkeypatch):
     )
 
 
+def test_manual_teams_click_point_replaces_detected_match_center(monkeypatch):
+    runner = _runner()
+    runner._coords.update({"team_button_x": 438, "team_button_y": 570})
+    stop = threading.Event()
+    team_match = {"cx": 100, "cy": 100, "score": 0.95}
+    open_match = {"cx": 275, "cy": 185, "score": 0.91}
+    confirm_match = {"cx": 483, "cy": 416, "score": 0.98}
+    include_match = {"cx": 456, "cy": 436, "score": 0.99}
+    clicked_matches = []
+
+    def wait_for_image(_hwnd, name, **_kwargs):
+        return {
+            "team_loadout_open": open_match,
+            "confirm": confirm_match,
+            "include": include_match,
+        }[name]
+
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
+    monkeypatch.setattr(
+        runner_module.vision, "click_match",
+        lambda _mouse, _hwnd, match: clicked_matches.append(match),
+    )
+
+    assert runner._apply_team_loadout_panel(123, stop, team_match, 1, "include") is True
+    assert clicked_matches[0] == {"cx": 438, "cy": 570}
+    assert clicked_matches[0] != team_match
+
+
 def test_confirm_failure_saves_the_screen_that_detection_could_not_read(monkeypatch):
     runner = _runner()
     stop = threading.Event()
