@@ -161,6 +161,42 @@ def test_bounty_mode_banner_and_count_persist_together(monkeypatch):
     assert saved["total"] == 10
 
 
+def test_bounty_mythic_mode_and_limit_default_and_persist(monkeypatch):
+    store = {"bounty": _saved_bounty()}
+    monkeypatch.setattr(main.cfg, "load", lambda: store.copy())
+    monkeypatch.setattr(main.cfg, "update", lambda changes: store.update(changes))
+    monkeypatch.setattr(
+        main, "_current_challenge_reset_period", lambda now=None: "2026-07-29")
+    api = _api()
+
+    settings = api.get_bounty_settings()
+    assert settings["mythic_only"] is False
+    assert settings["mythic_max_rerolls"] == 20
+    assert api.set_bounty_mythic_only(True) == {"ok": True}
+    assert api.set_bounty_mythic_max_rerolls(7) == {"ok": True}
+    assert store["bounty"]["mythic_only"] is True
+    assert store["bounty"]["mythic_max_rerolls"] == 7
+    saved = api.get_bounty_settings()
+    assert saved["mythic_only"] is True
+    assert saved["mythic_max_rerolls"] == 7
+
+
+def test_bounty_mythic_limit_is_clamped_and_rejects_out_of_range(monkeypatch):
+    store = {"bounty": _saved_bounty()}
+    store["bounty"]["mythic_max_rerolls"] = 999
+    monkeypatch.setattr(main.cfg, "load", lambda: store.copy())
+    monkeypatch.setattr(main.cfg, "update", lambda changes: store.update(changes))
+    monkeypatch.setattr(
+        main, "_current_challenge_reset_period", lambda now=None: "2026-07-29")
+    api = _api()
+
+    assert api.get_bounty_settings()["mythic_max_rerolls"] == 100
+    assert api.set_bounty_mythic_max_rerolls(0) == {
+        "ok": False, "reason": "bad_mythic_max_rerolls"}
+    assert api.set_bounty_mythic_max_rerolls(101) == {
+        "ok": False, "reason": "bad_mythic_max_rerolls"}
+
+
 def test_bounty_manual_reset_restores_total(monkeypatch):
     saved = _saved_bounty()
     saved["remaining"] = 0

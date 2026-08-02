@@ -7,6 +7,7 @@ Methods here run with MacroRunner's full self: shared state and helpers
 (_log, _coords, _checkpoint, _click_found_image, ...) resolve normally.
 """
 import math
+import sys
 import threading
 import time
 
@@ -596,7 +597,9 @@ class BlockOps:
         checked) still counts as done instead of waiting forever for a
         number that will never be read again. Checked periodically (see
         WAIT_WAVE_POLL_INTERVAL), not every single Battle-tick poll --
-        each OCR read is several real Tesseract subprocess spawns.
+        each OCR read is several real Tesseract subprocess spawns. Capture
+        the Roblox window directly so OCR never needs a screen grab that can
+        compose recording overlays and flash the user's display.
         Returns True once done (target reached/passed, or the block's own
         target can't be resolved at all); False to keep waiting.
         """
@@ -613,11 +616,11 @@ class BlockOps:
         if time.time() < state["next_check"]:
             return False
 
-        left, top, _, _ = wm.get_window_rect_screen(hwnd)
         try:
-            from core.ocr import capture_region
             from core import wave as wave_module
-            image = capture_region(left + WAVE_REGION[0], top + WAVE_REGION[1], WAVE_REGION[2], WAVE_REGION[3])
+            image = vision.capture_window_region_bgr(hwnd, WAVE_REGION)
+            if image is None or image.size == 0:
+                raise RuntimeError("Roblox window capture returned no pixels")
             current, maximum = wave_module.read_wave(image)
         except Exception as exc:
             self._log(f'{label}: OCR failed ({exc}) -- retrying in {WAIT_WAVE_POLL_INTERVAL:.0f}s.')
@@ -1048,13 +1051,31 @@ class BlockOps:
             self._keyboard.key_up(keys.VK_SHIFT)
             self._quick_place_shift_down = False
 
-    def _scan_place_search_box(self, left: int, top: int, orig_x: int, orig_y: int):
+    def _capture_place_search_region(self, hwnd, left: int, top: int, region: tuple):
+        """Capture the frame that contains Roblox's placement highlight.
+
+        On macOS the highlight is part of the composed Metal frame and can be
+        missing from CGWindowListCreateImage even though the rest of the
+        window is captured correctly. The screen capture is intentional for
+        this small, visible-only scan; Windows keeps the window-content path
+        to avoid the display-flash regression that motivated the v0.18 change.
+        """
+        if sys.platform == "darwin":
+            from core.ocr import capture_region
+            x, y, width, height = (int(value) for value in region)
+            return capture_region(left + x, top + y, width, height)
+        return vision.capture_window_region_bgr(hwnd, region)
+
+    def _scan_place_search_box(self, hwnd, left: int, top: int, orig_x: int, orig_y: int):
         """One capture of the PLACE_SEARCH_BOX_SIZE x PLACE_SEARCH_BOX_SIZE
         region around (orig_x, orig_y) -- window-client coords -- scanned in
         memory for a pixel at/near 0xffffff (white, within
         PLACE_VALID_PIXEL_TOLERANCE per channel). Returns the (dx, dy) offset
         of whichever valid pixel is CLOSEST to (orig_x, orig_y), or None if
-        nothing valid was found anywhere in the box.
+        nothing valid was found anywhere in the box. Windows reads Roblox's
+        window contents to avoid display flashes; macOS uses a small screen
+        capture because its transient placement highlight can be missing from
+        CGWindowListCreateImage.
 
         The box is CLAMPED to the game window. Centering it blindly meant a
         spot within half a box of an edge captured pixels from outside the
@@ -1069,7 +1090,6 @@ class BlockOps:
         offset are both measured from where the caller actually asked about,
         not from the middle of the captured region."""
         import numpy as np
-        from core.ocr import capture_region
         size = PLACE_SEARCH_BOX_SIZE
         half = size // 2
         # Top-left of the box, pulled back inside the window if centering it
@@ -1077,7 +1097,9 @@ class BlockOps:
         # narrower than the box degrades to "start at 0" rather than negative.
         box_x = max(0, min(orig_x - half, FIXED_WIN_W - size))
         box_y = max(0, min(orig_y - half, FIXED_WIN_H - size))
-        patch = capture_region(left + box_x, top + box_y, size, size)
+        patch = self._capture_place_search_region(hwnd, left, top, (box_x, box_y, size, size))
+        if patch is None or patch.size == 0:
+            return None
         b, g, r = patch[:, :, 0].astype(int), patch[:, :, 1].astype(int), patch[:, :, 2].astype(int)
         floor = 255 - PLACE_VALID_PIXEL_TOLERANCE
         valid_mask = (r >= floor) & (g >= floor) & (b >= floor)
@@ -1111,7 +1133,7 @@ class BlockOps:
         while True:
             if self._checkpoint(stop_event):
                 return None
-            found = self._scan_place_search_box(left, top, orig_x, orig_y)
+            found = self._scan_place_search_box(hwnd, left, top, orig_x, orig_y)
             if found is not None:
                 dx, dy = found
                 cx, cy = orig_x + dx, orig_y + dy
@@ -1158,7 +1180,7 @@ class BlockOps:
                 self._mouse.move_to(left + px, top + py)
                 self._mouse.nudge()  # the highlight needs real relative motion to render
                 time.sleep(PLACE_PIXEL_SEARCH_SETTLE)
-                found = self._scan_place_search_box(left, top, px, py)
+                found = self._scan_place_search_box(hwnd, left, top, px, py)
                 if found is not None:
                     dx, dy = found
                     cx, cy = px + dx, py + dy

@@ -14,7 +14,7 @@ import threading
 import numpy as np
 import pytest
 
-from core import ocr, runner_blocks, vision
+from core import runner_blocks, vision
 from core import templates as tpl
 from core import window as wm
 from core.runner import MacroRunner
@@ -78,8 +78,11 @@ def sim(monkeypatch):
     monkeypatch.setattr(runner_blocks.time, "sleep", lambda s: None)
 
     white = np.full((38, 38, 3), 255, np.uint8)
-    monkeypatch.setattr(ocr, "capture_region", lambda l, t, w, h: white[:h, :w])
-    monkeypatch.setattr(runner_blocks, "capture_region", lambda l, t, w, h: white[:h, :w], raising=False)
+    monkeypatch.setattr(
+        runner_blocks.vision,
+        "capture_window_region_bgr",
+        lambda _hwnd, region: white[:region[3], :region[2]],
+    )
 
     def found(name):
         return {"x": 0, "y": 0, "w": 10, "h": 10, "cx": 5, "cy": 5, "score": 0.99}

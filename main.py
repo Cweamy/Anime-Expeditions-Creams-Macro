@@ -30,6 +30,11 @@ from core.runner import MacroRunner
 from core import updater
 from core import auto_shop
 from core.auto_shop import current_auto_shop_period
+from core.runner_constants import (
+    BOUNTY_MYTHIC_DEFAULT_REROLLS,
+    BOUNTY_MYTHIC_MIN_REROLLS,
+    BOUNTY_MYTHIC_MAX_REROLLS,
+)
 
 # Imported at module scope (not inside the darwin branches that use it) so the
 # macOS-only geometry helpers below can be plain module functions. window_mac
@@ -184,6 +189,11 @@ MACRO_COORD_DEFAULTS = {
     "challenge_stage_3_x": 460, "challenge_stage_3_y": 533,
     "expedition_difficulty_x": 441, "expedition_difficulty_y": 524,
     "team_loadout_x": 800, "team_loadout_y": 324, "team_loadout_row_height": 126,
+    # Optional override for the first Teams click. None means use the live
+    # image match center; the Macro Coordinates picker can save a safer point
+    # inside the button for layouts where its lower/inner area registers more
+    # reliably.
+    "team_button_x": None, "team_button_y": None,
     "screen_middle_x": 576, "screen_middle_y": 378,
     "unit_info_reset_x": 3, "unit_info_reset_y": 3,
 }
@@ -833,6 +843,13 @@ class Api:
             cfg.update(clean)
         return {"ok": True, "saved": list(clean)}
 
+    def clear_macro_coord(self, prefix: str) -> dict:
+        """Clear an optional coordinate override back to automatic behavior."""
+        if prefix != "team_button":
+            return {"ok": False, "reason": "not_optional"}
+        cfg.update({"team_button_x": None, "team_button_y": None})
+        return {"ok": True, "cleared": ["team_button_x", "team_button_y"]}
+
     def reset_macro_coords(self) -> dict:
         cfg.update(dict(MACRO_COORD_DEFAULTS))
         return {"ok": True, "coords": dict(MACRO_COORD_DEFAULTS)}
@@ -954,6 +971,7 @@ class Api:
             saved_map = (saved.get("maps") or {}).get(m) or {}
             merged_maps[m] = {"macro": saved_map.get("macro") or ""}
         merged["maps"] = merged_maps
+        merged.update(self._challenge_macro_setup(merged))
 
         reset_period = _current_challenge_reset_period()
         merged["daily"]["ready"] = merged["daily"]["last_completed_period"] != reset_period
@@ -998,6 +1016,26 @@ class Api:
 
     def set_challenge_enabled(self, enabled: bool) -> dict:
         challenge = self.get_challenge_settings()
+        if enabled and not challenge["setup_ready"]:
+            challenge["enabled"] = False
+            cfg.update({"challenge": challenge})
+            missing = ", ".join(challenge["missing_maps"])
+            invalid = ", ".join(
+                f'{item["map"]} ("{item["macro"]}")'
+                for item in challenge["invalid_maps"])
+            details = "; ".join(part for part in (
+                f"unassigned: {missing}" if missing else "",
+                f"missing or old macros: {invalid}" if invalid else "",
+            ) if part)
+            self.push_log(
+                "[Macro] Auto Challenge was not enabled. Assign a saved Macro Operation "
+                f"to every Story map first ({details}).")
+            return {
+                "ok": False,
+                "reason": "incomplete_challenge_maps",
+                "missing_maps": challenge["missing_maps"],
+                "invalid_maps": challenge["invalid_maps"],
+            }
         challenge["enabled"] = bool(enabled)
         cfg.update({"challenge": challenge})
         return {"ok": True}
@@ -1012,6 +1050,26 @@ class Api:
 
     def set_daily_challenge_enabled(self, enabled: bool) -> dict:
         challenge = self.get_challenge_settings()
+        if enabled and not challenge["setup_ready"]:
+            challenge["daily"]["enabled"] = False
+            cfg.update({"challenge": challenge})
+            missing = ", ".join(challenge["missing_maps"])
+            invalid = ", ".join(
+                f'{item["map"]} ("{item["macro"]}")'
+                for item in challenge["invalid_maps"])
+            details = "; ".join(part for part in (
+                f"unassigned: {missing}" if missing else "",
+                f"missing or old macros: {invalid}" if invalid else "",
+            ) if part)
+            self.push_log(
+                "[Macro] Daily Challenge was not enabled. Assign a saved Macro Operation "
+                f"to every Story map first ({details}).")
+            return {
+                "ok": False,
+                "reason": "incomplete_challenge_maps",
+                "missing_maps": challenge["missing_maps"],
+                "invalid_maps": challenge["invalid_maps"],
+            }
         challenge["daily"]["enabled"] = bool(enabled)
         cfg.update({"challenge": challenge})
         return {"ok": True}
@@ -1077,8 +1135,18 @@ class Api:
             return {"ok": False, "reason": "bad_map"}
         challenge = self.get_challenge_settings()
         challenge["maps"][map_name]["macro"] = macro or ""
+        setup = self._challenge_macro_setup(challenge)
+        auto_disabled = bool(
+            (challenge.get("enabled") or challenge.get("daily", {}).get("enabled"))
+            and not setup["setup_ready"])
+        if auto_disabled:
+            challenge["enabled"] = False
+            challenge["daily"]["enabled"] = False
+            self.push_log(
+                f'[Macro] Auto Challenge was disabled because "{map_name}" no longer '
+                "has a usable Macro Operation.")
         cfg.update({"challenge": challenge})
-        return {"ok": True}
+        return {"ok": True, "auto_disabled": auto_disabled, **setup}
 
     def reset_challenge_counts(self) -> dict:
         challenge = self.get_challenge_settings()
@@ -1100,6 +1168,8 @@ class Api:
             "enabled": False,
             "play_mode": "solo",
             "summon_banner": "standard",
+            "mythic_only": False,
+            "mythic_max_rerolls": BOUNTY_MYTHIC_DEFAULT_REROLLS,
             "remaining": BOUNTY_DAILY_TOTAL,
             "total": BOUNTY_DAILY_TOTAL,
             "last_reset_date": _current_challenge_reset_period(),
@@ -1108,20 +1178,19 @@ class Api:
         }
 
     @staticmethod
-    def _bounty_macro_setup(settings: dict) -> dict:
+    def _story_macro_setup(settings: dict, map_names) -> dict:
         """Whether every possible Story destination has a usable macro.
 
-        Auto Bounty does not know which map the board will request until
-        after it opens that objective. Starting with only some maps
-        configured therefore guarantees that a later objective can enter a
-        battle with no Pre Start blocks and no units. Treat the five-map
-        assignment as one required setup instead of discovering the hole
-        after teleporting.
+        Both Auto Bounty and Auto Challenge choose a Story destination at
+        runtime. Starting with only some maps configured therefore guarantees
+        that a later objective can enter a battle with no Pre Start blocks and
+        no units. Treat the full map assignment as one required setup instead
+        of discovering the hole after teleporting.
         """
         maps = settings.get("maps") or {}
         missing_maps = []
         invalid_maps = []
-        for map_name in BOUNTY_STORY_MAPS:
+        for map_name in map_names:
             macro_name = str((maps.get(map_name) or {}).get("macro") or "").strip()
             if not macro_name:
                 missing_maps.append(map_name)
@@ -1139,12 +1208,23 @@ class Api:
         }
 
     @staticmethod
+    def _challenge_macro_setup(settings: dict) -> dict:
+        return Api._story_macro_setup(settings, CHALLENGE_STORY_MAPS)
+
+    @staticmethod
+    def _bounty_macro_setup(settings: dict) -> dict:
+        return Api._story_macro_setup(settings, BOUNTY_STORY_MAPS)
+
+    @staticmethod
     def _save_bounty_settings(settings: dict) -> None:
         """Persist only settings, not the computed setup-status fields."""
         cfg.update({"bounty": {
             "enabled": bool(settings.get("enabled")),
             "play_mode": settings.get("play_mode") or "solo",
             "summon_banner": settings.get("summon_banner") or "standard",
+            "mythic_only": bool(settings.get("mythic_only")),
+            "mythic_max_rerolls": int(settings.get(
+                "mythic_max_rerolls", BOUNTY_MYTHIC_DEFAULT_REROLLS)),
             "maps": settings.get("maps") or {},
         }})
 
@@ -1155,6 +1235,18 @@ class Api:
             merged["play_mode"] = "solo"
         if merged.get("summon_banner") not in ("standard", "villain"):
             merged["summon_banner"] = "standard"
+        merged["mythic_only"] = bool(merged.get("mythic_only"))
+        try:
+            merged["mythic_max_rerolls"] = max(
+                BOUNTY_MYTHIC_MIN_REROLLS,
+                min(
+                    BOUNTY_MYTHIC_MAX_REROLLS,
+                    int(merged.get(
+                        "mythic_max_rerolls", BOUNTY_MYTHIC_DEFAULT_REROLLS)),
+                ),
+            )
+        except (TypeError, ValueError):
+            merged["mythic_max_rerolls"] = BOUNTY_MYTHIC_DEFAULT_REROLLS
         try:
             total = max(1, min(99, int(merged.get("total") or BOUNTY_DAILY_TOTAL)))
         except (TypeError, ValueError):
@@ -1224,6 +1316,24 @@ class Api:
             return {"ok": False, "reason": "bad_banner"}
         settings = self.get_bounty_settings()
         settings["summon_banner"] = banner
+        self._save_bounty_settings(settings)
+        return {"ok": True}
+
+    def set_bounty_mythic_only(self, enabled: bool) -> dict:
+        settings = self.get_bounty_settings()
+        settings["mythic_only"] = bool(enabled)
+        self._save_bounty_settings(settings)
+        return {"ok": True}
+
+    def set_bounty_mythic_max_rerolls(self, value) -> dict:
+        try:
+            limit = int(value)
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_mythic_max_rerolls"}
+        if not (BOUNTY_MYTHIC_MIN_REROLLS <= limit <= BOUNTY_MYTHIC_MAX_REROLLS):
+            return {"ok": False, "reason": "bad_mythic_max_rerolls"}
+        settings = self.get_bounty_settings()
+        settings["mythic_max_rerolls"] = limit
         self._save_bounty_settings(settings)
         return {"ok": True}
 
@@ -2407,14 +2517,17 @@ class Api:
             "enabled": data.get("webhook_enabled", False),
             "silent": data.get("webhook_silent", False),
             "mention_id": data.get("webhook_mention_id", ""),
+            "progress": data.get("webhook_progress_enabled", False),
         }
 
-    def save_webhook_settings(self, url: str, enabled: bool, silent: bool, mention_id: str = "") -> dict:
+    def save_webhook_settings(self, url: str, enabled: bool, silent: bool, mention_id: str = "",
+                              progress: bool = False) -> dict:
         cfg.update({
             "webhook_url": url or "",
             "webhook_enabled": bool(enabled),
             "webhook_silent": bool(silent),
             "webhook_mention_id": (mention_id or "").strip(),
+            "webhook_progress_enabled": bool(progress),
         })
         return {"ok": True}
 
@@ -2886,6 +2999,73 @@ class Api:
 
         self.push_log(f"[Debug] Saved screenshot to {path}")
         return {"ok": True, "path": path}
+
+    def debug_test_detect(self, block: dict) -> dict:
+        """Test one Detect block against the current full Roblox window.
+
+        This is deliberately read-only: it captures one normalized frame,
+        evaluates the block's existing image/region/threshold logic against
+        that frame, and returns an annotated preview. It never runs either
+        branch or changes the saved macro.
+        """
+        if not isinstance(block, dict):
+            return {"ok": False, "reason": "bad_block"}
+        hwnd = self.game_hwnd
+        if not hwnd or not wm.is_window(hwnd):
+            return {"ok": False, "reason": "no_roblox"}
+
+        temporarily_shown = False
+        try:
+            import base64
+            import cv2
+            from core import detect, vision
+
+            # Detect blocks are commonly edited on Settings/Macro Manager,
+            # where the native Roblox child is hidden behind the UI. A screen
+            # grab in that state sees our own panel, not Roblox. Show it only
+            # for this read-only capture and restore the prior visibility
+            # before returning the preview to the frontend.
+            is_visible = getattr(wm, "is_window_visible", None)
+            was_visible = bool(is_visible(hwnd)) if is_visible else True
+            if not was_visible:
+                self.show_game()
+                temporarily_shown = True
+                time.sleep(0.05)
+
+            # capture_game_bgr returns the whole normalized Roblox client in
+            # the same reference space normal Detect searches use. Keeping it
+            # in memory means every score and every drawn box describes the
+            # exact frame shown in the preview.
+            frame = vision.capture_game_bgr(hwnd)
+            if frame is None or frame.size == 0:
+                return {"ok": False, "reason": "capture_failed"}
+            report = detect.diagnose_frame(frame, block)
+            preview = detect.render_diagnostic(frame, report)
+            encoded_ok, encoded = cv2.imencode(".png", preview)
+            if not encoded_ok:
+                return {"ok": False, "reason": "encode_failed"}
+
+            region = report.get("region")
+            self.push_log(
+                f"[Debug] Detect test: {'FOUND' if report['found'] else 'not found'} -- "
+                f"{len(report.get('details', []))} image condition(s) checked."
+            )
+            return {
+                "ok": True,
+                "found": bool(report["found"]),
+                "region": ({"x": region[0], "y": region[1], "w": region[2], "h": region[3]}
+                            if region is not None else None),
+                "details": report.get("details", []),
+                "data_uri": "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii"),
+                "width": int(preview.shape[1]),
+                "height": int(preview.shape[0]),
+            }
+        except Exception as exc:
+            self.push_log(f"[Debug] Detect test failed: {exc}")
+            return {"ok": False, "reason": "test_failed"}
+        finally:
+            if temporarily_shown:
+                self.hide_game()
 
     def debug_test_expedition_wave(self) -> dict:
         # Settings > Debug > "Test Expedition Wave Check": runs one tick of
@@ -4280,7 +4460,8 @@ def _launch_ui():
                 # slow boot isn't hit with a second launch, and skipped when
                 # other Roblox windows are open -- the deep link's single-
                 # instance handling would force-close them (alt accounts).
-                if not hwnd and api._resume_after_relaunch:
+                if (not hwnd and api._resume_after_relaunch
+                        and not api.runner.is_rejoin_pending()):
                     try:
                         want_reopen = cfg.load().get("auto_relaunch_roblox", True)
                     except Exception:
@@ -4296,6 +4477,8 @@ def _launch_ui():
                             api._roblox_relaunch_at = now  # also rate-limits this log
                             api.push_log("Roblox closed mid-run, but other Roblox windows are open -- "
                                          "not auto-reopening (it would close them).")
+                        elif not api.runner.claim_rejoin_launch():
+                            api.push_log("Roblox rejoin started elsewhere -- not auto-reopening a second instance.")
                         else:
                             from core.runner_constants import REJOIN_DEEPLINK
                             api._roblox_relaunch_at = now
@@ -4303,6 +4486,7 @@ def _launch_ui():
                                 os.startfile(REJOIN_DEEPLINK)
                                 api.push_log("Roblox closed mid-run -- reopening the game automatically...")
                             except OSError as exc:
+                                api.runner.cancel_rejoin_launch()
                                 api.push_log(f"Couldn't auto-reopen Roblox: {exc}")
 
                 if hwnd and (not api.docker.docked or hwnd != api.game_hwnd):

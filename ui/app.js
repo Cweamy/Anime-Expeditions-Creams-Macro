@@ -13,6 +13,11 @@ window.addEventListener('keydown', (e) => {
     const faqModal = document.getElementById('faq-modal');
     if (faqModal && faqModal.style.display !== 'none') {
       closeFaqModal();
+      return;
+    }
+    const detectTestModal = document.getElementById('detect-test-modal');
+    if (detectTestModal && detectTestModal.style.display !== 'none') {
+      closeDetectTest();
     }
   }
 });
@@ -766,8 +771,10 @@ function setSettingsCategory(cat) {
 }
 
 // Settings search: filters visible setting-rows by matching their text
-// content (label + description) against the query. Automatically switches
-// to the "All" view so results from every category show. Empty query
+// content (label + description) against the query. Some panels also own
+// controls/descriptions outside a .setting-row (Webhook, Reward Reader and
+// Game Stats), so those panel-owned nodes are searched too. Automatically
+// switches to the "All" view so results from every category show. Empty query
 // restores all rows.
 function filterSettings(query) {
   const q = (query || '').trim().toLowerCase();
@@ -781,16 +788,32 @@ function filterSettings(query) {
     let catHasHit = false;
     catSection.querySelectorAll('.rp-panel').forEach(panel => {
       let panelHasHit = false;
+      // Search content owned directly by the panel without counting row text
+      // twice. A panel-level match keeps its controls visible, just like a
+      // header match; otherwise a query such as "Webhook URL" would hide the
+      // entire panel because that field is not wrapped in .setting-row.
+      const contentCopy = panel.cloneNode(true);
+      contentCopy.querySelector('.rp-panel-head')?.remove();
+      contentCopy.querySelectorAll('.setting-row').forEach(row => row.remove());
+      const panelContentText = (contentCopy.textContent || '').toLowerCase();
+      const panelContentHit = !!q && panelContentText.includes(q);
+      // A search for a panel's own title (for example "Macro Coordinates")
+      // should show the panel's controls, not leave only its header and
+      // description visible. The old code kept the panel because the header
+      // matched, but had already hidden every row because none of the row
+      // labels matched the same query.
+      const headerText = (panel.querySelector('.rp-panel-head')?.textContent || '').toLowerCase();
+      const headerHit = !!q && headerText.includes(q);
       panel.querySelectorAll('.setting-row').forEach(row => {
         const text = (row.textContent || '').toLowerCase();
-        const hit = !q || text.includes(q);
+        const hit = !q || headerHit || panelContentHit || text.includes(q);
         row.classList.toggle('search-hidden', !hit);
-        row.classList.toggle('search-hit', hit && !!q);
+        row.classList.toggle('search-hit', hit && !!q && !headerHit && !panelContentHit);
         if (hit) panelHasHit = true;
       });
       // Also check the panel header text (e.g. "Webhook", "General")
-      const headerText = (panel.querySelector('.rp-panel-head')?.textContent || '').toLowerCase();
-      if (q && headerText.includes(q)) panelHasHit = true;
+      if (headerHit) panelHasHit = true;
+      if (panelContentHit) panelHasHit = true;
       panel.classList.toggle('search-hidden', !panelHasHit && !!q);
       if (panelHasHit) catHasHit = true;
     });
@@ -1983,6 +2006,7 @@ async function loadWebhookUI() {
     document.getElementById('webhook-mention-id').value = wh.mention_id || '';
     document.getElementById('toggle-webhook-enabled').classList.toggle('on', !!wh.enabled);
     document.getElementById('toggle-webhook-silent').classList.toggle('on', !!wh.silent);
+    document.getElementById('toggle-webhook-progress').classList.toggle('on', !!wh.progress);
     updateWebhookValidity(wh.url || '');
   } catch (e) {}
 }
@@ -2093,8 +2117,9 @@ async function saveWebhookSettings(silentSave) {
   const mentionId = document.getElementById('webhook-mention-id').value.trim();
   const enabled = document.getElementById('toggle-webhook-enabled').classList.contains('on');
   const silent = document.getElementById('toggle-webhook-silent').classList.contains('on');
+  const progress = document.getElementById('toggle-webhook-progress').classList.contains('on');
   try {
-    await pywebview.api.save_webhook_settings(url, enabled, silent, mentionId);
+    await pywebview.api.save_webhook_settings(url, enabled, silent, mentionId, progress);
     updateWebhookValidity(url);
     if (!silentSave) setWebhookStatus('Saved.', 'var(--teal)');
   } catch (e) {
@@ -3034,6 +3059,26 @@ const CHALLENGE_STAGE_SLOTS = ['1', '2', '3'];
 const CHALLENGE_STORY_MAPS = ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb", 'Flower Forest'];
 let challengeState = null;
 
+function renderStoryMapSetupWarning(id, state, featureName) {
+  const warning = document.getElementById(id);
+  if (!warning) return;
+  if (!state || state.setup_ready !== false) {
+    warning.innerHTML = '';
+    warning.style.display = 'none';
+    return;
+  }
+  const missing = state.missing_maps || [];
+  const invalid = state.invalid_maps || [];
+  const problems = [];
+  if (missing.length) problems.push(`Assign: ${missing.map(escapeHtml).join(', ')}`);
+  if (invalid.length) {
+    problems.push(`Repair: ${invalid.map(item =>
+      `${escapeHtml(item.map)} (${escapeHtml(item.macro)})`).join(', ')}`);
+  }
+  warning.innerHTML = `<strong>Setup required:</strong> ${featureName} needs a saved Macro Operation for every Story map. ${problems.join('. ')}.`;
+  warning.style.display = '';
+}
+
 async function refreshChallengeScreen() {
   try {
     challengeState = await pywebview.api.get_challenge_settings();
@@ -3046,6 +3091,7 @@ async function refreshChallengeScreen() {
 
 function renderChallengeScreen() {
   const s = challengeState;
+  renderStoryMapSetupWarning('challenge-setup-warning', s, 'Auto Challenge');
   const daily = (s && s.daily) || { enabled: false, ready: true };
   const dailyEnabledBtn = document.getElementById('toggle-daily-challenge-enabled');
   if (dailyEnabledBtn) dailyEnabledBtn.classList.toggle('on', !!daily.enabled);
@@ -3154,7 +3200,12 @@ async function toggleChallengeEnabled(btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
-  try { await pywebview.api.set_challenge_enabled(isOn); } catch (e) {}
+  try {
+    const result = await pywebview.api.set_challenge_enabled(isOn);
+    if (!result.ok && result.reason === 'incomplete_challenge_maps') {
+      addLog('[Macro] Auto Challenge needs a saved Macro Operation for every Story map before it can be enabled.');
+    }
+  } catch (e) {}
   await refreshChallengeScreen();
 }
 
@@ -3167,7 +3218,12 @@ async function toggleDailyChallengeEnabled(btn) {
   const isOn = !btn.classList.contains('on');
   btn.classList.toggle('on', isOn);
   bounceToggle(btn);
-  try { await pywebview.api.set_daily_challenge_enabled(isOn); } catch (e) {}
+  try {
+    const result = await pywebview.api.set_daily_challenge_enabled(isOn);
+    if (!result.ok && result.reason === 'incomplete_challenge_maps') {
+      addLog('[Macro] Daily Challenge needs a saved Macro Operation for every Story map before it can be enabled.');
+    }
+  } catch (e) {}
   await refreshChallengeScreen();
 }
 
@@ -3186,7 +3242,13 @@ async function toggleChallengeStage(stage, btn) {
 }
 
 async function setChallengeMapMacro(map, value) {
-  try { await pywebview.api.set_challenge_map_macro(map, value); } catch (e) {}
+  try {
+    const result = await pywebview.api.set_challenge_map_macro(map, value);
+    if (result.auto_disabled) {
+      addLog(`[Macro] Auto Challenge disabled: ${map} no longer has a usable Macro Operation.`);
+    }
+  } catch (e) {}
+  await refreshChallengeScreen();
 }
 
 async function setChallengeStageCount(stage, value) {
@@ -3223,6 +3285,7 @@ async function refreshBountyScreen() {
 
 function renderBountyScreen() {
   const s = bountyState;
+  renderStoryMapSetupWarning('bounty-setup-warning', s, 'Auto Bounty');
   const summary = document.getElementById('resource-bounty-summary');
   if (summary) {
     const remaining = s ? `${s.remaining}/${s.total} left` : '';
@@ -3233,6 +3296,10 @@ function renderBountyScreen() {
   }
   document.getElementById('toggle-bounty-enabled')?.classList.toggle(
     'on', !!(s && s.enabled && s.setup_ready));
+  document.getElementById('toggle-bounty-mythic')?.classList.toggle(
+    'on', !!(s && s.mythic_only));
+  const mythicMax = document.getElementById('bounty-mythic-max-rerolls');
+  if (mythicMax && s) mythicMax.value = s.mythic_max_rerolls || 20;
   const playMode = (s && s.play_mode) || 'solo';
   document.getElementById('bounty-mode-solo')?.classList.toggle('active', playMode === 'solo');
   document.getElementById('bounty-mode-matchmaking')?.classList.toggle('active', playMode === 'matchmaking');
@@ -3249,21 +3316,6 @@ function renderBountyScreen() {
   if (!s) {
     list.innerHTML = '<div class="rh-empty">Couldn\'t load Auto Bounty settings.</div>';
     return;
-  }
-  const warning = document.getElementById('bounty-setup-warning');
-  if (warning) {
-    const missing = s.missing_maps || [];
-    const invalid = s.invalid_maps || [];
-    const problems = [];
-    if (missing.length) problems.push(`Assign: ${missing.map(escapeHtml).join(', ')}`);
-    if (invalid.length) {
-      problems.push(`Repair: ${invalid.map(item =>
-        `${escapeHtml(item.map)} (${escapeHtml(item.macro)})`).join(', ')}`);
-    }
-    warning.innerHTML = s.setup_ready
-      ? ''
-      : `<strong>Setup required:</strong> Auto Bounty needs a saved Macro Operation for every Story map. ${problems.join('. ')}.`;
-    warning.style.display = s.setup_ready ? 'none' : '';
   }
   const macroOpts = current => `<option value="">No Macro</option>` +
     taskTemplates.map(name =>
@@ -3294,6 +3346,18 @@ async function toggleBountyEnabled(btn) {
       addLog('[Macro] Auto Bounty needs a saved Macro Operation for every Story map before it can be enabled.');
     }
   } catch (e) {}
+  await refreshBountyScreen();
+}
+
+async function toggleBountyMythic(btn) {
+  const isOn = !btn.classList.contains('on');
+  bounceToggle(btn);
+  try { await pywebview.api.set_bounty_mythic_only(isOn); } catch (e) {}
+  await refreshBountyScreen();
+}
+
+async function setBountyMythicMaxRerolls(value) {
+  try { await pywebview.api.set_bounty_mythic_max_rerolls(value); } catch (e) {}
   await refreshBountyScreen();
 }
 
@@ -4326,6 +4390,7 @@ const MACRO_COORD_KEYS = [
   'challenge_stage_3_x', 'challenge_stage_3_y',
   'expedition_difficulty_x', 'expedition_difficulty_y',
   'team_loadout_x', 'team_loadout_y', 'team_loadout_row_height',
+  'team_button_x', 'team_button_y',
   'screen_middle_x', 'screen_middle_y',
   'unit_info_reset_x', 'unit_info_reset_y',
 ];
@@ -4343,6 +4408,19 @@ async function setMacroCoord(key, value) {
   const n = parseInt(value);
   if (Number.isNaN(n)) return;
   try { await pywebview.api.set_macro_coord(key, n); } catch (e) {}
+}
+
+async function clearMacroCoord(prefix) {
+  try {
+    const result = await pywebview.api.clear_macro_coord(prefix);
+    if (result && result.ok) {
+      for (const suffix of ['_x', '_y']) {
+        const el = document.getElementById(`coord-${prefix}${suffix}`);
+        if (el) el.value = '';
+      }
+      addLog(`[Debug] ${prefix} coordinate override cleared -- using Auto.`);
+    }
+  } catch (e) {}
 }
 
 // Several coordinate keys in one atomic write (see set_macro_coords) -- the
@@ -5056,9 +5134,10 @@ function detectBlock(id) {
 }
 
 function renderDetectControls(b) {
+  const testBtn = `<button type="button" class="block-mod-btn detect-test-btn" onclick="testDetect('${b.id}', this)" title="Capture the current Roblox window and test this Detect block without running its branches">Test now</button>`;
   const advBtn = `<button type="button" class="block-mod-btn ${b.advanced ? 'on' : ''}" onclick="toggleDetectAdvanced('${b.id}')" title="Multiple images, a search region, a match threshold, or a raw condition">Advanced</button>`;
-  if (!b.advanced) return `<div class="detect-controls">${renderDetectImagePick(b)}${advBtn}</div>`;
-  return `<div class="detect-controls">${advBtn}</div>${renderDetectAdvanced(b)}`;
+  if (!b.advanced) return `<div class="detect-controls">${renderDetectImagePick(b)}${testBtn}${advBtn}</div>`;
+  return `<div class="detect-controls">${testBtn}${advBtn}</div>${renderDetectAdvanced(b)}`;
 }
 
 function renderDetectImagePick(b) {
@@ -5126,6 +5205,77 @@ function renderDetectExpr(b) {
     <textarea class="block-input detect-expr" rows="2" placeholder="find('boss') and not find('shield')"
               oninput="updateDetectExpr('${b.id}', this.value)">${escapeHtml(b.expr || '')}</textarea>
     <span class="detect-hint">Use <code>find('name')</code> and <code>count('name')</code> with <code>and</code>, <code>or</code>, <code>not</code>, and comparisons.</span>`);
+}
+
+function closeDetectTest() {
+  const modal = document.getElementById('detect-test-modal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  const image = document.getElementById('detect-test-image');
+  if (image) image.removeAttribute('src');
+}
+
+function renderDetectTestResult(result) {
+  const status = document.getElementById('detect-test-status');
+  const meta = document.getElementById('detect-test-meta');
+  const details = document.getElementById('detect-test-details');
+  const image = document.getElementById('detect-test-image');
+  if (!status || !meta || !details || !image) return;
+
+  const found = Boolean(result.found);
+  status.className = `detect-test-status ${found ? 'found' : 'missed'}`;
+  status.textContent = found ? 'FOUND — Then branch would run' : 'NOT FOUND — Else branch would run';
+  const r = result.region;
+  meta.textContent = r
+    ? `Full Roblox window · search region ${r.x}, ${r.y} · ${r.w}×${r.h}`
+    : 'Full Roblox window · whole-window search';
+  image.src = result.data_uri;
+  image.alt = 'Detect test capture with search and match boxes';
+
+  const rows = (result.details || []).map(detail => {
+    const missing = detail.error === 'missing';
+    const matched = Boolean(detail.matched);
+    const state = missing ? 'MISSING' : matched ? 'FOUND' : 'MISS';
+    const score = detail.score == null ? 'no candidate' : `best ${Number(detail.score).toFixed(2)} / required ${Number(detail.threshold).toFixed(2)}`;
+    const best = detail.best_match;
+    const location = best ? ` · best at (${best.cx}, ${best.cy})` : '';
+    const count = detail.matches && detail.matches.length > 1 ? ` · ${detail.matches.length} matches` : '';
+    return `<div class="detect-test-detail ${missing ? 'missing' : matched ? 'found' : 'missed'}">
+      <span class="detect-test-detail-name">${escapeHtml(detail.name)}</span>
+      <span class="detect-test-detail-state">${state}</span>
+      <span class="detect-test-detail-score">${score}${location}${count}</span>
+    </div>`;
+  }).join('');
+  details.innerHTML = rows || '<div class="detect-test-empty">This condition has no image to test yet.</div>';
+}
+
+async function testDetect(id, btn) {
+  const block = detectBlock(id);
+  if (!block || !window.pywebview || !pywebview.api) return;
+  const original = btn ? btn.textContent : 'Test now';
+  if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+  let result = null;
+  try {
+    result = await pywebview.api.debug_test_detect(JSON.parse(JSON.stringify(block)));
+  } catch (e) {
+    addLog('[Debug] Detect test failed -- is Roblox attached?');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+  if (!result || !result.ok) {
+    const reason = result && result.reason === 'no_roblox'
+      ? 'Roblox is not attached.'
+      : `Detect test failed${result && result.reason ? `: ${result.reason}` : '.'}`;
+    addLog(`[Debug] ${reason}`);
+    return;
+  }
+  // Native Roblox paints over DOM on the Dashboard. Move to Settings before
+  // showing the result, just like Image Manager does, while the backend test
+  // itself remains a read-only window capture.
+  if (currentScreen === 'dashboard') switchScreen('settings');
+  renderDetectTestResult(result);
+  const modal = document.getElementById('detect-test-modal');
+  if (modal) modal.style.display = 'flex';
 }
 
 function toggleDetectAdvanced(id) {
@@ -5709,7 +5859,7 @@ const IMAGE_DESCRIPTIONS = {
   chal_select: "The Challenge mode select button.",
   challenge: "The Challenge card on the Play menu.",
   challenge_loaded: "Confirms the Challenge screen finished loading.",
-  click_anywhere_to_close: "The 'Click anywhere to close' popup (e.g. a Raid boss cutscene).",
+  click_anywhere_to_close: "The Spirit City Act 3 Raid popup. Click-text, sword, Lvl 1, and 8th Sword image variants are all fallback signals for dismissing it.",
   confirm: "The Confirm button -- e.g. confirming a Team Loadout.",
   continue_2: "The smaller second 'Continue' button in Expedition wave transitions.",
   defeat: "The Defeat result screen -- how the macro knows a run was lost.",

@@ -211,6 +211,152 @@ def test_remove_block_still_works_one_at_a_time(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# filterSettings: matching a panel title must not hide its controls
+# ---------------------------------------------------------------------------
+
+def test_settings_search_panel_title_keeps_all_rows_visible(tmp_path):
+    out = run_js("""
+        function classList() {
+          const names = new Set();
+          return {
+            toggle(name, on) { if (on) names.add(name); else names.delete(name); },
+            has(name) { return names.has(name); }
+          };
+        }
+        const rows = [
+          { textContent: 'Story Card fallback click', classList: classList() },
+          { textContent: 'Story Stage Rows row height', classList: classList() },
+        ];
+        const panel = {
+          classList: classList(),
+          querySelector(sel) {
+            return sel === '.rp-panel-head' ? { textContent: 'Control Macro Coordinates' } : null;
+          },
+          querySelectorAll(sel) { return sel === '.setting-row' ? rows : []; },
+          cloneNode() {
+            return {
+              textContent: '',
+              querySelector(sel) {
+                return sel === '.rp-panel-head' ? { remove() {} } : null;
+              },
+              querySelectorAll() { return []; },
+            };
+          },
+        };
+        const category = {
+          dataset: { cat: 'debug' }, style: {}, classList: classList(),
+          querySelectorAll(sel) { return sel === '.rp-panel' ? [panel] : []; },
+        };
+        const buttons = [
+          { dataset: { cat: 'all' }, classList: classList() },
+          { dataset: { cat: 'debug' }, classList: classList() },
+        ];
+        const document = {
+          querySelectorAll(sel) {
+            if (sel === '.settings-cat-btn') return buttons;
+            if (sel === '.settings-category') return [category];
+            return [];
+          },
+        };
+        eval(extract('filterSettings'));
+        filterSettings('Macro Coordinates');
+        console.log(JSON.stringify({
+          rowsHidden: rows.map(row => row.classList.has('search-hidden')),
+          panelHidden: panel.classList.has('search-hidden'),
+        }));
+    """, tmp_path)
+    assert out == {"rowsHidden": [False, False], "panelHidden": False}
+
+
+# ---------------------------------------------------------------------------
+# filterSettings: panel-owned content outside .setting-row stays searchable
+# ---------------------------------------------------------------------------
+
+def test_settings_search_non_row_panel_content_keeps_controls_visible(tmp_path):
+    out = run_js("""
+        function classList() {
+          const names = new Set();
+          return {
+            toggle(name, on) { if (on) names.add(name); else names.delete(name); },
+            has(name) { return names.has(name); }
+          };
+        }
+        const rows = [
+          { textContent: 'Silent Mode', classList: classList() },
+        ];
+        const panel = {
+          classList: classList(),
+          querySelector(sel) {
+            return sel === '.rp-panel-head' ? { textContent: 'Webhook' } : null;
+          },
+          querySelectorAll(sel) { return sel === '.setting-row' ? rows : []; },
+          cloneNode() {
+            return {
+              textContent: 'Webhook URL Discord User ID',
+              querySelector(sel) {
+                return sel === '.rp-panel-head' ? { remove() {} } : null;
+              },
+              querySelectorAll() { return []; },
+            };
+          },
+        };
+        const category = {
+          dataset: { cat: 'webhook' }, style: {}, classList: classList(),
+          querySelectorAll(sel) { return sel === '.rp-panel' ? [panel] : []; },
+        };
+        const buttons = [
+          { dataset: { cat: 'all' }, classList: classList() },
+          { dataset: { cat: 'webhook' }, classList: classList() },
+        ];
+        const document = {
+          querySelectorAll(sel) {
+            if (sel === '.settings-cat-btn') return buttons;
+            if (sel === '.settings-category') return [category];
+            return [];
+          },
+        };
+        eval(extract('filterSettings'));
+        filterSettings('Webhook URL');
+        console.log(JSON.stringify({
+          rowsHidden: rows.map(row => row.classList.has('search-hidden')),
+          panelHidden: panel.classList.has('search-hidden'),
+        }));
+    """, tmp_path)
+    assert out == {"rowsHidden": [False], "panelHidden": False}
+
+
+def test_webhook_progress_toggle_is_saved_with_other_webhook_settings(tmp_path):
+    out = run_js("""
+        const calls = [];
+        const elements = {
+          'webhook-url': { value: 'https://discord.com/api/webhooks/123/token' },
+          'webhook-mention-id': { value: '456' },
+          'toggle-webhook-enabled': { classList: { contains: () => true } },
+          'toggle-webhook-silent': { classList: { contains: () => false } },
+          'toggle-webhook-progress': { classList: { contains: () => true } },
+        };
+        const document = { getElementById: id => elements[id] };
+        const pywebview = { api: {
+          save_webhook_settings: async (...args) => calls.push(args),
+        }};
+        function updateWebhookValidity() {}
+        function setWebhookStatus() {}
+        eval(extract('saveWebhookSettings'));
+        (async () => {
+          await saveWebhookSettings(true);
+          console.log(JSON.stringify(calls));
+        })();
+    """, tmp_path)
+    assert out == [[
+        "https://discord.com/api/webhooks/123/token",
+        True,
+        False,
+        "456",
+        True,
+    ]]
+
+
+# ---------------------------------------------------------------------------
 # importTasks: bundled templates must actually be restored
 # ---------------------------------------------------------------------------
 # exportTasks bundles every template its tasks reference so a shared queue does
@@ -1137,6 +1283,7 @@ def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
     };
     global.document = { getElementById: id => mockElements[id] || null };
 
+    eval(extract('renderStoryMapSetupWarning'));
     eval(extract('renderChallengeScreen'));
     renderChallengeScreen();
 
@@ -1150,6 +1297,30 @@ def test_challenge_card_summarizes_daily_and_regular_state(tmp_path):
         "summary": "Enabled",
         "details": "Daily: Complete | Regular: #1 0/10, #2 1/10, #3 10/10",
     }
+
+
+def test_story_map_setup_warning_lists_missing_and_invalid_maps(tmp_path):
+    body = """
+    global.escapeHtml = value => String(value);
+    const warning = { innerHTML: '', style: { display: 'none' } };
+    global.document = {
+      getElementById: id => id === 'challenge-setup-warning' ? warning : null
+    };
+
+    eval(extract('renderStoryMapSetupWarning'));
+    renderStoryMapSetupWarning('challenge-setup-warning', {
+      setup_ready: false,
+      missing_maps: ['Flower Forest'],
+      invalid_maps: [{ map: "King's Tomb", macro: 'Broken Operation' }]
+    }, 'Auto Challenge');
+
+    console.log(JSON.stringify({ display: warning.style.display, html: warning.innerHTML }));
+    """
+    out = run_js(body, tmp_path)
+    assert out["display"] == ""
+    assert "Auto Challenge needs a saved Macro Operation for every Story map" in out["html"]
+    assert "Assign: Flower Forest" in out["html"]
+    assert "Repair: King's Tomb (Broken Operation)" in out["html"]
 
 
 def test_fuel_card_summarizes_enabled_resources(tmp_path):
@@ -1274,4 +1445,14 @@ def test_auto_shop_resource_card_has_required_controls():
     ):
         assert f'id="{element_id}"' in html
     assert "Numeric quantities repeat on later passes until sold out." in html
+
+
+def test_detect_controls_expose_live_test_button(tmp_path):
+    out = run_js("""
+        function renderDetectImagePick() { return '<image>'; }
+        eval(extract('renderDetectControls'));
+        console.log(JSON.stringify(renderDetectControls({ id: 'd1', advanced: false, image: 'Defense' })));
+    """, tmp_path)
+    assert "testDetect('d1'" in out
+    assert 'Test now' in out
 

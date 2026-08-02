@@ -140,7 +140,7 @@ def test_retries_teams_click_until_loadout_list_is_visually_open(monkeypatch):
         raise AssertionError(f"unexpected image: {name}")
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.ocr_windows, "is_available", lambda: False)
     monkeypatch.setattr(
@@ -157,6 +157,35 @@ def test_retries_teams_click_until_loadout_list_is_visually_open(monkeypatch):
     )
 
 
+def test_manual_teams_click_point_replaces_detected_match_center(monkeypatch):
+    runner = _runner()
+    runner._coords.update({"team_button_x": 438, "team_button_y": 570})
+    stop = threading.Event()
+    team_match = {"cx": 100, "cy": 100, "score": 0.95}
+    open_match = {"cx": 275, "cy": 185, "score": 0.91}
+    confirm_match = {"cx": 483, "cy": 416, "score": 0.98}
+    include_match = {"cx": 456, "cy": 436, "score": 0.99}
+    clicked_matches = []
+
+    def wait_for_image(_hwnd, name, **_kwargs):
+        return {
+            "team_loadout_open": open_match,
+            "confirm": confirm_match,
+            "include": include_match,
+        }[name]
+
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
+    monkeypatch.setattr(
+        runner_module.vision, "click_match",
+        lambda _mouse, _hwnd, match: clicked_matches.append(match),
+    )
+
+    assert runner._apply_team_loadout_panel(123, stop, team_match, 1, "include") is True
+    assert clicked_matches[0] == {"cx": 438, "cy": 570}
+    assert clicked_matches[0] != team_match
+
+
 def test_confirm_failure_saves_the_screen_that_detection_could_not_read(monkeypatch):
     runner = _runner()
     stop = threading.Event()
@@ -169,7 +198,7 @@ def test_confirm_failure_saves_the_screen_that_detection_could_not_read(monkeypa
 
     monkeypatch.setattr(runner_module, "TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS", 1)
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(
@@ -223,7 +252,7 @@ def test_windows_ocr_confirms_current_unit_teams_title_without_lowering_threshol
         }[name]
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(
@@ -285,7 +314,7 @@ def test_generic_ocr_text_confirms_when_loose_match_is_enabled(monkeypatch):
         }[name]
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(
@@ -320,7 +349,7 @@ def test_equipment_failure_saves_screen_and_fails_instead_of_silently_continuing
         raise AssertionError(f"unexpected image: {name}")
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(
@@ -353,7 +382,7 @@ def test_scrolled_loadouts_use_wheel_over_scrollbar_and_click_visible_button_cen
         }[name]
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
 
@@ -398,7 +427,7 @@ def test_live_button_detection_is_scaled_to_undocked_window(monkeypatch):
         }[name]
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (10, 20, 1194, 856))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (26, 50, 1178, 806))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(runner_module.vision, "capture_game_bgr", lambda _hwnd: frame)
@@ -406,5 +435,6 @@ def test_live_button_detection_is_scaled_to_undocked_window(monkeypatch):
     assert runner._apply_team_loadout_panel(
         123, stop, team_match, 8, "include") is True
 
-    # (836, 542) in 1152x756 reference space, scaled into a 1184x836 window.
-    runner._mouse.click.assert_called_once_with(869, 619)
+    # (836, 542) in 1152x756 reference space, scaled into the client area;
+    # the outer title bar/border must not be part of the click geometry.
+    runner._mouse.click.assert_called_once_with(862, 592)

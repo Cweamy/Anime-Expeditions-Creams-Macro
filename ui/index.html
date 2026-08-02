@@ -771,6 +771,8 @@
             </summary>
             <div class="resource-card-body">
 
+          <div id="challenge-setup-warning" class="resource-setup-warning" style="display: none;"></div>
+
           <div class="setting-row" style="padding: 10px 0;">
             <div>
               <div class="setting-label">Story Map Setup</div>
@@ -841,12 +843,30 @@
             </summary>
             <div class="resource-card-body">
 
+          <div id="bounty-setup-warning" class="resource-setup-warning" style="display: none;"></div>
+
           <div class="setting-row" style="padding: 10px 0;">
             <div>
               <div class="setting-label">Enable Auto Bounty</div>
               <div class="setting-desc">Checks the Event Bounty Board before Challenge and runs supported Clear Wave or Hard objectives.</div>
             </div>
             <button id="toggle-bounty-enabled" class="toggle-switch" onclick="toggleBountyEnabled(this)"></button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Auto Mythic Bounty</div>
+              <div class="setting-desc">Rerolls each eligible card until its card title verifies as Mythic.</div>
+            </div>
+            <button id="toggle-bounty-mythic" class="toggle-switch" onclick="toggleBountyMythic(this)"></button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Mythic Reroll Safety Limit</div>
+              <div class="setting-desc">Maximum rerolls for one card before Auto Bounty leaves it unclaimed. Allowed range: 1–100.</div>
+            </div>
+            <input id="bounty-mythic-max-rerolls" class="block-input" style="width: 64px;" type="number" min="1" max="100" value="20" onchange="setBountyMythicMaxRerolls(this.value)">
           </div>
 
           <div class="setting-row" style="padding: 10px 0;">
@@ -1180,6 +1200,13 @@
                 <div class="setting-desc">No notification ping.</div>
               </div>
               <button id="toggle-webhook-silent" class="toggle-switch" onclick="toggleWebhookField('silent', this)"></button>
+            </div>
+            <div class="setting-row" style="border-bottom: none;">
+              <div>
+                <div class="setting-label">Progress Updates</div>
+                <div class="setting-desc">Send task and challenge start/finish notifications.</div>
+              </div>
+              <button id="toggle-webhook-progress" class="toggle-switch" onclick="toggleWebhookField('progress', this)"></button>
             </div>
           </div>
         </section>
@@ -1802,6 +1829,19 @@
 
           <div class="setting-row" style="padding: 14px;">
             <div>
+              <div class="setting-label">Teams Button Click</div>
+              <div class="setting-desc">Optional manual point inside the Teams button. Pick the lower/inner part if the image-match center misses; Auto uses the detected image center.</div>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <input id="coord-team_button_x" class="block-input" style="width: 56px;" type="number" placeholder="Auto" onchange="setMacroCoord('team_button_x', this.value)">
+              <input id="coord-team_button_y" class="block-input" style="width: 56px;" type="number" placeholder="Auto" onchange="setMacroCoord('team_button_y', this.value)">
+              <button onclick="openCoordPicker('team_button')" class="text-xs font-semibold px-2 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);" title="Capture the Roblox screen and pick a point inside the Teams button">Pick</button>
+              <button onclick="clearMacroCoord('team_button')" class="text-xs font-semibold px-2 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);" title="Use the detected Teams image center again">Auto</button>
+            </div>
+          </div>
+
+          <div class="setting-row" style="padding: 14px;">
+            <div>
               <div class="setting-label">Neutral Clicks</div>
               <div class="setting-desc">Middle: dismisses popups. Corner: closes the unit info panel.</div>
             </div>
@@ -2034,7 +2074,6 @@
       </div>
       <div class="modal-body">
         <div class="wh-hint" style="margin-bottom: 8px;">Assign the Macro Operation Auto Bounty should run for each Story destination.</div>
-        <div id="bounty-setup-warning" class="bounty-setup-warning" style="display: none;"></div>
         <div id="bounty-map-list" style="max-height: 60vh; overflow-y: auto;"></div>
       </div>
     </div>
@@ -2263,6 +2302,28 @@
           </div>
         </div>
 
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Detect test modal ============
+       Shows one full Roblox-window frame plus the exact Detect verdict and
+       scores, without running either nested branch or changing the macro. -->
+  <div id="detect-test-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) closeDetectTest()">
+    <div class="modal-panel detect-test-panel">
+      <div class="modal-head">
+        <span class="modal-title">Test Detect</span>
+        <span class="modal-close" onclick="closeDetectTest()">&times;</span>
+      </div>
+      <div class="modal-body detect-test-body">
+        <div id="detect-test-status" class="detect-test-status missed">Waiting for test...</div>
+        <div id="detect-test-meta" class="detect-test-meta"></div>
+        <div class="detect-test-layout">
+          <div class="detect-test-preview-wrap">
+            <img id="detect-test-image" class="detect-test-image" alt="Detect test capture">
+          </div>
+          <div id="detect-test-details" class="detect-test-details"></div>
+        </div>
       </div>
     </div>
   </div>

@@ -276,7 +276,10 @@ extract_confirm.png
 click_anywhere_to_close/
   Optional, checked every poll tick during battle ONLY on Spirit City Act
   3 (Raid) -- a boss/cutscene intro popup, clicked if found. Its folder
-  holds every visual variant seen in practice, all tried per search.
+  holds every visual variant seen in practice, all tried per search. Besides
+  the click-text crops, the folder includes fallback crops of the cutscene's
+  sword, Lvl 1 strip, and 8th Sword title; any of those signals dismisses
+  the same popup. Every file in this folder appears as a manager variant.
 
 upgradeable.png / not_upgradeable.png
   Used by Battle-phase Upgrade Unit blocks (core.runner._run_upgrade_unit_tick).

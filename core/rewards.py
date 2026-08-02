@@ -24,6 +24,7 @@ import cv2
 
 from core.ocr import capture_region  # noqa: F401 -- re-exported for main.Api.read_rewards
 from core import constants
+from core import image_io
 
 # Reference icon art scraped from the game's wiki (see tools/fetch_item_icons.py) --
 # transparent-background PNGs named after the item, one per known reward.
@@ -222,7 +223,7 @@ def _load_icon_histograms() -> dict:
             name, ext = os.path.splitext(fname)
             if ext.lower() != ".png":
                 continue
-            img = cv2.imread(os.path.join(_ICON_DIR, fname), cv2.IMREAD_UNCHANGED)
+            img = image_io.read_image(os.path.join(_ICON_DIR, fname), cv2.IMREAD_UNCHANGED)
             if img is None or img.ndim != 3 or img.shape[2] != 4:
                 continue
             alpha_mask = (img[:, :, 3] > 200).astype(np.uint8) * 255

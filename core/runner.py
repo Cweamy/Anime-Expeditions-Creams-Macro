@@ -172,6 +172,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             _raw_set_status(**kw)
 
         self._set_status = _tracking_set_status
+        # Used only by opt-in progress notifications to describe what a
+        # Challenge will resume after it finishes.
+        self._active_task_progress = None
         # (result: "win"|"loss", map_name, duration_str) -> persists to run
         # history / win-loss counters (see main.Api._record_match_result).
         self._record_result = record_result or (lambda *a, **kw: None)
@@ -215,6 +218,14 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._loose_team_ocr_match = False
         self._current_hwnd = None       # set at the top of _run
         self._hwnd_getter = None        # set at the top of _run -- lets _attempt_rejoin find a re-docked hwnd
+        # A deep-link launch is handed to Roblox/Bloxstrap, so there is no
+        # process handle for the runner to wait on or cancel. Keep the launch
+        # section serialized anyway: a manual Force Rejoin or another recovery
+        # path must never start a second launcher while the first one is still
+        # waiting on Roblox's single-instance handoff.
+        self._rejoin_lock = threading.Lock()
+        self._rejoin_pending = False
+        self._left_stage_this_run = False
         # Placed-unit screen positions from THIS match's Pre Start (see
         # _run_place_unit_block), keyed by the unit's #ordinal among place_unit
         # blocks (same numbering ui/app.js's listPlacedUnits() uses for the
@@ -259,6 +270,38 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def is_rejoin_pending(self) -> bool:
+        """Whether this runner already handed a deep link to Roblox/Bloxstrap.
+
+        The dock watchdog has its own relaunch path. It must not start a second
+        link while this runner is still waiting on the first handoff, even if
+        Roblox temporarily has no discoverable window.
+        """
+        return self._rejoin_pending or self._rejoin_lock.locked()
+
+    def claim_rejoin_launch(self) -> bool:
+        """Reserve the single rejoin handoff for the dock watchdog.
+
+        The watchdog cannot wait inside ``_attempt_rejoin`` because it also
+        owns the loop that docks newly-created Roblox windows. It can claim
+        the same pending state before launching, though, so the runner and
+        watchdog cannot both open the deep link during a recovery race.
+        """
+        if not self._rejoin_lock.acquire(blocking=False):
+            return False
+        try:
+            if self._rejoin_pending:
+                return False
+            self._rejoin_pending = True
+            return True
+        finally:
+            self._rejoin_lock.release()
+
+    def cancel_rejoin_launch(self) -> None:
+        """Release a watchdog claim when its deep-link launch fails."""
+        with self._rejoin_lock:
+            self._rejoin_pending = False
 
     def is_paused(self) -> bool:
         return self._pause_event.is_set()
@@ -702,6 +745,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._coords = coords
         default_walk_paths = default_walk_paths or {}
         webhook = webhook or {}
+        self._active_task_progress = None
 
         hwnd = hwnd_getter()
         if not hwnd or not wm.is_window(hwnd):
@@ -907,6 +951,29 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         map_name = task.get("map")
         mode = task.get("mode") or "story"
         repeat_total = max(1, int(task.get("repeat") or 1))
+        progress_task = dict(task)
+        progress_task["map"] = map_name or mode.title()
+        self._active_task_progress = {
+            "index": task_index,
+            "count": task_count,
+            "map": progress_task["map"],
+            "next_repeat": 1,
+            "repeat_total": repeat_total,
+        }
+        task_started_at = time.monotonic()
+        self._send_progress_webhook(
+            webhook,
+            progress_task,
+            f"Task {task_index}/{task_count} Started",
+            f'Starting **{progress_task["map"]}** x{repeat_total}.',
+            0x5865F2,
+            extra_fields=[
+                {"name": "Mode", "value": mode.title(), "inline": True},
+                {"name": "Repeats", "value": str(repeat_total), "inline": True},
+            ],
+            current_action=f"Task {task_index}/{task_count} -- starting",
+            next_phase=f"Enter stage, then Pre Start (repeat 1/{repeat_total})",
+        )
 
         for recovery_attempt in range(1, TASK_RECOVERY_ATTEMPTS + 1):
             if self._checkpoint(stop_event):
@@ -970,6 +1037,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             # silently skipped resuming a task after a Challenge interleave).
             fresh_entry = True
             for repeat_index in range(1, repeat_total + 1):
+                self._active_task_progress["next_repeat"] = repeat_index
                 self._set_status(current_repeat=f"{repeat_index} / {repeat_total}")
                 battle_started = time.time()
                 result = self._play_one_match(hwnd, stop_event, task, default_walk_paths,
@@ -1122,6 +1190,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     continue
 
                 if challenge_wants_in:
+                    self._active_task_progress["next_repeat"] = repeat_index + 1
                     self._log(f'[Macro] Challenge stage ready -- pausing "{map_name}" to run it '
                                f'before continuing.')
                     self._run_challenges(hwnd, stop_event, coords, default_walk_paths, webhook)
@@ -1282,6 +1351,20 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                         break
 
             if not task_failed:
+                elapsed = self._format_duration(time.monotonic() - task_started_at)
+                self._send_progress_webhook(
+                    webhook,
+                    progress_task,
+                    f"Task {task_index}/{task_count} Finished",
+                    f'Task **{progress_task["map"]}** completed all {repeat_total} repeat(s).',
+                    0x3FBF6F,
+                    extra_fields=[
+                        {"name": "Status", "value": "Completed", "inline": True},
+                        {"name": "Elapsed", "value": elapsed, "inline": True},
+                    ],
+                    current_action=f"Task {task_index}/{task_count} -- completed",
+                    next_phase=self._next_task_progress(task_index, task_count),
+                )
                 return True  # finished every repeat cleanly
 
             self._log(f'[Macro] Task {task_index}/{task_count} hit a problem mid-run -- recovering to the lobby.')
@@ -2402,6 +2485,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # this click was early or dropped, every later action landed against
         # the wrong screen. Verify the destination's own title and retry THIS
         # click before touching any loadout row.
+        manual_team_click = self._optional_cxy("team_button")
+        if manual_team_click is not None:
+            self._log(f"[Macro] Using manual Teams click point ({manual_team_click[0]}, "
+                       f"{manual_team_click[1]}).")
         loadout_open = None
         for attempt in range(1, TEAM_LOADOUT_OPEN_RETRY_ATTEMPTS + 1):
             if self._checkpoint(stop_event):
@@ -2409,7 +2496,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             if attempt > 1:
                 self._log(f'[Macro] Load Team list did not open -- retrying the Teams button '
                            f'(attempt {attempt}/{TEAM_LOADOUT_OPEN_RETRY_ATTEMPTS}).')
-            vision.click_match(self._mouse, hwnd, team_match)
+            if manual_team_click is None:
+                vision.click_match(self._mouse, hwnd, team_match)
+            else:
+                vision.click_match(self._mouse, hwnd, {
+                    "cx": manual_team_click[0], "cy": manual_team_click[1],
+                })
             self._log("[Macro] Clicked Teams -- waiting for the Load Team list.")
             try:
                 loadout_open = vision.wait_for_image(
@@ -2459,7 +2551,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if self._checkpoint(stop_event):
             return False
 
-        left, top, _, _ = wm.get_window_rect_screen(hwnd)
         row1_x, row1_y = self._cxy("team_loadout")  # Loadout 1's row (Settings > Debug > Macro Coordinates)
         row_x = row1_x + TEAM_LOADOUT_BUTTON_CENTER_X_OFFSET
         if team_num > 3:
@@ -2470,8 +2561,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             # over the real scrollbar and send ordinary wheel notches
             # instead. Each notch shifts the rows by a stable 100px.
             scroll_steps = min(team_num, TEAM_LOADOUT_WHEEL_MAX_STEPS)
-            hover_x = left + TEAM_LOADOUT_SCROLLBAR_HOVER[0]
-            hover_y = top + TEAM_LOADOUT_SCROLLBAR_HOVER[1]
+            hover_x, hover_y = vision.ref_to_screen(hwnd, *TEAM_LOADOUT_SCROLLBAR_HOVER)
             self._mouse.move_to(hover_x, hover_y)
             time.sleep(TEAM_LOADOUT_SCROLL_HOVER_SETTLE)
             self._mouse.nudge()
@@ -2604,10 +2694,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._handle_disconnect(hwnd, stop_event, webhook, task)
             return False
         if result == "timeout" and not stop_event.is_set():
+            screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "teleport_timeout")
+            suffix = f" Debug: {screenshot_path}" if screenshot_path else ""
             self._log(f'[Macro] "nav_unitmanager" not found within {timeout:.0f}s -- never teleported '
                        f'in-game (or the Unit Manager button isn\'t matching your setup -- if you\'re '
                        f'visibly in the match, add your own crop of it via Settings > General > '
-                       f'Image Manager). Stopping.')
+                       f'Image Manager). Stopping.{suffix}')
         return False
 
     def _wait_for_teleport_result(self, hwnd, stop_event: threading.Event, timeout: float) -> str:
@@ -2689,7 +2781,66 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         except Exception as exc:
             self._log(f'[Macro] "{title}" webhook send failed: {exc}')
 
+    @staticmethod
+    def _next_task_progress(task_index: int, task_count: int) -> str:
+        if task_index < task_count:
+            next_task = f"Task {task_index + 1}/{task_count}"
+        else:
+            next_task = f"Task 1/{task_count} on the next queue pass"
+        return f"Auto resource checks, then {next_task}"
+
+    def _next_challenge_progress(self) -> str:
+        active = getattr(self, "_active_task_progress", None)
+        next_step = "Check for another ready Challenge stage"
+        if not active:
+            return f"{next_step}, then Task queue"
+        repeat = active.get("next_repeat")
+        total = active.get("repeat_total")
+        repeat_text = f" (repeat {repeat}/{total})" if repeat and total else ""
+        return f"{next_step}, then Resume Task {active['index']}/{active['count']}{repeat_text}"
+
+    def _send_progress_webhook(self, webhook: dict, task: dict, title: str, description: str,
+                               color: int, extra_fields: list = None,
+                               current_action: str = None, next_phase: str = None) -> None:
+        """Send an optional task/challenge lifecycle notification.
+
+        Progress is deliberately separate from the existing event alerts:
+        users who only want result/failure messages keep the old behavior,
+        while the opt-in setting can report queue movement as it happens.
+        """
+        if not (webhook or {}).get("enabled") or not (webhook or {}).get("progress"):
+            return
+        fields = []
+        if current_action:
+            fields.append({"name": "Current", "value": current_action, "inline": False})
+        if next_phase:
+            fields.append({"name": "Next", "value": next_phase, "inline": False})
+        if extra_fields:
+            fields.extend(extra_fields)
+        self._send_event_webhook(
+            webhook, task, title, description, color,
+            extra_fields=fields or None)
+
     def _attempt_rejoin(self, hwnd, stop_event: threading.Event) -> bool:
+        """Serialize Roblox deep-link rejoin attempts.
+
+        Roblox/Bloxstrap owns the actual launcher process and may still be
+        waiting on a single-instance handoff after this method times out. A
+        non-blocking lock prevents a concurrent caller from launching another
+        link, while a pending flag makes later recovery passes poll the
+        existing handoff instead of launching another link.
+        """
+        if stop_event.is_set():
+            return False
+        if not self._rejoin_lock.acquire(blocking=False):
+            self._log("[Macro] A Roblox rejoin is already in progress -- not launching another instance.")
+            return False
+        try:
+            return self._attempt_rejoin_locked(hwnd, stop_event)
+        finally:
+            self._rejoin_lock.release()
+
+    def _attempt_rejoin_locked(self, hwnd, stop_event: threading.Event) -> bool:
         """Launches the Roblox deep link and waits for the lobby (nav_play)
         to come back, polling self._hwnd_getter() rather than trusting the
         original hwnd -- if Roblox had fully closed, the deep link spawns a
@@ -2698,50 +2849,60 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         instead of continuing to poll a dead window handle. Updates
         self._current_hwnd on success. Returns whether the lobby was
         actually reached again."""
-        # A deep-link launch invokes Roblox's OWN single-instance handling,
-        # which force-closes every OTHER open Roblox window down to just
-        # the newly launched one -- fine (even desired) on a single-
-        # instance setup, but it was silently taking out someone's other
-        # accounts/windows on a multi-instance one, which is a much worse
-        # outcome than just failing this one rejoin attempt. Only attempt
-        # it when there's nothing else around it could take down (the
-        # window that actually disconnected doesn't count here -- it's
-        # still docked/hidden at this point, not a standalone window
-        # list_roblox_windows would even see).
-        try:
-            other_windows = wm.list_roblox_windows()
-        except Exception:
-            other_windows = []
-        # In cutout mode (e.g. use_wgc_capture) our OWN Roblox stays a
-        # top-level window, so it shows up in list_roblox_windows and this
-        # guard tripped on our own game -- a rejoin would then never fire.
-        # Exclude the window we're farming (list_roblox_windows returns dicts)
-        # so only GENUINELY other Roblox windows (alt accounts) block a rejoin.
-        # Harmless in the normal child-reparent dock, where our own window
-        # isn't top-level and wouldn't be listed here anyway.
-        try:
-            _cur = self._hwnd_getter() if self._hwnd_getter else hwnd
-        except Exception:
-            _cur = hwnd
-        other_windows = [w for w in other_windows
-                         if (w.get("hwnd") if isinstance(w, dict) else w) not in (hwnd, _cur)]
-        if other_windows:
-            self._log("[Macro] Not attempting a deep-link rejoin -- other Roblox windows are open and it "
-                       "would close them. Stopping instead.")
-            return False
+        if self._rejoin_pending:
+            # The previous call already handed the link to Roblox/Bloxstrap.
+            # Its launcher can remain alive after our timeout, so keep polling
+            # the same handoff instead of opening a second link/instance.
+            self._set_status(action="Rejoin pending -- waiting for the lobby...")
+            self._log("[Macro] A Roblox rejoin is already pending -- waiting on the existing launch "
+                      "instead of opening another instance.")
+        else:
+            # A deep-link launch invokes Roblox's OWN single-instance handling,
+            # which force-closes every OTHER open Roblox window down to just
+            # the newly launched one -- fine (even desired) on a single-
+            # instance setup, but it was silently taking out someone's other
+            # accounts/windows on a multi-instance one, which is a much worse
+            # outcome than just failing this one rejoin attempt. Only attempt
+            # it when there's nothing else around it could take down (the
+            # window that actually disconnected doesn't count here -- it's
+            # still docked/hidden at this point, not a standalone window
+            # list_roblox_windows would even see).
+            try:
+                other_windows = wm.list_roblox_windows()
+            except Exception:
+                other_windows = []
+            # In cutout mode (e.g. use_wgc_capture) our OWN Roblox stays a
+            # top-level window, so it shows up in list_roblox_windows and this
+            # guard tripped on our own game -- a rejoin would then never fire.
+            # Exclude the window we're farming (list_roblox_windows returns dicts)
+            # so only GENUINELY other Roblox windows (alt accounts) block a rejoin.
+            # Harmless in the normal child-reparent dock, where our own window
+            # isn't top-level and wouldn't be listed here anyway.
+            try:
+                _cur = self._hwnd_getter() if self._hwnd_getter else hwnd
+            except Exception:
+                _cur = hwnd
+            other_windows = [w for w in other_windows
+                             if (w.get("hwnd") if isinstance(w, dict) else w) not in (hwnd, _cur)]
+            if other_windows:
+                self._log("[Macro] Not attempting a deep-link rejoin -- other Roblox windows are open and it "
+                           "would close them. Continuing without launching another instance.")
+                return False
 
-        self._set_status(action="Disconnected -- rejoining...")
-        # A rejoin creates a fresh game session; the previous team's visual
-        # state cannot be assumed to survive it.
-        self._last_applied_team_loadout = None
-        try:
-            _open_deep_link(REJOIN_DEEPLINK)
-        except (OSError, webbrowser.Error) as exc:
-            self._log(f"[Macro] Couldn't launch the rejoin link: {exc}")
-            return False
-        self._log("[Macro] Rejoin link launched -- waiting for the game to load back in...")
+            self._set_status(action="Disconnected -- rejoining...")
+            # A rejoin creates a fresh game session; the previous team's visual
+            # state cannot be assumed to survive it.
+            self._last_applied_team_loadout = None
+            try:
+                _open_deep_link(REJOIN_DEEPLINK)
+            except (OSError, webbrowser.Error) as exc:
+                self._log(f"[Macro] Couldn't launch the rejoin link: {exc}")
+                return False
+            self._rejoin_pending = True
+            self._log("[Macro] Rejoin link launched -- waiting for the game to load back in...")
 
         deadline = time.time() + REJOIN_TIMEOUT
+        last_hwnd = hwnd
         while time.time() < deadline:
             if stop_event.is_set():
                 return False
@@ -2749,6 +2910,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             current_hwnd = self._hwnd_getter() if self._hwnd_getter else hwnd
             if not current_hwnd or not wm.is_window(current_hwnd):
                 continue
+            last_hwnd = current_hwnd
             try:
                 match, _ = vision.find_image_any(current_hwnd, NAV_PLAY_IMAGE_NAMES)
             except vision.TemplateNotFound:
@@ -2756,8 +2918,13 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             if match is not None:
                 self._log("[Macro] Rejoined -- back on the lobby.")
                 self._current_hwnd = current_hwnd
+                self._rejoin_pending = False
                 return True
-        self._log(f"[Macro] Rejoin didn't reach the lobby within {REJOIN_TIMEOUT:.0f}s -- giving up.")
+        screenshot_path = self._save_debug_screenshot_unconditional(last_hwnd, "rejoin_timeout")
+        suffix = f" Debug: {screenshot_path}" if screenshot_path else ""
+        self._set_status(action="Rejoin pending -- still waiting for the lobby...")
+        self._log(f"[Macro] Rejoin didn't reach the lobby within {REJOIN_TIMEOUT:.0f}s -- keeping the "
+                  f"existing launch pending; no second deep link will be opened.{suffix}")
         return False
 
     def _click_start_and_wait_teleport(self, hwnd, stop_event: threading.Event, webhook: dict = None,
@@ -3195,6 +3362,17 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._log('[Macro] No Start Game button found -- Auto Vote Start is likely on, letting it '
                    "auto-start the round instead of disabling it.")
         return True
+
+    def _optional_cxy(self, prefix: str):
+        """Return an optional coordinate override, or ``None`` for Auto."""
+        x = self._coords.get(f"{prefix}_x")
+        y = self._coords.get(f"{prefix}_y")
+        if x in (None, "") or y in (None, ""):
+            return None
+        try:
+            return int(x), int(y)
+        except (TypeError, ValueError):
+            return None
 
     def _cxy(self, prefix: str) -> tuple:
         """(x, y) for a Macro Coordinates point -- self._coords holds the
