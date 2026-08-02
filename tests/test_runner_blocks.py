@@ -142,13 +142,49 @@ def _record_capture(white_at=None):
     return capture_window, seen
 
 
+def _patch_place_capture(monkeypatch, capture):
+    """Keep placement geometry tests deterministic on either platform."""
+    monkeypatch.setattr("core.runner_blocks.vision.capture_window_region_bgr", capture)
+    monkeypatch.setattr(
+        "core.ocr.capture_region",
+        lambda left, top, width, height: capture(123, (left, top, width, height)),
+    )
+
+
+def test_mac_scan_uses_screen_capture_for_transient_placement_highlight(monkeypatch):
+    """macOS's window image can omit Roblox's cursor-driven placement glow."""
+    import numpy as np
+    from core import ocr, runner_blocks
+
+    calls = []
+
+    def capture_screen(left, top, width, height):
+        calls.append((left, top, width, height))
+        patch = np.zeros((height, width, 3), np.uint8)
+        patch[height // 2, width // 2] = (255, 255, 255)
+        return patch
+
+    monkeypatch.setattr(runner_blocks.sys, "platform", "darwin")
+    monkeypatch.setattr(ocr, "capture_region", capture_screen)
+    monkeypatch.setattr(
+        runner_blocks.vision,
+        "capture_window_region_bgr",
+        lambda *_args: pytest.fail("macOS placement scans must use the composed screen capture"),
+    )
+
+    result = _ScanRunner()._scan_place_search_box(123, 100, 200, 400, 400)
+
+    assert result == (0, 0)
+    assert calls == [(481, 581, 38, 38)]
+
+
 @pytest.mark.parametrize("spot", [
     (5, 400), (400, 3), (1149, 400), (400, 753), (2, 2), (1150, 754), (576, 378),
 ])
 def test_scan_box_never_reads_outside_the_window(spot, monkeypatch):
     from core.config import FIXED_WIN_H, FIXED_WIN_W
     capture, seen = _record_capture()
-    monkeypatch.setattr("core.runner_blocks.vision.capture_window_region_bgr", capture)
+    _patch_place_capture(monkeypatch, capture)
 
     _ScanRunner()._scan_place_search_box(123, 0, 0, *spot)
 
@@ -161,7 +197,7 @@ def test_scan_box_does_not_accept_a_white_pixel_outside_the_window(monkeypatch):
     # x=5 used to capture x=-14..24; a white pixel at x=-6 is the macro's own
     # panel, and was returned as a placement tile at offset (-11, 0).
     capture, _ = _record_capture(white_at=(-6, 400))
-    monkeypatch.setattr("core.runner_blocks.vision.capture_window_region_bgr", capture)
+    _patch_place_capture(monkeypatch, capture)
     assert _ScanRunner()._scan_place_search_box(123, 0, 0, 5, 400) is None
 
 
@@ -176,7 +212,7 @@ def test_scan_box_offset_is_measured_from_the_requested_spot(spot, white, expect
     caller asked about -- not the middle of whatever region got captured. Get
     this wrong and every placement near an edge lands somewhere else."""
     capture, _ = _record_capture(white_at=white)
-    monkeypatch.setattr("core.runner_blocks.vision.capture_window_region_bgr", capture)
+    _patch_place_capture(monkeypatch, capture)
     assert _ScanRunner()._scan_place_search_box(123, 0, 0, *spot) == expected
 
 
