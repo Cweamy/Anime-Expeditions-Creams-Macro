@@ -4366,6 +4366,7 @@ const MACRO_COORD_KEYS = [
   'challenge_stage_3_x', 'challenge_stage_3_y',
   'expedition_difficulty_x', 'expedition_difficulty_y',
   'team_loadout_x', 'team_loadout_y', 'team_loadout_row_height',
+  'team_button_x', 'team_button_y',
   'screen_middle_x', 'screen_middle_y',
   'unit_info_reset_x', 'unit_info_reset_y',
 ];
@@ -4383,6 +4384,19 @@ async function setMacroCoord(key, value) {
   const n = parseInt(value);
   if (Number.isNaN(n)) return;
   try { await pywebview.api.set_macro_coord(key, n); } catch (e) {}
+}
+
+async function clearMacroCoord(prefix) {
+  try {
+    const result = await pywebview.api.clear_macro_coord(prefix);
+    if (result && result.ok) {
+      for (const suffix of ['_x', '_y']) {
+        const el = document.getElementById(`coord-${prefix}${suffix}`);
+        if (el) el.value = '';
+      }
+      addLog(`[Debug] ${prefix} coordinate override cleared -- using Auto.`);
+    }
+  } catch (e) {}
 }
 
 // Several coordinate keys in one atomic write (see set_macro_coords) -- the

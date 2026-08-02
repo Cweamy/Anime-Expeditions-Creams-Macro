@@ -2442,6 +2442,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # this click was early or dropped, every later action landed against
         # the wrong screen. Verify the destination's own title and retry THIS
         # click before touching any loadout row.
+        manual_team_click = self._optional_cxy("team_button")
+        if manual_team_click is not None:
+            self._log(f"[Macro] Using manual Teams click point ({manual_team_click[0]}, "
+                       f"{manual_team_click[1]}).")
         loadout_open = None
         for attempt in range(1, TEAM_LOADOUT_OPEN_RETRY_ATTEMPTS + 1):
             if self._checkpoint(stop_event):
@@ -2449,7 +2453,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             if attempt > 1:
                 self._log(f'[Macro] Load Team list did not open -- retrying the Teams button '
                            f'(attempt {attempt}/{TEAM_LOADOUT_OPEN_RETRY_ATTEMPTS}).')
-            vision.click_match(self._mouse, hwnd, team_match)
+            if manual_team_click is None:
+                vision.click_match(self._mouse, hwnd, team_match)
+            else:
+                vision.click_match(self._mouse, hwnd, {
+                    "cx": manual_team_click[0], "cy": manual_team_click[1],
+                })
             self._log("[Macro] Clicked Teams -- waiting for the Load Team list.")
             try:
                 loadout_open = vision.wait_for_image(
@@ -3272,6 +3281,17 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._log('[Macro] No Start Game button found -- Auto Vote Start is likely on, letting it '
                    "auto-start the round instead of disabling it.")
         return True
+
+    def _optional_cxy(self, prefix: str):
+        """Return an optional coordinate override, or ``None`` for Auto."""
+        x = self._coords.get(f"{prefix}_x")
+        y = self._coords.get(f"{prefix}_y")
+        if x in (None, "") or y in (None, ""):
+            return None
+        try:
+            return int(x), int(y)
+        except (TypeError, ValueError):
+            return None
 
     def _cxy(self, prefix: str) -> tuple:
         """(x, y) for a Macro Coordinates point -- self._coords holds the

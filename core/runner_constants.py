@@ -581,6 +581,11 @@ DEFAULT_COORDS = {
     "expedition_difficulty_x": EXPEDITION_DIFFICULTY_CLICK[0], "expedition_difficulty_y": EXPEDITION_DIFFICULTY_CLICK[1],
     "team_loadout_x": TEAM_LOADOUT_CLICK_1[0], "team_loadout_y": TEAM_LOADOUT_CLICK_1[1],
     "team_loadout_row_height": TEAM_LOADOUT_ROW_HEIGHT,
+    # Optional manual point inside the Unit Manager's Teams button. None
+    # keeps the normal image-match center click; Settings > Debug can fill
+    # this from a live screenshot when a user's button needs a lower/safer
+    # click point than the matched crop's center.
+    "team_button_x": None, "team_button_y": None,
     "screen_middle_x": SCREEN_MIDDLE_CLICK[0], "screen_middle_y": SCREEN_MIDDLE_CLICK[1],
     "unit_info_reset_x": UNIT_INFO_RESET_CLICK[0], "unit_info_reset_y": UNIT_INFO_RESET_CLICK[1],
     "daily_challenge_tab_x": 250, "daily_challenge_tab_y": 315,
