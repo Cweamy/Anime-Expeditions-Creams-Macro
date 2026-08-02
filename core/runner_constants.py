@@ -250,6 +250,15 @@ BOUNTY_SCROLL_SETTLE = 0.45
 # when the thumb reaches the end or a drag produces no visual movement.
 BOUNTY_MAX_INNER_CARD_PASSES = 4
 BOUNTY_MAX_OBJECTIVES_PER_START = 10
+# Auto Mythic has a safety ceiling so an OCR failure or disabled button cannot
+# turn into an unbounded gold-spend loop. The card is left unclaimed at the
+# ceiling and can be reviewed on a later run.
+BOUNTY_MYTHIC_DEFAULT_REROLLS = 20
+BOUNTY_MYTHIC_MIN_REROLLS = 1
+BOUNTY_MYTHIC_MAX_REROLLS = 100
+BOUNTY_MYTHIC_REROLL_SETTLE = 0.55
+BOUNTY_MYTHIC_REROLL_VERIFY_TIMEOUT = 2.5
+BOUNTY_MYTHIC_REROLL_POLL = 0.25
 BOUNTY_SUMMON_BATCH_SIZE = 50
 BOUNTY_SUMMON_MAX_BATCHES_PER_START = 20
 BOUNTY_SUMMON_NAV_TIMEOUT = 12.0

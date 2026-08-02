@@ -88,6 +88,155 @@ class _Harness(BountyOps):
         return True
 
 
+def test_auto_mythic_rerolls_the_same_card_until_title_is_mythic(monkeypatch):
+    runner = _Harness()
+    frame = np.zeros((756, 1152, 3), dtype=np.uint8)
+    drag = {"card": (250, 180, 200, 230)}
+    button = {
+        "kind": "reroll", "cx": 430, "cy": 380,
+        "card": drag["card"], "detector": "test",
+    }
+    reads = iter(["other", "other", "mythic"])
+    monkeypatch.setattr(
+        runner_bounty.bounty, "read_card_rarity",
+        lambda *_args, **_kwargs: next(reads))
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_reroll_buttons",
+        lambda *_args, **_kwargs: [button])
+    monkeypatch.setattr(
+        runner_bounty.vision, "capture_game_bgr", lambda _hwnd: frame)
+    monkeypatch.setattr(runner_bounty.wm, "activate_window", lambda _hwnd: True)
+
+    result = runner._ensure_mythic_bounty(
+        123, threading.Event(), frame, drag, 1, [])
+
+    assert result["status"] == "rerolled"
+    assert result["rerolls"] == 2
+    assert runner.click_details == [
+        (430, 380, 0.1),
+        (430, 380, 0.1),
+    ]
+
+
+def test_auto_mythic_uses_the_configured_reroll_limit(monkeypatch):
+    runner = _Harness()
+    runner._get_bounty_settings = lambda: {
+        "mythic_only": True, "mythic_max_rerolls": 2,
+    }
+    frame = np.zeros((756, 1152, 3), dtype=np.uint8)
+    drag = {"card": (250, 180, 200, 230)}
+    button = {"kind": "reroll", "cx": 430, "cy": 380,
+              "card": drag["card"], "detector": "test"}
+    reads = iter(["other", "other", "other"])
+    monkeypatch.setattr(
+        runner_bounty.bounty, "read_card_rarity",
+        lambda *_args, **_kwargs: next(reads))
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_reroll_buttons",
+        lambda *_args, **_kwargs: [button])
+    monkeypatch.setattr(
+        runner_bounty.vision, "capture_game_bgr", lambda _hwnd: frame)
+    monkeypatch.setattr(runner_bounty.wm, "activate_window", lambda _hwnd: True)
+
+    result = runner._ensure_mythic_bounty(
+        123, threading.Event(), frame, drag, 1, [])
+
+    assert result == {"status": "exhausted", "card": 1, "rerolls": 2}
+    assert len(runner.click_details) == 2
+
+
+def test_auto_mythic_does_not_reroll_a_card_already_marked_mythic(monkeypatch):
+    runner = _Harness()
+    frame = np.zeros((756, 1152, 3), dtype=np.uint8)
+    drag = {"card": (250, 180, 200, 230)}
+    monkeypatch.setattr(
+        runner_bounty.bounty, "read_card_rarity", lambda *_args, **_kwargs: "mythic")
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_reroll_buttons",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("clicked")))
+
+    result = runner._ensure_mythic_bounty(
+        123, threading.Event(), frame, drag, 1, [])
+
+    assert result == {"status": "ready", "card": 1, "rerolls": 0}
+    assert runner.clicks == 0
+
+
+def test_find_next_bounty_rescans_after_a_mythic_reroll_before_returning_objective(
+        monkeypatch):
+    runner = _Harness()
+    runner._get_bounty_settings = lambda: {
+        "mythic_only": True, "mythic_max_rerolls": 20,
+    }
+    frame = np.zeros((756, 1152, 3), dtype=np.uint8)
+    card = {
+        "x": 420, "from_y": 180, "to_y": 260,
+        "card": (250, 180, 200, 230), "has_scrollbar": False,
+    }
+    objective = {
+        "kind": "infinite", "target_wave": 30,
+        "cx": 350, "cy": 300, "signature": ("infinite", 30, 222),
+    }
+
+    class _Mouse:
+        def move_to(self, *_args):
+            pass
+
+        def nudge(self):
+            pass
+
+        def scroll(self, _amount):
+            pass
+
+    runner._mouse = _Mouse()
+    monkeypatch.setattr(runner_bounty, "BOUNTY_HORIZONTAL_SCROLL_STEPS", 0)
+    monkeypatch.setattr(
+        runner_bounty.vision, "capture_game_bgr", lambda _hwnd: frame)
+    monkeypatch.setattr(
+        runner_bounty.bounty.ocr_windows, "ocr_lines", lambda _frame: [])
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_card_scrolls", lambda *_args: [card])
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_claim_buttons", lambda *_args: [])
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_summon_objectives", lambda *_args: [])
+    monkeypatch.setattr(
+        runner_bounty.bounty, "detect_objectives", lambda _frame: [objective])
+    monkeypatch.setattr(
+        runner, "_card_scroll_matches", lambda _frame: [])
+    monkeypatch.setattr(
+        runner, "_bounty_scroll_hover", lambda _hwnd, _frame=None: (500, 650))
+    monkeypatch.setattr(
+        runner, "_refresh_card_drag", lambda _frame, _card_box: card)
+    monkeypatch.setattr(
+        runner, "_ensure_mythic_bounty",
+        lambda *_args, **_kwargs: {"status": "rerolled", "rerolls": 1})
+
+    found = BountyOps._find_next_bounty(
+        runner, 123, threading.Event(), attempted=[])
+
+    assert found == {"kind": "mythic_rerolled", "card": 1, "rerolls": 1}
+
+
+def test_run_bounties_rescans_without_counting_a_mythic_reroll(monkeypatch):
+    runner = _Harness()
+    responses = iter([
+        {"kind": "mythic_rerolled", "card": 1, "rerolls": 1},
+        None,
+    ])
+    runner._find_next_bounty = (
+        lambda _hwnd, _stop, _attempted: next(responses))
+    monkeypatch.setattr(
+        runner_bounty.vision, "capture_game_bgr", lambda _hwnd: None)
+
+    assert runner._run_bounties(
+        123, threading.Event(), {}, {}, {}) is True
+
+    assert runner.board_opens == 1
+    assert runner.board_leaves == 1
+    assert not any("Auto Bounty #1" in line for line in runner.logs)
+
+
 def test_failed_objective_click_is_retried_before_runner_moves_on(monkeypatch):
     monkeypatch.setattr(runner_bounty.wm, "activate_window", lambda _hwnd: True)
     runner = _Harness()

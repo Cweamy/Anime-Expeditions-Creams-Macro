@@ -1097,8 +1097,11 @@ class Api:
     # ── Auto Crafting (see core/runner_crafting.py) ──
 
     def _default_bounty_settings(self) -> dict:
+        from core.runner_constants import BOUNTY_MYTHIC_DEFAULT_REROLLS
         return {
             "enabled": False,
+            "mythic_only": False,
+            "mythic_max_rerolls": BOUNTY_MYTHIC_DEFAULT_REROLLS,
             "play_mode": "solo",
             "summon_banner": "standard",
             "remaining": BOUNTY_DAILY_TOTAL,
@@ -1144,18 +1147,33 @@ class Api:
         """Persist only settings, not the computed setup-status fields."""
         cfg.update({"bounty": {
             "enabled": bool(settings.get("enabled")),
+            "mythic_only": bool(settings.get("mythic_only")),
+            "mythic_max_rerolls": int(settings.get("mythic_max_rerolls", 20)),
             "play_mode": settings.get("play_mode") or "solo",
             "summon_banner": settings.get("summon_banner") or "standard",
             "maps": settings.get("maps") or {},
         }})
 
     def get_bounty_settings(self) -> dict:
+        from core.runner_constants import (
+            BOUNTY_MYTHIC_DEFAULT_REROLLS, BOUNTY_MYTHIC_MAX_REROLLS,
+            BOUNTY_MYTHIC_MIN_REROLLS)
         saved = cfg.load().get("bounty") or {}
         merged = {**self._default_bounty_settings(), **saved}
         if merged.get("play_mode") not in ("solo", "matchmaking"):
             merged["play_mode"] = "solo"
         if merged.get("summon_banner") not in ("standard", "villain"):
             merged["summon_banner"] = "standard"
+        merged["mythic_only"] = bool(merged.get("mythic_only", False))
+        try:
+            mythic_max_rerolls = int(merged.get(
+                "mythic_max_rerolls", BOUNTY_MYTHIC_DEFAULT_REROLLS))
+        except (TypeError, ValueError):
+            mythic_max_rerolls = BOUNTY_MYTHIC_DEFAULT_REROLLS
+        merged["mythic_max_rerolls"] = max(
+            BOUNTY_MYTHIC_MIN_REROLLS,
+            min(BOUNTY_MYTHIC_MAX_REROLLS, mythic_max_rerolls),
+        )
         try:
             total = max(1, min(99, int(merged.get("total") or BOUNTY_DAILY_TOTAL)))
         except (TypeError, ValueError):
@@ -1225,6 +1243,26 @@ class Api:
             return {"ok": False, "reason": "bad_banner"}
         settings = self.get_bounty_settings()
         settings["summon_banner"] = banner
+        self._save_bounty_settings(settings)
+        return {"ok": True}
+
+    def set_bounty_mythic_only(self, enabled: bool) -> dict:
+        settings = self.get_bounty_settings()
+        settings["mythic_only"] = bool(enabled)
+        self._save_bounty_settings(settings)
+        return {"ok": True}
+
+    def set_bounty_mythic_max_rerolls(self, value) -> dict:
+        from core.runner_constants import (
+            BOUNTY_MYTHIC_MAX_REROLLS, BOUNTY_MYTHIC_MIN_REROLLS)
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "bad_mythic_max_rerolls"}
+        if not BOUNTY_MYTHIC_MIN_REROLLS <= value <= BOUNTY_MYTHIC_MAX_REROLLS:
+            return {"ok": False, "reason": "bad_mythic_max_rerolls"}
+        settings = self.get_bounty_settings()
+        settings["mythic_max_rerolls"] = value
         self._save_bounty_settings(settings)
         return {"ok": True}
 

@@ -862,6 +862,22 @@
 
           <div class="setting-row" style="padding: 10px 0;">
             <div>
+              <div class="setting-label">Auto Mythic Bounty</div>
+              <div class="setting-desc">Rerolls each non-Mythic card in left-to-right order until its title reads Mythic, then runs its objectives.</div>
+            </div>
+            <button id="toggle-bounty-mythic" class="toggle-switch" onclick="toggleBountyMythic(this)"></button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Mythic Reroll Safety Limit</div>
+              <div class="setting-desc">Maximum rerolls for one card before Auto Bounty leaves it unclaimed. Allowed range: 1–100.</div>
+            </div>
+            <input id="bounty-mythic-max-rerolls" class="block-input" style="width: 64px;" type="number" min="1" max="100" value="20" onchange="setBountyMythicMaxRerolls(this.value)">
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
               <div class="setting-label">Summon Banner</div>
               <div class="setting-desc">Currency source for Summon bounties. Standard uses Gems; Villain uses Villain Coins.</div>
             </div>
