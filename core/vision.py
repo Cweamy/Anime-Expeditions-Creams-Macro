@@ -27,6 +27,7 @@ import numpy as np
 
 from . import config
 from . import constants
+from . import image_io
 from . import window as wm
 
 # ---------------------------------------------------------------------------
@@ -323,7 +324,7 @@ def _load_gray_from_path(path: str):
     cache_key = ("gray", path)
     if cache_key in _template_cache:
         return _template_cache[cache_key]
-    raw = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    raw = image_io.read_image(path, cv2.IMREAD_UNCHANGED)
     if raw is None:
         _template_cache[cache_key] = None
         return None
