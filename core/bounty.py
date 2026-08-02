@@ -33,6 +33,11 @@ SUMMON_LOBBY_REGION = (65, 385, 105, 85)
 _SUMMON_CARD_SIZE = (210, 230)
 _SUMMON_TARGET_MIN = 50
 _SUMMON_TARGET_MAX = 1000
+_CARD_RARITIES = (
+    "common", "uncommon", "rare", "epic", "legendary", "mythic",
+)
+_GOLD_REROLL_LO = np.array((10, 105, 80), dtype=np.uint8)
+_GOLD_REROLL_HI = np.array((35, 255, 255), dtype=np.uint8)
 
 
 def _word_similarity(word: str, wanted: str) -> float:
@@ -41,6 +46,87 @@ def _word_similarity(word: str, wanted: str) -> float:
         re.sub(r"[^a-z]", "", (word or "").lower()),
         wanted,
     ).ratio()
+
+
+def _classify_card_rarity_texts(texts) -> str | None:
+    """Classify rarity from OCR text already scoped to one card title."""
+    best = []
+    for raw in texts or []:
+        words = re.findall(r"[A-Za-z]{3,14}", str(raw or ""))
+        bounty_score = max(
+            (_word_similarity(word, "bounty") for word in words),
+            default=0.0,
+        )
+        for word in words:
+            rarity, score = max(
+                ((_name, _word_similarity(word, _name))
+                 for _name in _CARD_RARITIES),
+                key=lambda item: item[1],
+            )
+            title_bonus = 0.12 if bounty_score >= 0.50 else 0.0
+            best.append((score + title_bonus, rarity, score))
+    if not best:
+        return None
+    _score, rarity, word_score = max(best, key=lambda item: item[0])
+    if word_score < 0.62:
+        return None
+    return "mythic" if rarity == "mythic" else "other"
+
+
+def read_card_rarity(frame_bgr: np.ndarray, card, ocr_lines=None) -> str | None:
+    """Read one bounty card's rarity as ``mythic``, ``other``, or ``None``."""
+    if (frame_bgr is None or not hasattr(frame_bgr, "shape")
+            or not card or len(card) < 4):
+        return None
+    x, y, w, h = (int(value) for value in card[:4])
+    if w <= 0 or h <= 0:
+        return None
+    title_top = y + max(0, int(round(h * 0.06)))
+    title_bottom = min(y + h, y + max(95, int(round(h * 0.42))))
+    title_lines = []
+    if ocr_lines is None:
+        try:
+            ocr_lines = ocr_windows.ocr_lines(frame_bgr)
+        except Exception:
+            ocr_lines = []
+    for line in ocr_lines or []:
+        try:
+            cx = int(line.get("cx", line.get("x", 0)))
+            cy = int(line.get("cy", line.get("y", 0)))
+        except (TypeError, ValueError):
+            continue
+        if (x - 10 <= cx <= x + w + 10
+                and title_top <= cy <= title_bottom):
+            title_lines.append(line.get("text", ""))
+    rarity = _classify_card_rarity_texts(title_lines)
+    if rarity is not None:
+        return rarity
+
+    crop = frame_bgr[
+        max(0, title_top):min(frame_bgr.shape[0], title_bottom),
+        max(0, x):min(frame_bgr.shape[1], x + w),
+    ]
+    if crop.size == 0:
+        return None
+    for scale in (2, 3):
+        enlarged = cv2.resize(
+            crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        local_texts = []
+        try:
+            local_texts.extend(
+                line.get("text", "")
+                for line in ocr_windows.ocr_lines(enlarged)
+            )
+        except Exception:
+            pass
+        try:
+            local_texts.append(ocr_windows.ocr_image(enlarged))
+        except Exception:
+            pass
+        rarity = _classify_card_rarity_texts(local_texts)
+        if rarity is not None:
+            return rarity
+    return None
 
 
 def _extract_summon_targets(texts: list) -> list:
@@ -646,6 +732,66 @@ def detect_card_scrolls(frame_bgr: np.ndarray) -> list:
             "has_scrollbar": has_scrollbar,
         })
     return sorted(drags, key=lambda item: item["x"])
+
+
+def detect_reroll_buttons(frame_bgr: np.ndarray, cards=None) -> list:
+    """Locate active gold reroll controls inside detected card footers."""
+    if (frame_bgr is None or not hasattr(frame_bgr, "shape")
+            or getattr(frame_bgr, "size", 0) == 0):
+        return []
+    cards = detect_card_scrolls(frame_bgr) if cards is None else cards
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    gold = cv2.inRange(hsv, _GOLD_REROLL_LO, _GOLD_REROLL_HI)
+    buttons = []
+    frame_height, frame_width = frame_bgr.shape[:2]
+    for item in cards:
+        x, y, w, h = (int(value) for value in item["card"])
+        footer_top = max(0, y + h - max(54, int(round(h * 0.30))))
+        footer_bottom = min(frame_height, y + h - 4)
+        # The gold reroll control is the rightmost footer control. The gray
+        # X beside it is outside this right-side search region.
+        search_left = max(x, x + w - max(70, int(round(w * 0.40))))
+        search_right = min(frame_width, x + w)
+        region = gold[footer_top:footer_bottom, search_left:search_right]
+        if region.size == 0:
+            continue
+        region = cv2.morphologyEx(
+            region, cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3)),
+        )
+        count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(region)
+        for index in range(1, count):
+            rx, ry, rw, rh, area = (int(value) for value in stats[index])
+            if (rw < max(12, int(round(w * 0.06)))
+                    or rw > max(18, int(round(w * 0.34)))
+                    or rh < max(9, int(round(h * 0.045)))
+                    or rh > max(24, int(round(h * 0.30)))
+                    or area < max(90, int(round(w * h * 0.006)))):
+                continue
+            absolute_x = search_left + rx
+            absolute_y = footer_top + ry
+            center_x = absolute_x + rw // 2
+            if center_x < x + int(round(w * 0.68)):
+                continue
+            gold_pixels = int(np.count_nonzero(
+                gold[absolute_y:absolute_y + rh,
+                     absolute_x:absolute_x + rw]))
+            fill_ratio = gold_pixels / float(max(1, rw * rh))
+            if fill_ratio < 0.28:
+                continue
+            buttons.append({
+                "kind": "reroll",
+                "x": absolute_x,
+                "y": absolute_y,
+                "w": rw,
+                "h": rh,
+                "cx": center_x,
+                "cy": absolute_y + rh // 2,
+                "card": item["card"],
+                "score": fill_ratio,
+                "detector": "card_relative_gold_footer",
+            })
+    return sorted(buttons, key=lambda item: (item["card"][0], item["cx"]))
 
 
 def detect_claim_buttons(frame_bgr: np.ndarray, cards=None) -> list:

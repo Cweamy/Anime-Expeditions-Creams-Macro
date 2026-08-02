@@ -12,6 +12,36 @@ def _link_text(frame, x, y, text="FlowerForest", color=(40, 210, 65)):
     cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
 
+def test_reads_card_rarity_from_card_local_title_ocr():
+    frame = _frame()
+    card = (250, 180, 200, 230)
+    lines = [{"text": "Mythic Bounty #6", "cx": 350, "cy": 230}]
+
+    assert bounty.read_card_rarity(frame, card, lines) == "mythic"
+
+
+def test_reads_non_mythic_card_rarity_from_card_local_title_ocr():
+    frame = _frame()
+    card = (250, 180, 200, 230)
+    lines = [{"text": "Legendary Bounty #2", "cx": 350, "cy": 230}]
+
+    assert bounty.read_card_rarity(frame, card, lines) == "other"
+
+
+def test_reroll_detector_accepts_only_the_gold_right_footer_control():
+    frame = _frame()
+    card = {"card": (100, 100, 200, 250)}
+    cv2.rectangle(frame, (270, 300), (295, 335), (0, 170, 220), -1)
+
+    buttons = bounty.detect_reroll_buttons(frame, [card])
+
+    assert len(buttons) == 1
+    assert buttons[0]["kind"] == "reroll"
+    assert buttons[0]["detector"] == "card_relative_gold_footer"
+    assert buttons[0]["card"] == card["card"]
+    assert 270 <= buttons[0]["cx"] <= 295
+
+
 def test_reads_remaining_bounty_counter_from_orange_mask(monkeypatch):
     frame = _frame()
     reads = iter(["", "2 / 10"])

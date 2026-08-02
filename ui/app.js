@@ -3296,6 +3296,10 @@ function renderBountyScreen() {
   }
   document.getElementById('toggle-bounty-enabled')?.classList.toggle(
     'on', !!(s && s.enabled && s.setup_ready));
+  document.getElementById('toggle-bounty-mythic')?.classList.toggle(
+    'on', !!(s && s.mythic_only));
+  const mythicMax = document.getElementById('bounty-mythic-max-rerolls');
+  if (mythicMax && s) mythicMax.value = s.mythic_max_rerolls || 20;
   const playMode = (s && s.play_mode) || 'solo';
   document.getElementById('bounty-mode-solo')?.classList.toggle('active', playMode === 'solo');
   document.getElementById('bounty-mode-matchmaking')?.classList.toggle('active', playMode === 'matchmaking');
@@ -3342,6 +3346,18 @@ async function toggleBountyEnabled(btn) {
       addLog('[Macro] Auto Bounty needs a saved Macro Operation for every Story map before it can be enabled.');
     }
   } catch (e) {}
+  await refreshBountyScreen();
+}
+
+async function toggleBountyMythic(btn) {
+  const isOn = !btn.classList.contains('on');
+  bounceToggle(btn);
+  try { await pywebview.api.set_bounty_mythic_only(isOn); } catch (e) {}
+  await refreshBountyScreen();
+}
+
+async function setBountyMythicMaxRerolls(value) {
+  try { await pywebview.api.set_bounty_mythic_max_rerolls(value); } catch (e) {}
   await refreshBountyScreen();
 }
 
