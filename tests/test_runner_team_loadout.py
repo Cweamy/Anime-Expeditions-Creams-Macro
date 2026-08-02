@@ -140,7 +140,7 @@ def test_retries_teams_click_until_loadout_list_is_visually_open(monkeypatch):
         raise AssertionError(f"unexpected image: {name}")
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.ocr_windows, "is_available", lambda: False)
     monkeypatch.setattr(
@@ -169,7 +169,7 @@ def test_confirm_failure_saves_the_screen_that_detection_could_not_read(monkeypa
 
     monkeypatch.setattr(runner_module, "TEAM_LOADOUT_CONFIRM_RETRY_ATTEMPTS", 1)
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(
@@ -223,7 +223,7 @@ def test_windows_ocr_confirms_current_unit_teams_title_without_lowering_threshol
         }[name]
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(
@@ -285,7 +285,7 @@ def test_generic_ocr_text_confirms_when_loose_match_is_enabled(monkeypatch):
         }[name]
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(
@@ -320,7 +320,7 @@ def test_equipment_failure_saves_screen_and_fails_instead_of_silently_continuing
         raise AssertionError(f"unexpected image: {name}")
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(
@@ -353,7 +353,7 @@ def test_scrolled_loadouts_use_wheel_over_scrollbar_and_click_visible_button_cen
         }[name]
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (0, 0, 1152, 756))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
 
@@ -398,7 +398,7 @@ def test_live_button_detection_is_scaled_to_undocked_window(monkeypatch):
         }[name]
 
     monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda _hwnd: (10, 20, 1194, 856))
+    monkeypatch.setattr(runner_module.wm, "get_client_rect_screen", lambda _hwnd: (26, 50, 1178, 806))
     monkeypatch.setattr(runner_module.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(runner_module.vision, "click_match", lambda *_args: None)
     monkeypatch.setattr(runner_module.vision, "capture_game_bgr", lambda _hwnd: frame)
@@ -406,5 +406,6 @@ def test_live_button_detection_is_scaled_to_undocked_window(monkeypatch):
     assert runner._apply_team_loadout_panel(
         123, stop, team_match, 8, "include") is True
 
-    # (836, 542) in 1152x756 reference space, scaled into a 1184x836 window.
-    runner._mouse.click.assert_called_once_with(869, 619)
+    # (836, 542) in 1152x756 reference space, scaled into the client area;
+    # the outer title bar/border must not be part of the click geometry.
+    runner._mouse.click.assert_called_once_with(862, 592)

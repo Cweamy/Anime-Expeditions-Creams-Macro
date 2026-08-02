@@ -7,18 +7,27 @@ from core import window_win
 
 def test_capture_window_rgb_vectorized_parsing(monkeypatch):
     """Verifies that capture_window_rgb parses DIBits correctly and handles black frames."""
-    w, h = 10, 10
+    outer_w, outer_h = 12, 14
+    client_w, client_h = 10, 10
 
     def mock_get_window_rect(hwnd, rect_ptr):
         # rect_ptr is byref(rect)
         r = ctypes.cast(rect_ptr, ctypes.POINTER(window_win.RECT)).contents
         r.left = 0
         r.top = 0
-        r.right = w
-        r.bottom = h
+        r.right = outer_w
+        r.bottom = outer_h
         return True
 
     monkeypatch.setattr(window_win.user32, "GetWindowRect", mock_get_window_rect)
+    def mock_get_client_rect(hwnd, rect_ptr):
+        r = ctypes.cast(rect_ptr, ctypes.POINTER(window_win.RECT)).contents
+        r.left, r.top = 1, 2
+        r.right, r.bottom = 1 + client_w, 2 + client_h
+        return True
+
+    monkeypatch.setattr(window_win.user32, "GetClientRect", mock_get_client_rect)
+    monkeypatch.setattr(window_win.user32, "ClientToScreen", lambda hwnd, point_ptr: True)
     monkeypatch.setattr(window_win.user32, "GetWindowDC", lambda hwnd: 123)
     monkeypatch.setattr(window_win.gdi32, "CreateCompatibleDC", lambda hdc: 456)
     monkeypatch.setattr(window_win.gdi32, "CreateCompatibleBitmap", lambda hdc, w, h: 789)
@@ -40,7 +49,7 @@ def test_capture_window_rgb_vectorized_parsing(monkeypatch):
     # Test valid frame return RGB bytes
     def mock_get_dibits_valid(hdc, bmp, start, lines, buf, bmi, usage):
         # Fill buffer with BGRA (e.g. B=100, G=150, R=200, A=255)
-        bgra_data = np.full((h, w, 4), [100, 150, 200, 255], dtype=np.uint8).tobytes()
+        bgra_data = np.full((outer_h, outer_w, 4), [100, 150, 200, 255], dtype=np.uint8).tobytes()
         ctypes.memmove(buf, bgra_data, len(bgra_data))
         return lines
 
@@ -49,12 +58,30 @@ def test_capture_window_rgb_vectorized_parsing(monkeypatch):
     res = window_win.capture_window_rgb(1)
     assert res is not None
     rgb_bytes, rw, rh = res
-    assert (rw, rh) == (w, h)
+    assert (rw, rh) == (client_w, client_h)
     # Expected RGB values: R=200, G=150, B=100
-    arr = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(h, w, 3)
+    arr = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(client_h, client_w, 3)
     assert np.all(arr[:, :, 0] == 200)
     assert np.all(arr[:, :, 1] == 150)
     assert np.all(arr[:, :, 2] == 100)
+
+
+def test_get_client_rect_screen_translates_both_corners(monkeypatch):
+    def mock_get_client_rect(hwnd, rect_ptr):
+        rect = ctypes.cast(rect_ptr, ctypes.POINTER(window_win.RECT)).contents
+        rect.left, rect.top, rect.right, rect.bottom = 0, 0, 1152, 756
+        return True
+
+    def mock_client_to_screen(hwnd, point_ptr):
+        point = ctypes.cast(point_ptr, ctypes.POINTER(window_win.wintypes.POINT)).contents
+        point.x += 16
+        point.y += 30
+        return True
+
+    monkeypatch.setattr(window_win.user32, "GetClientRect", mock_get_client_rect)
+    monkeypatch.setattr(window_win.user32, "ClientToScreen", mock_client_to_screen)
+
+    assert window_win.get_client_rect_screen(1) == (16, 30, 1168, 786)
 
 
 def test_set_dpi_aware_passes_pointer_sized_context(monkeypatch):

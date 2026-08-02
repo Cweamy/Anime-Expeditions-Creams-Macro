@@ -47,10 +47,14 @@ from . import window as wm
 # ---------------------------------------------------------------------------
 
 def _window_geometry(hwnd: int):
-    """(left, top, sx, sy): the window's screen origin plus its actual
-    size as a fraction of reference size. sx/sy fall back to 1.0 for a
-    degenerate rect so a mid-close window can't divide by zero."""
-    left, top, right, bottom = wm.get_window_rect_screen(hwnd)
+    """(left, top, sx, sy) for the rendered game client.
+
+    The reference image and coordinate space start at Roblox's viewport, not
+    at a standalone window's non-client frame. Keep the client origin and
+    size together so capture and click conversion cannot disagree when the
+    window has a title bar or resize border.
+    """
+    left, top, right, bottom = wm.get_client_rect_screen(hwnd)
     w, h = right - left, bottom - top
     sx = (w / config.FIXED_WIN_W) if w > 0 else 1.0
     sy = (h / config.FIXED_WIN_H) if h > 0 else 1.0

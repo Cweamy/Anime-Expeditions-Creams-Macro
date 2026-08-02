@@ -9,7 +9,7 @@ def test_screen_to_ref_is_the_inverse_of_ref_to_screen(monkeypatch):
     """core.input_record's Record block relies on screen_to_ref undoing
     ref_to_screen exactly, so a captured screen point round-trips back to
     the same reference point it was converted from."""
-    monkeypatch.setattr(wm, "get_window_rect_screen", lambda hwnd: (100, 50, 100 + 576, 50 + 378))
+    monkeypatch.setattr(wm, "get_client_rect_screen", lambda hwnd: (100, 50, 100 + 576, 50 + 378))
 
     ref_x, ref_y = 300.0, 200.0
     screen_x, screen_y = vision.ref_to_screen(1, ref_x, ref_y)
@@ -17,6 +17,14 @@ def test_screen_to_ref_is_the_inverse_of_ref_to_screen(monkeypatch):
 
     assert round(back_x) == ref_x
     assert round(back_y) == ref_y
+
+
+def test_reference_clicks_use_client_rect_not_outer_frame(monkeypatch):
+    """A title bar must not be added to a viewport-relative match point."""
+    monkeypatch.setattr(wm, "get_window_rect_screen", lambda hwnd: (100, 200, 1284, 1036))
+    monkeypatch.setattr(wm, "get_client_rect_screen", lambda hwnd: (116, 230, 1268, 986))
+
+    assert vision.ref_to_screen(1, 438, 556) == (554, 786)
 
 
 def test_find_image_any_captures_once_for_multiple_candidates(monkeypatch):
