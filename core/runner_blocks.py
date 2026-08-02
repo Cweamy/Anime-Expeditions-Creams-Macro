@@ -7,6 +7,7 @@ Methods here run with MacroRunner's full self: shared state and helpers
 (_log, _coords, _checkpoint, _click_found_image, ...) resolve normally.
 """
 import math
+import sys
 import threading
 import time
 
@@ -1050,15 +1051,31 @@ class BlockOps:
             self._keyboard.key_up(keys.VK_SHIFT)
             self._quick_place_shift_down = False
 
+    def _capture_place_search_region(self, hwnd, left: int, top: int, region: tuple):
+        """Capture the frame that contains Roblox's placement highlight.
+
+        On macOS the highlight is part of the composed Metal frame and can be
+        missing from CGWindowListCreateImage even though the rest of the
+        window is captured correctly. The screen capture is intentional for
+        this small, visible-only scan; Windows keeps the window-content path
+        to avoid the display-flash regression that motivated the v0.18 change.
+        """
+        if sys.platform == "darwin":
+            from core.ocr import capture_region
+            x, y, width, height = (int(value) for value in region)
+            return capture_region(left + x, top + y, width, height)
+        return vision.capture_window_region_bgr(hwnd, region)
+
     def _scan_place_search_box(self, hwnd, left: int, top: int, orig_x: int, orig_y: int):
         """One capture of the PLACE_SEARCH_BOX_SIZE x PLACE_SEARCH_BOX_SIZE
         region around (orig_x, orig_y) -- window-client coords -- scanned in
         memory for a pixel at/near 0xffffff (white, within
         PLACE_VALID_PIXEL_TOLERANCE per channel). Returns the (dx, dy) offset
         of whichever valid pixel is CLOSEST to (orig_x, orig_y), or None if
-        nothing valid was found anywhere in the box. The capture is taken from
-        Roblox's own window contents, not a screen-space grab, so repeated
-        placement scans cannot flash recording overlays on the display.
+        nothing valid was found anywhere in the box. Windows reads Roblox's
+        window contents to avoid display flashes; macOS uses a small screen
+        capture because its transient placement highlight can be missing from
+        CGWindowListCreateImage.
 
         The box is CLAMPED to the game window. Centering it blindly meant a
         spot within half a box of an edge captured pixels from outside the
@@ -1080,7 +1097,7 @@ class BlockOps:
         # narrower than the box degrades to "start at 0" rather than negative.
         box_x = max(0, min(orig_x - half, FIXED_WIN_W - size))
         box_y = max(0, min(orig_y - half, FIXED_WIN_H - size))
-        patch = vision.capture_window_region_bgr(hwnd, (box_x, box_y, size, size))
+        patch = self._capture_place_search_region(hwnd, left, top, (box_x, box_y, size, size))
         if patch is None or patch.size == 0:
             return None
         b, g, r = patch[:, :, 0].astype(int), patch[:, :, 1].astype(int), patch[:, :, 2].astype(int)
