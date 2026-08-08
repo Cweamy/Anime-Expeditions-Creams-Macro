@@ -95,6 +95,47 @@ def get_pytesseract():
     )
 
 
+def smoke_test_text_reader() -> tuple[bool, str]:
+    """Verify that one OCR engine can actually recognize generated text.
+
+    Import/package checks are not enough: pytesseract can import while the
+    native tesseract.exe is missing, and a broken Windows OCR projection can
+    return empty strings for every call. Health Check uses this as a real
+    end-to-end probe.
+    """
+    sample = np.full((80, 260, 3), 255, dtype=np.uint8)
+    cv2.putText(
+        sample, "OCR 123", (18, 54), cv2.FONT_HERSHEY_SIMPLEX,
+        1.4, (0, 0, 0), 3, cv2.LINE_AA,
+    )
+
+    from core import ocr_windows
+    if ocr_windows.is_available():
+        text = ocr_windows.ocr_image(sample)
+        if any(ch.isalnum() for ch in text):
+            backend = ocr_windows.backend_name() or "Windows OCR"
+            return True, f"using {backend} ({text.strip()!r})"
+        detail = ocr_windows.unavailable_reason()
+        return False, (
+            "Windows OCR loaded but recognized no text"
+            + (f" ({detail})" if detail else "")
+        )
+
+    try:
+        pytesseract = get_pytesseract()
+        text = pytesseract.image_to_string(sample, config="--psm 7").strip()
+    except Exception as exc:
+        detail = ocr_windows.unavailable_reason()
+        return False, (
+            "Windows OCR unavailable"
+            + (f" ({detail})" if detail else "")
+            + f"; Tesseract failed: {exc}"
+        )
+    if any(ch.isalnum() for ch in text):
+        return True, f"using Tesseract ({text!r})"
+    return False, "Tesseract ran but recognized no text"
+
+
 from . import mss_manager
 
 

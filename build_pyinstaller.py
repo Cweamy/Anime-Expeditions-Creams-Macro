@@ -23,6 +23,7 @@ Output: dist/Cream's Macro - Anime Expeditions.exe
 import subprocess
 import sys
 import os
+import importlib.util
 import platform
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -197,12 +198,15 @@ else:
         cmd.append(f"--version-file={version_file}")
 for mod in HIDDEN_IMPORTS:
     cmd += [f"--hidden-import={mod}"]
-# winsdk (Windows OCR) is a namespace-package WinRT projection PyInstaller's
-# static analysis can't follow -- the winsdk.windows.* submodules are only
-# imported lazily inside core/ocr_windows.py, so they must be collected
-# explicitly or Windows OCR silently falls back to Tesseract in the build.
+# Windows OCR uses namespace-package WinRT projections that PyInstaller's
+# static analysis can't follow -- winsdk.windows.* on Python <3.13 and
+# winrt.windows.* on Python 3.13+. They are imported lazily inside
+# core/ocr_windows.py, so they must be collected explicitly or Windows OCR
+# silently falls back to Tesseract in the build.
 if sys.platform != "darwin":
-    cmd += ["--collect-submodules=winsdk"]
+    for projection in ("winsdk", "winrt"):
+        if importlib.util.find_spec(projection) is not None:
+            cmd += [f"--collect-submodules={projection}"]
 for src, dest in ADD_DATA:
     # --add-data's separator is ';' on Windows but ':' on POSIX -- exactly
     # what os.pathsep is. Hardcoded ';' was the mac CI build's first

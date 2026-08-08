@@ -14,9 +14,17 @@ pytesseract    # OCR FALLBACK -- Windows uses the built-in Windows.Media.Ocr (se
                # https://github.com/UB-Mannheim/tesseract/wiki  (macOS: `brew install tesseract`)
 
 # Windows only -- the built-in Windows OCR (Windows.Media.Ocr) projection, the
-# PREFERRED OCR engine on Win10/11 (see core/ocr_windows.py). Ships in the
-# build, so users install nothing extra for wave/stats reading.
-winsdk; sys_platform == "win32"
+# PREFERRED OCR engine on Win10/11 (see core/ocr_windows.py). Python 3.13 uses
+# the successor winrt-Windows.* packages because winsdk has no cp313 wheel.
+# Ships in the build, so users install nothing extra for wave/stats reading.
+winsdk; sys_platform == "win32" and python_version < "3.13"
+winrt-Windows.Media.Ocr; sys_platform == "win32" and python_version >= "3.13"
+winrt-Windows.Globalization; sys_platform == "win32" and python_version >= "3.13"
+winrt-Windows.Graphics.Imaging; sys_platform == "win32" and python_version >= "3.13"
+winrt-Windows.Security.Cryptography; sys_platform == "win32" and python_version >= "3.13"
+winrt-Windows.Foundation; sys_platform == "win32" and python_version >= "3.13"
+winrt-Windows.Foundation.Collections; sys_platform == "win32" and python_version >= "3.13"
+winrt-Windows.Storage.Streams; sys_platform == "win32" and python_version >= "3.13"
 
 # Windows only -- the Windows.Graphics.Capture backend (core/wgc_capture.py),
 # used ONLY when the "use_wgc_capture" setting is on. Reads the game window's

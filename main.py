@@ -3730,22 +3730,15 @@ class Api:
                                        f"keeping its folder structure, or re-add crops via the Image Manager.")
 
         # OCR (wave/stats reading): Windows' built-in engine is preferred and
-        # needs nothing installed; Tesseract is only the fallback. The check
-        # passes if EITHER is available.
-        from core import ocr_windows
-        if ocr_windows.is_available():
-            add("Text reading (OCR)", True, "using Windows' built-in OCR -- no install needed")
-        else:
-            try:
-                from core import ocr
-                ocr.get_pytesseract()
-                tess_ok = True
-            except Exception:
-                tess_ok = False
-            add("Text reading (OCR)", tess_ok,
-                "" if tess_ok else "Windows OCR unavailable and Tesseract not found -- only stats/reward "
-                                   "reading and Wait-for-Wave need it. Install Tesseract via Settings > "
-                                   "General, or brew on macOS.")
+        # needs nothing installed; Tesseract is only the fallback. This is a
+        # real recognition smoke test, not just an import/package check.
+        from core import ocr
+        ocr_ok, ocr_detail = ocr.smoke_test_text_reader()
+        add("Text reading (OCR)", ocr_ok,
+            ocr_detail if ocr_ok else
+            f"{ocr_detail} -- only Auto Bounty, stats/reward reading, and Wait-for-Wave need it. "
+            "Install the Windows OCR dependencies from requirements.txt, or install Tesseract via "
+            "Settings > General.")
 
         overall = all(c["ok"] for c in checks)
         self.push_log(f"[Health] {'All checks passed.' if overall else 'Some checks need attention -- see above.'}")
