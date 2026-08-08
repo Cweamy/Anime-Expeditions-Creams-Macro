@@ -120,6 +120,41 @@ def test_daily_challenge_unavailable_marks_current_game_day_complete():
     assert marked == ["daily"]
 
 
+def test_regular_challenge_finishes_slots_1_2_3_in_one_ordered_pass():
+    probe = ChallengeProbe()
+    played = []
+    marked = []
+    reads = 0
+
+    def settings():
+        nonlocal reads
+        reads += 1
+        # Simulate live state changing after slot 1. The pass must retain
+        # the work it accepted at entry instead of returning to the task.
+        ready = reads == 1
+        return {
+            "enabled": True,
+            "play_mode": "solo",
+            "daily": {"enabled": False, "ready": False},
+            "cap": 0,
+            "stages": {
+                slot: {"enabled": True, "ready": ready, "count": 0}
+                for slot in ("1", "2", "3")
+            },
+        }
+
+    probe._get_challenge_settings = settings
+    probe._checkpoint = lambda _stop: False
+    probe._run_one_challenge_stage = (
+        lambda _hwnd, _stop, slot, *_args: played.append(slot) or "win")
+    probe._mark_challenge_stage_played = lambda slot: marked.append(slot)
+
+    ChallengeOps._run_challenges(probe, 123, threading.Event(), {}, {}, {})
+
+    assert played == ["1", "2", "3"]
+    assert marked == ["1", "2", "3"]
+
+
 @pytest.mark.parametrize(
     ("ocr_text", "expected"),
     (

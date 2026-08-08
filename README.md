@@ -102,7 +102,7 @@ pip install -r requirements.txt
 
 ### macOS (experimental — testers wanted)
 
-Releases also publish **`Creams-Macro-Anime-Expeditions-macOS.zip`** (a `.app` + the same editable `Assets/` folder), and source runs work via `./run.sh`. Key differences and setup:
+Releases also publish **`Creams-Macro-Anime-Expeditions-macOS.zip`** (an Intel/x86_64 `.app` + the same editable `Assets/` folder), and source runs work via `./run.sh`. Key differences and setup:
 
 1. **Permissions (required):** System Settings > Privacy & Security — grant the app (or your terminal, for source runs) **Accessibility**, **Input Monitoring**, and **Screen Recording**. Without them, clicks silently do nothing and captures come back black. The app logs a warning at startup if Accessibility is missing.
 2. **Side-by-side, not docked:** macOS can't embed another app's window, so Roblox is auto-arranged *next to* the control panel at the exact reference size instead of inside it. The panel sizes itself to whatever width the game doesn't need and to the full height of the screen's *visible* area (menu bar and Dock excluded), so nothing ends up under either.

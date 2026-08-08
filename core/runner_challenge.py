@@ -174,16 +174,15 @@ class ChallengeOps:
             return
 
         cap = challenge.get("cap", 0)
+        # Freeze this pass's ordered work before starting it. All regular
+        # slots share one :00/:30 readiness window; repeatedly deciding the
+        # work between battles could otherwise let a boundary or settings
+        # refresh turn a 1 -> 2 -> 3 interruption into several one-slot
+        # interruptions. Once we leave a task for Challenge, finish every
+        # slot that was eligible at that point, in numeric order, before
+        # returning to the task.
+        pending_slots = []
         for slot in CHALLENGE_STAGE_SLOTS:
-            if self._checkpoint(stop_event):
-                return
-            # Re-fetched every slot -- a stage just played updates its own
-            # count/cooldown, and this whole pass can span several minutes.
-            try:
-                challenge = self._get_challenge_settings()
-            except Exception as exc:
-                self._log(f"[Macro] Couldn't read Challenge settings: {exc}")
-                return
             info = challenge.get("stages", {}).get(slot) or {}
             if not info.get("enabled"):
                 continue
@@ -191,11 +190,20 @@ class ChallengeOps:
                 self._log(f'[Macro] Challenge #{slot} is at today\'s cap ({cap}) -- skipping.')
                 continue
             if not info.get("ready"):
-                # Already played this slot since the current :00/:30 window
-                # opened -- "ready" is computed by get_challenge_settings
-                # against that single fixed clock, same for all 3 slots.
                 self._log(f'[Macro] Challenge #{slot} already played this window -- skipping.')
                 continue
+            pending_slots.append(slot)
+
+        for slot in pending_slots:
+            if self._checkpoint(stop_event):
+                return
+            # Refresh map/mode configuration, but do not re-decide the slot
+            # list: completing 1 must lead to 2 then 3 from this same pass.
+            try:
+                challenge = self._get_challenge_settings()
+            except Exception as exc:
+                self._log(f"[Macro] Couldn't read Challenge settings: {exc}")
+                return
 
             play_mode = challenge.get("play_mode") or "solo"
             result = self._run_one_challenge_stage(hwnd, stop_event, slot, play_mode, challenge, coords,

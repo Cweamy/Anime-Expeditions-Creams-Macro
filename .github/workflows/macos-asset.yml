@@ -21,7 +21,9 @@ permissions:
 
 jobs:
   build-macos:
-    runs-on: macos-latest
+    # Match the tagged-release job: the downloadable app must contain an
+    # x86_64 interpreter and native dependencies for Intel Macs.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +40,9 @@ jobs:
 
       - name: Build app (PyInstaller)
         run: python build_pyinstaller.py
+
+      - name: Verify Intel application binary
+        run: file "dist/Creams Macro - Anime Expeditions.app/Contents/MacOS/Creams Macro - Anime Expeditions" | grep -q x86_64
 
       # Same packaging as release.yml's macos job -- see its comments.
       - name: Package macOS zip (.app + editable Assets folder)

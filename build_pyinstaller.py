@@ -23,6 +23,7 @@ Output: dist/Cream's Macro - Anime Expeditions.exe
 import subprocess
 import sys
 import os
+import platform
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # No apostrophe -- PyInstaller writes --name straight into an
@@ -169,6 +170,15 @@ cmd = [
     "--workpath=build",
 ]
 if sys.platform == "darwin":
+    # Release builds run on GitHub's explicit Intel runner. Refuse to
+    # silently publish an arm64-only bundle if that runner is changed: a
+    # PyInstaller app contains the host interpreter and native wheels, so
+    # renaming or re-zipping an Apple Silicon build cannot make it run on
+    # Intel.
+    if platform.machine().lower() not in ("x86_64", "amd64"):
+        print("Build FAILED: the macOS release must be built on an Intel (x86_64) host. "
+              "Use GitHub Actions' macos-15-intel runner.")
+        sys.exit(1)
     icns = _mac_icns_path()
     if icns:
         cmd.append(f"--icon={icns}")
@@ -229,4 +239,5 @@ if sys.platform == "darwin":
         print("WARNING: ad-hoc code-signing failed -- the .app will still run, but macOS "
               "Accessibility/Input Monitoring grants may not persist reliably.")
 
-print(f"\nDone! Check dist/{EXE_NAME}.exe")
+artifact = f"{EXE_NAME}.app" if sys.platform == "darwin" else f"{EXE_NAME}.exe"
+print(f"\nDone! Check dist/{artifact}")

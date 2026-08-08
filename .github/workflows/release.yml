@@ -154,7 +154,10 @@ jobs:
   # tag can conflict. EXPERIMENTAL/UNTESTED build: the mac port ships for
   # real-device testers, see core/window_mac.py's docstring.
   build-macos:
-    runs-on: macos-latest
+    # macos-latest is Apple Silicon. PyInstaller bundles native wheels and
+    # the host interpreter, so that produces an arm64-only .app which cannot
+    # launch on an Intel Mac. Keep the public download Intel-compatible.
+    runs-on: macos-15-intel
     needs: build-and-release
     steps:
       - uses: actions/checkout@v4
@@ -172,6 +175,9 @@ jobs:
 
       - name: Build app (PyInstaller)
         run: python build_pyinstaller.py
+
+      - name: Verify Intel application binary
+        run: file "dist/Creams Macro - Anime Expeditions.app/Contents/MacOS/Creams Macro - Anime Expeditions" | grep -q x86_64
 
       - name: Package macOS zip (.app + editable Assets folder)
         run: |
