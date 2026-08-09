@@ -499,6 +499,18 @@ AUTO_UPGRADE_CLEAR_HOLD = 1.0    # press-and-hold that clears it back to off
 
 AUTO_UPGRADE_CLICK_SETTLE = 0.6
 
+# Click input searches for priority_upgrade after AUTO_UPGRADE_CLICK_SETTLE.
+# That single check was reported missing panels that were merely slow: a unit
+# placed as a wave spawns can still be rendering its info panel at 0.6s, and
+# the block logged "not found -- skipping" against a panel that appeared a
+# moment later. Poll to a deadline instead, the same shape _run_upgrade_unit_
+# tick already uses for upgradeable/not_upgradeable (UPGRADE_PANEL_LOAD_
+# TIMEOUT above) -- a panel that is already up still costs one search, so the
+# common case is unchanged. Hotkey input deliberately never searches at all
+# and is untouched by this.
+AUTO_UPGRADE_PANEL_LOAD_TIMEOUT = 3.0
+AUTO_UPGRADE_PANEL_POLL_INTERVAL = 0.15
+
 # Team Loadout application (see _apply_team_loadout) -- H opens the panel,
 # then Loadout 1-3 are stacked rows at a fixed position. 4+ exist in
 # Creation's picker but aren't reachable yet without scrolling.

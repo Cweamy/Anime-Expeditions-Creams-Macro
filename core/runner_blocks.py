@@ -739,13 +739,32 @@ class BlockOps:
             )
             return True
 
-        try:
-            priority_match, priority_name = vision.find_image_any(hwnd, PRIORITY_UPGRADE_IMAGE_NAMES)
-        except vision.TemplateNotFound as exc:
-            self._log(f'{label}: {exc}')
-            return True
+        # Wait for the info panel to actually finish rendering rather than
+        # checking once, AUTO_UPGRADE_CLICK_SETTLE after the click. That single
+        # check was reported failing on units placed while a wave spawns -- the
+        # panel was simply slower than 0.6s that frame, and the block gave up on
+        # it with "not found -- skipping" even though it appeared right after.
+        # This is the same poll-to-a-deadline _run_upgrade_unit_tick already
+        # does for upgradeable/not_upgradeable; a panel that is already up
+        # still costs exactly one search, so nothing gets slower in the normal
+        # case. Hotkey input never reaches here -- it deliberately does not
+        # depend on finding this button at all.
+        deadline = time.time() + AUTO_UPGRADE_PANEL_LOAD_TIMEOUT
+        priority_match, priority_name = None, None
+        while True:
+            try:
+                priority_match, priority_name = vision.find_image_any(hwnd, PRIORITY_UPGRADE_IMAGE_NAMES)
+            except vision.TemplateNotFound as exc:
+                self._log(f'{label}: {exc}')
+                return True
+            if priority_match is not None or time.time() >= deadline:
+                break
+            if self._checkpoint(stop_event):
+                return True
+            time.sleep(AUTO_UPGRADE_PANEL_POLL_INTERVAL)
         if priority_match is None:
-            self._log(f'{label}: "priority_upgrade" not found on the info panel -- skipping.')
+            self._log(f'{label}: "priority_upgrade" not found on the info panel '
+                       f'(within {AUTO_UPGRADE_PANEL_LOAD_TIMEOUT:.0f}s) -- skipping.')
             return True
 
         debug_path = self._debug_save(hwnd, priority_name, priority_match)
