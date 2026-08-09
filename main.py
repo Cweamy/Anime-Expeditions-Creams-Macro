@@ -3929,14 +3929,30 @@ class Api:
                 time.sleep(0.4)  # let it present a frame before photographing its rect
             wm.bring_to_top(hwnd)  # z-order only: no focus, no activation, no input
             try:
-                left, top, right, bottom = wm.get_window_rect_screen(hwnd)
-                width, height = right - left, bottom - top
-                if width <= 0 or height <= 0:
-                    return {"ok": False, "reason": "bad_region"}
-                import mss
-                with mss.MSS() as sct:
-                    shot = sct.grab({"left": left, "top": top, "width": width, "height": height})
-                    bgra = shot.bgra
+                if sys.platform == "darwin":
+                    # A rectangular MSS grab photographs the desktop surface.
+                    # Roblox is rendered on a separate macOS compositor surface,
+                    # so that grab can contain only the wallpaper behind the game.
+                    # Quartz's per-window capture reads Roblox's own surface and is
+                    # already the capture path used by the live vision system.
+                    captured = wm.capture_window_rgb(hwnd)
+                    if not captured:
+                        return {"ok": False, "reason": "capture_failed"}
+                    rgb, width, height = captured
+                    import numpy as np
+                    image = np.frombuffer(rgb, np.uint8).reshape(height, width, 3)[:, :, ::-1]
+                else:
+                    left, top, right, bottom = wm.get_window_rect_screen(hwnd)
+                    width, height = right - left, bottom - top
+                    if width <= 0 or height <= 0:
+                        return {"ok": False, "reason": "bad_region"}
+                    import mss
+                    with mss.MSS() as sct:
+                        shot = sct.grab({"left": left, "top": top, "width": width, "height": height})
+                        bgra = shot.bgra
+                    import numpy as np
+                    image = np.frombuffer(bytearray(bgra), np.uint8).reshape(
+                        shot.height, shot.width, 4)[:, :, :3]
             finally:
                 if was_hidden:
                     wm.hide_window(hwnd)
@@ -3948,8 +3964,6 @@ class Api:
             # position/crop derived from it lands double-scaled. Identity
             # (and skipped) at the Windows norm.
             import cv2
-            import numpy as np
-            image = np.frombuffer(bytearray(bgra), np.uint8).reshape(shot.height, shot.width, 4)[:, :, :3]
             if image.shape[:2] != (config.FIXED_WIN_H, config.FIXED_WIN_W):
                 image = cv2.resize(image, (config.FIXED_WIN_W, config.FIXED_WIN_H), interpolation=cv2.INTER_AREA)
                 width, height = config.FIXED_WIN_W, config.FIXED_WIN_H
