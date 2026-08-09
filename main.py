@@ -184,6 +184,11 @@ MACRO_COORD_DEFAULTS = {
     "story_click_x": 666, "story_click_y": 147,
     "stage_row_x": 246, "stage_row_y": 230, "stage_row_height": 56,
     "act_row_x": 250, "act_row_y": 267, "act_row_height": 129,
+    # Event gamemode card click point (see runner._reach_event_act_selected):
+    # the card is clicked HERE by coordinate first, then the event_gamemode
+    # button (the image with the "Event Gamemode" text) is found and clicked
+    # by image search.
+    "event_gamemode_x": 152, "event_gamemode_y": 253,
     "challenge_stage_1_x": 460, "challenge_stage_1_y": 277,
     "challenge_stage_2_x": 460, "challenge_stage_2_y": 400,
     "challenge_stage_3_x": 460, "challenge_stage_3_y": 533,

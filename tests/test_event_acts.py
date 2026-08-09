@@ -19,3 +19,19 @@ def test_every_event_act_has_at_least_one_candidate_crop():
         candidates = (images,) if isinstance(images, str) else images
         assert candidates, f"Act {act} has no reference crop names"
         assert all(isinstance(n, str) and n for n in candidates), f"Act {act} has a bad crop name"
+
+
+def test_event_gamemode_click_coord_is_registered_in_both_coord_surfaces():
+    """_reach_event_act_selected clicks the Event gamemode card at the
+    fixed event_gamemode_x/y point (Settings > Debug > Macro Coordinates),
+    read through self._coords from core.runner's DEFAULT_COORDS and saved via
+    main.py's MACRO_COORD_DEFAULTS -- the two are hand-synced (see the
+    DEFAULT_COORDS comment), so this fails the moment one forgets the key."""
+    import main
+
+    expected = {"event_gamemode_x": 152, "event_gamemode_y": 253}
+    for key, value in expected.items():
+        assert rc.DEFAULT_COORDS.get(key) == value, \
+            f"{key} wrong or missing in core.runner_constants.DEFAULT_COORDS"
+        assert main.MACRO_COORD_DEFAULTS.get(key) == value, \
+            f"{key} wrong or missing in main.MACRO_COORD_DEFAULTS"

@@ -4385,6 +4385,7 @@ const MACRO_COORD_KEYS = [
   'story_click_x', 'story_click_y',
   'stage_row_x', 'stage_row_y', 'stage_row_height',
   'act_row_x', 'act_row_y', 'act_row_height',
+  'event_gamemode_x', 'event_gamemode_y',
   'challenge_stage_1_x', 'challenge_stage_1_y',
   'challenge_stage_2_x', 'challenge_stage_2_y',
   'challenge_stage_3_x', 'challenge_stage_3_y',
