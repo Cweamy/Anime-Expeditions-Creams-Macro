@@ -289,7 +289,6 @@ def test_failed_rejoin_stays_pending_and_does_not_launch_again(monkeypatch):
     runner = MacroRunner(Mock(), Mock(), Mock())
     clock = _Clock()
     stop_event = threading.Event()
-    launches = []
     screenshot = Mock(return_value="rejoin_timeout.png")
     monkeypatch.setattr(runner_module, "REJOIN_TIMEOUT", 5.0)
     monkeypatch.setattr(runner_module, "REJOIN_POLL_INTERVAL", 1.0)
@@ -298,8 +297,14 @@ def test_failed_rejoin_stays_pending_and_does_not_launch_again(monkeypatch):
     monkeypatch.setattr(runner_module.time, "sleep", clock.sleep)
     monkeypatch.setattr(runner_module.wm, "list_roblox_windows", lambda: [])
     monkeypatch.setattr(runner_module.wm, "is_window", lambda _hwnd: True)
+    events = []
+    monkeypatch.setattr(runner_module.wm, "close_roblox_process",
+                        lambda hwnd: events.append(("close", hwnd)))
     def find_lobby_after_existing_launch(*_args, **_kwargs):
-        if clock.now >= 6.0:
+        # 7.0: the rejoin closes the stuck client first (1s settle sleep),
+        # so the first pass's 5s timeout budget ends at t=6.0 -- the lobby
+        # must only appear AFTER that, on the second (pending) pass.
+        if clock.now >= 7.0:
             return ({"score": 1.0}, "nav_play")
         return (None, None)
 
@@ -307,7 +312,7 @@ def test_failed_rejoin_stays_pending_and_does_not_launch_again(monkeypatch):
     monkeypatch.setattr(
         runner_module.os,
         "startfile",
-        lambda url: launches.append(url),
+        lambda url: events.append(("launch", url)),
         raising=False,
     )
     runner._hwnd_getter = lambda: 123
@@ -315,7 +320,9 @@ def test_failed_rejoin_stays_pending_and_does_not_launch_again(monkeypatch):
 
     assert runner._attempt_rejoin(123, stop_event) is False
     assert not stop_event.is_set()
-    assert launches == [runner_module.REJOIN_DEEPLINK]
+    # The stuck client was closed BEFORE the fresh one was launched -- the
+    # deep link must never be asked to reconnect a wedged session.
+    assert events == [("close", 123), ("launch", runner_module.REJOIN_DEEPLINK)]
     assert runner.is_rejoin_pending()
     screenshot.assert_called_once_with(123, "rejoin_timeout")
     assert any(
@@ -323,12 +330,40 @@ def test_failed_rejoin_stays_pending_and_does_not_launch_again(monkeypatch):
         for call_args in runner._log.call_args_list
     )
 
-    # A later recovery pass waits on the same launcher. Once it exposes the
-    # lobby, the run can continue and the pending guard clears.
+    # A later recovery pass waits on the same launcher (the fresh client is
+    # already booting -- no second close, no second launch). Once it exposes
+    # the lobby, the run can continue and the pending guard clears.
     assert runner._attempt_rejoin(123, stop_event) is True
-    assert launches == [runner_module.REJOIN_DEEPLINK]
+    assert events == [("close", 123), ("launch", runner_module.REJOIN_DEEPLINK)]
     assert not runner.is_rejoin_pending()
     assert runner._current_hwnd == 123
+
+
+def test_rejoin_skips_close_when_other_windows_block_launch(monkeypatch):
+    # The stuck client must NOT be killed when the multi-instance guard
+    # refuses to launch -- that would take out the user's only remaining
+    # client (the alt) with nothing to relaunch it.
+    runner = MacroRunner(Mock(), Mock(), Mock())
+    stop_event = threading.Event()
+    launches = []
+    closed_clients = []
+    monkeypatch.setattr(runner_module.wm, "list_roblox_windows",
+                        lambda: [{"hwnd": 999, "pid": 1, "title": "alt"}])
+    monkeypatch.setattr(runner_module.wm, "is_window", lambda _hwnd: True)
+    monkeypatch.setattr(runner_module.wm, "close_roblox_process",
+                        lambda hwnd: closed_clients.append(hwnd))
+    monkeypatch.setattr(
+        runner_module.os,
+        "startfile",
+        lambda url: launches.append(url),
+        raising=False,
+    )
+    runner._hwnd_getter = lambda: 123
+
+    assert runner._attempt_rejoin(123, stop_event) is False
+    assert closed_clients == []
+    assert launches == []
+    assert not runner.is_rejoin_pending()
 
 
 def test_rejoin_lock_blocks_concurrent_launcher(monkeypatch):

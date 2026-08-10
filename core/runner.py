@@ -2734,12 +2734,17 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
 
     def _handle_disconnect(self, hwnd, stop_event: threading.Event, webhook: dict,
                              task: dict) -> None:
-        """Rejoin after Roblox displays its definite Reconnect/Retry prompt."""
+        """Recover after Roblox displays its definite Reconnect/Retry prompt.
+
+        The deep link can't reconnect a client wedged on that prompt, so the
+        rejoin path closes Roblox entirely (crash-equivalent end state) and
+        relaunches a fresh client into the experience -- see
+        _attempt_rejoin/_attempt_rejoin_locked."""
         why = "Roblox's own Reconnect/Retry prompt appeared"
-        self._log(f"[Macro] Disconnected from Roblox ({why}) -- attempting to rejoin.")
+        self._log(f"[Macro] Disconnected from Roblox ({why}) -- closing and relaunching Roblox.")
         screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "teleport_disconnected")
-        self._send_event_webhook(webhook, task, "Disconnected -- Rejoining",
-                                   f"{why.capitalize()}. Attempting to rejoin via deep link.",
+        self._send_event_webhook(webhook, task, "Disconnected -- Restarting Roblox",
+                                   f"{why.capitalize()}. Closing the stuck client and launching a fresh one.",
                                    0xE8935A, screenshot_path)
         self._attempt_rejoin(hwnd, stop_event)
 
@@ -2841,9 +2846,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             self._rejoin_lock.release()
 
     def _attempt_rejoin_locked(self, hwnd, stop_event: threading.Event) -> bool:
-        """Launches the Roblox deep link and waits for the lobby (nav_play)
-        to come back, polling self._hwnd_getter() rather than trusting the
-        original hwnd -- if Roblox had fully closed, the deep link spawns a
+        """Closes any stuck client, launches the Roblox deep link, and waits
+        for the lobby (nav_play) to come back, polling self._hwnd_getter()
+        rather than trusting the original hwnd -- the deep link spawns a
         brand new process/window, and main.py's dock watchdog re-docks it
         under a NEW hwnd on its own; this is how a rejoin picks that up
         instead of continuing to poll a dead window handle. Updates
@@ -2889,7 +2894,23 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                            "would close them. Continuing without launching another instance.")
                 return False
 
-            self._set_status(action="Disconnected -- rejoining...")
+            self._set_status(action="Disconnected -- restarting Roblox...")
+            # A disconnect wedges the client on its Reconnect/Retry prompt;
+            # the deep link alone can't recover that -- Roblox never answers
+            # it. Close the stuck client outright (same end state as a
+            # crash) so the deep link below boots a FRESH Roblox instead of
+            # asking a dead session to reconnect. Only genuine crashes got
+            # here before, and closing the window ourselves reproduces that
+            # path exactly.
+            try:
+                if _cur and wm.is_window(_cur):
+                    wm.close_roblox_process(_cur)
+                    self._log("[Macro] Closed the disconnected Roblox client -- launching a fresh one.")
+                    # Let the process actually die before the deep link's
+                    # single-instance handling talks to a half-gone client.
+                    time.sleep(1.0)
+            except Exception as exc:
+                self._log(f"[Macro] Couldn't close the disconnected Roblox client: {exc}")
             # A rejoin creates a fresh game session; the previous team's visual
             # state cannot be assumed to survive it.
             self._last_applied_team_loadout = None
