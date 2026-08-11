@@ -281,6 +281,7 @@ SPECIAL_STAGES_NO_DIFFICULTY = ("Infinite", "Mastery")
 EXPEDITION_MAP_IMAGES = {
     "Flower Forest": "expedition_flower_forest",
     "Rose Kingdom": "expedition_rose_kingdom",
+    "East Town": "expedition_east_town",
 }
 # Regular Challenge is Story's own flow, just with the game picking a
 # random one of these 5 maps for you instead of you picking it -- so

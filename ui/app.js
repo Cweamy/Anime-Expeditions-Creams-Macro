@@ -2139,7 +2139,7 @@ async function saveWebhookSettings(silentSave) {
 const TASK_DATA = {
   story: {
     label: 'Story',
-    maps: ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb", 'Flower Forest'],
+    maps: ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb", 'Flower Forest', 'East Town'],
     stages: ['1', '2', '3', '4', '5', 'Infinite', 'Mastery'],
     difficulties: ['Normal', 'Hard'],
   },
@@ -2151,7 +2151,7 @@ const TASK_DATA = {
   },
   expedition: {
     label: 'Expedition',
-    maps: ['School Grounds', 'Flower Forest', 'Rose Kingdom'],
+    maps: ['School Grounds', 'Flower Forest', 'Rose Kingdom', 'East Town'],
     difficulties: ['1', '2', '3'],
     // How many "exp_extract" prompts to decline before actually taking
     // one -- 0 extracts at the first one shown, 1 (default, matches the

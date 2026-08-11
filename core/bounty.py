@@ -15,7 +15,7 @@ import numpy as np
 from . import ocr_windows
 from . import vision
 
-STORY_MAPS = ("School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest")
+STORY_MAPS = ("School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest", "East Town")
 BOARD_REGION = (170, 150, 970, 470)
 _GREEN_LO = np.array((35, 105, 75), dtype=np.uint8)
 _GREEN_HI = np.array((90, 255, 255), dtype=np.uint8)
