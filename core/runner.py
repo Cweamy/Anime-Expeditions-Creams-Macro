@@ -1487,6 +1487,32 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 return False
             if self._checkpoint(stop_event):
                 return False
+        elif mode == "tower":
+            # Tower goes through Play like Story/Raid (nav_tower sits on the
+            # gamemode menu, picked instead of Story), but has no map carousel
+            # and no difficulty. Picking Traitless is optional; Normal Tower is
+            # selected by doing nothing before the shared Select Stage + solo
+            # Start tail below. Same retried-from-the-lobby loop as the
+            # Tournament path, since a failed attempt leaves nothing safe to
+            # assume about where we ended up.
+            reached_tower = False
+            for attempt in range(1, MAP_SELECT_RETRY_ATTEMPTS + 1):
+                if self._checkpoint(stop_event):
+                    return False
+                if attempt > 1:
+                    self._log(f"[Macro] Retrying Tower entry from the lobby "
+                              f"(attempt {attempt}/{MAP_SELECT_RETRY_ATTEMPTS})...")
+                if self._reach_tower_selected(hwnd, stop_event, task):
+                    reached_tower = True
+                    break
+                if stop_event.is_set():
+                    return False
+            if not reached_tower:
+                self._log(f'[Macro] Couldn\'t reach the Tower screen after '
+                          f'{MAP_SELECT_RETRY_ATTEMPTS} attempts -- stopping.')
+                return False
+            if self._checkpoint(stop_event):
+                return False
         else:
             # Lobby -> Play -> Story/Raid -> map search, retried wholesale from
             # the lobby if the map search fails and backing out succeeds (see
@@ -2058,9 +2084,15 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             # same stage directly, skipping the lobby/gamemode/map/stage
             # picks entirely (see _run_task_setup, which only runs once per
             # task, not once per repeat).
-            self._set_status(action=f"{label} -- clicking Repeat Stage...")
-            if not self._click_and_verify_gone(hwnd, stop_event, "repeat_stage", NAV_CLICK_TIMEOUT):
-                self._log('[Macro] "Repeat Stage" not found -- can\'t continue this task\'s repeats, stopping.')
+            if task.get("mode") == "tower":
+                repeat_image = "Next_Floor" if result == "win" else "Repeat_Floor"
+                repeat_label = repeat_image
+            else:
+                repeat_image = "repeat_stage"
+                repeat_label = "Repeat Stage"
+            self._set_status(action=f"{label} -- clicking {repeat_label}...")
+            if not self._click_and_verify_gone(hwnd, stop_event, repeat_image, NAV_CLICK_TIMEOUT):
+                self._log(f'[Macro] "{repeat_label}" not found -- can\'t continue this task\'s repeats, stopping.')
                 return False
             # _click_and_verify_gone only confirms the repeat_stage BUTTON
             # image is gone, not that the whole Victory/Defeat results panel
@@ -2167,7 +2199,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         raw_stage = task.get("stage") or "-"
         # Raid/Event pick Acts; Story's Infinite/Mastery are named; the rest
         # are numbered stages.
-        if mode in ("raid", "event"):
+        if mode == "tower":
+            stage = "-"
+        elif mode in ("raid", "event"):
             stage = f"Act {raw_stage}" if raw_stage != "-" else "-"
         elif str(raw_stage).isdigit():
             stage = f"Stage {raw_stage}"
@@ -2180,7 +2214,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # no difficulty at all.
         if mode == "raid" or raw_stage in SPECIAL_STAGES_NO_DIFFICULTY:
             difficulty = "Hard"
-        elif mode in ("event", "tournament"):
+        elif mode in ("event", "tournament", "tower"):
             difficulty = "-"
         else:
             difficulty = task.get("difficulty") or "-"
@@ -3904,6 +3938,48 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Let the Enter Tournament screen finish animating in before the shared
         # tail searches for nav_entertournament (same reason the event/map
         # paths settle after their final click).
+        time.sleep(SETTLE_DELAY)
+        return not self._checkpoint(stop_event)
+
+    def _reach_tower_selected(self, hwnd, stop_event: threading.Event, task: dict) -> bool:
+        """Lobby -> Play -> Tower -> optional Traitless, as one restartable unit."""
+        # Same "gamemode menu already open" shortcut as _reach_map_selected and
+        # _reach_tournament_selected: if nav_back is on screen the menu's already
+        # up, so checking for the lobby and clicking Play would just burn
+        # LOBBY_CHECK_TIMEOUT waiting for a Play button that doesn't exist there.
+        try:
+            already_open = vision.find_image(hwnd, "nav_back") is not None
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] {exc}")
+            return False
+        if already_open:
+            self._log("[Macro] Already on the gamemode menu -- skipping the lobby and Play.")
+        else:
+            if not self._ensure_lobby(hwnd, stop_event):
+                return False
+            if self._checkpoint(stop_event):
+                return False
+            if not self._click_play(hwnd, stop_event):
+                return False
+            if self._checkpoint(stop_event):
+                return False
+
+        self._set_status(action="Clicking Tower...")
+        if self._click_found_image(hwnd, "nav_tower", TOWER_SCREEN_TIMEOUT, stop_event) is None:
+            self._spam_back_until_gone(hwnd, stop_event)
+            return False
+        if self._checkpoint(stop_event):
+            return False
+        time.sleep(SETTLE_DELAY)
+
+        if task.get("tower_mode") == "traitless":
+            self._set_status(action="Selecting Traitless...")
+            if self._click_found_image(hwnd, "tower_traitless", TOWER_SCREEN_TIMEOUT, stop_event) is None:
+                self._spam_back_until_gone(hwnd, stop_event)
+                return False
+            self._log("[Macro] Traitless Tower selected.")
+        else:
+            self._log("[Macro] Normal Tower -- no Traitless click needed.")
         time.sleep(SETTLE_DELAY)
         return not self._checkpoint(stop_event)
 
