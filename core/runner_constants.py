@@ -676,6 +676,8 @@ FUEL_UNIT_SECONDS = 5 * 60
 FUEL_MIN_SAFETY_SECONDS = 5 * 60
 FUEL_SAFETY_RATIO = 0.04
 FUEL_INTERVAL_SECONDS = 8 * 60 * 60
+FUEL_INTERVAL_MINUTES_MIN = 1
+FUEL_INTERVAL_MINUTES_MAX = 10080  # 7 days
 FUEL_RETRY_SECONDS = 5 * 60
 FUEL_AMOUNT_MAX = 100
 FUEL_AREA_TIMEOUT = 10.0
@@ -685,6 +687,13 @@ FUEL_CLICK_DELAY = 1.2
 FUEL_ACTION_TIMEOUT = 15.0
 FUEL_CONFIRM_TIMEOUT = 20.0
 FUEL_CLOSE_TIMEOUT = 2.0
+
+
+def fuel_interval_override_seconds(minutes) -> int:
+    """Return a user override interval in seconds, clamped to the allowed range."""
+    if minutes == 0:
+        return 0
+    return min(FUEL_INTERVAL_MINUTES_MAX, max(FUEL_INTERVAL_MINUTES_MIN, minutes)) * 60
 
 
 def fuel_refill_interval_seconds(amount) -> int:

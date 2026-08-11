@@ -2,6 +2,8 @@ from core import settings
 from core import paths
 from core.runner_constants import (
     FUEL_INTERVAL_SECONDS,
+    FUEL_INTERVAL_MINUTES_MAX,
+    FUEL_INTERVAL_MINUTES_MIN,
     FUEL_RETRY_SECONDS,
     fuel_refill_interval_seconds,
 )
@@ -129,3 +131,68 @@ def test_amount_and_path_validation(monkeypatch, tmp_path):
 
     assert api.set_fuel_path("hub_to_resource_drill", "Drill Route")["ok"] is True
     assert api.get_fuel_settings()["paths"]["hub_to_resource_drill"] == "Drill Route"
+
+
+def test_set_fuel_interval_persists_and_overrides_max(monkeypatch, tmp_path):
+    api = _api(monkeypatch, tmp_path)
+    api.set_fuel_resource_enabled("resource_drill", True)
+
+    result = api.set_fuel_interval(30)
+    current = api.get_fuel_settings()
+
+    assert result == {"ok": True, "interval_minutes": 30}
+    assert current["interval_minutes"] == 30
+    assert current["interval_seconds"] == 30 * 60
+    assert current["resources"]["resource_drill"]["interval_seconds"] == 30 * 60
+
+    reloaded = object.__new__(Api)
+    assert reloaded.get_fuel_settings()["interval_minutes"] == 30
+
+
+def test_fuel_interval_zero_keeps_auto_amount_intervals(monkeypatch, tmp_path):
+    api = _api(monkeypatch, tmp_path)
+    api.set_fuel_interval(0)
+    api.set_fuel_resource_amount("resource_drill", 20)
+
+    current = api.get_fuel_settings()
+
+    assert current["interval_minutes"] == 0
+    assert current["interval_seconds"] == FUEL_INTERVAL_SECONDS
+    assert current["resources"]["gold_mine"]["interval_seconds"] == FUEL_INTERVAL_SECONDS
+    assert current["resources"]["resource_drill"]["interval_seconds"] == fuel_refill_interval_seconds(20)
+
+
+def test_fuel_interval_validation_and_clamping(monkeypatch, tmp_path):
+    api = _api(monkeypatch, tmp_path)
+
+    assert api.set_fuel_interval("garbage") == {"ok": False, "reason": "bad_interval"}
+    assert api.set_fuel_interval(-10) == {"ok": True, "interval_minutes": FUEL_INTERVAL_MINUTES_MIN}
+    assert api.get_fuel_settings()["interval_minutes"] == FUEL_INTERVAL_MINUTES_MIN
+    assert api.set_fuel_interval(999_999) == {"ok": True, "interval_minutes": FUEL_INTERVAL_MINUTES_MAX}
+    assert api.get_fuel_settings()["interval_minutes"] == FUEL_INTERVAL_MINUTES_MAX
+
+
+def test_changing_fuel_interval_recomputes_enabled_timers(monkeypatch, tmp_path):
+    api = _api(monkeypatch, tmp_path)
+    monkeypatch.setattr("main.time.time", lambda: 50_000.0)
+    api.set_fuel_resource_enabled("resource_drill", True)
+    fuel = api.get_fuel_settings()
+    fuel["resources"]["resource_drill"]["last_refilled_at"] = 10_000.0
+    fuel["resources"]["resource_drill"]["next_attempt_at"] = 10_000.0 + FUEL_INTERVAL_SECONDS
+    api._save_fuel_settings(fuel)
+
+    api.set_fuel_interval(30)
+
+    assert api.get_fuel_settings()["resources"]["resource_drill"]["next_attempt_at"] == 10_000.0 + 1800
+
+
+def test_mark_fuel_refill_result_success_uses_interval_override(monkeypatch, tmp_path):
+    api = _api(monkeypatch, tmp_path)
+    now = [70_000.0]
+    monkeypatch.setattr("main.time.time", lambda: now[0])
+    api.set_fuel_resource_enabled("gold_mine", True)
+    api.set_fuel_interval(30)
+
+    api.mark_fuel_refill_result("gold_mine", True)
+
+    assert api.get_fuel_settings()["resources"]["gold_mine"]["next_due_at"] == now[0] + 1800
