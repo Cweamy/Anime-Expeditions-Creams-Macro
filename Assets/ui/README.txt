@@ -118,11 +118,21 @@ raid.png
 expedition.png
   Same idea as raid.png, for the Expedition gamemode card.
 
+nav_tower.png
+  The Tower gamemode card on the Play menu, same idea as raid.png /
+  expedition.png and nav_tournament. Crop tightly around the Tower card;
+  add variants in nav_tower/ if Image Manager crops differ on your setup.
+
 expedition_flower_forest.png / expedition_rose_kingdom.png
   Expedition's own map cards (core.runner._select_expedition_map,
   EXPEDITION_MAP_IMAGES) -- clicked to pick that map on the Expedition
   screen. School Grounds has NO image here: it's whatever's selected by
   default when the screen opens, so no search/click happens for it at all.
+
+tower_traitless.png
+  Tower's Traitless option on the Tower screen. Normal needs no image; it is
+  clicked only when Traitless is selected for the task. Crop tightly around
+  the Traitless option and add variants if needed.
 
 nav_select_stage.png
   The confirm button that finalizes a Story/Raid map+stage+difficulty
@@ -190,6 +200,11 @@ victory.png / defeat.png
   art ever renders differently on your setup, add a crop of it to the
   defeat/ folder as another variant. Victory's current-layout variants
   also cover internal UI rendering from 85-115%.
+
+next.png
+  Tower's win/result-screen Next button. Tower uses this instead of Repeat
+  Stage after a run; crop tightly around the button and add variants if the
+  result screen renders differently on your setup.
 
 School Grounds.png / Rose Kingdom.png / Fairy King Forest.png /
 King's Tomb.png / Flower Forest.png
