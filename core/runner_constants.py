@@ -231,7 +231,7 @@ TOURNAMENT_TYPE_IMAGES = {
     "Solo Tournament": ("solo_tournament",),
 }
 TOURNAMENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Tournament screen (nav_tournament / the type card / nav_entertournament) to appear
-TOWER_SCREEN_TIMEOUT = 10.0  # how long to wait for each Tower screen (nav_tower / tower_traitless / nav_select_stage) to appear
+TOWER_SCREEN_TIMEOUT = 10.0  # how long to wait for each Tower screen (nav_tower / Traitless_Tower / nav_select_stage) to appear
 
 # Auto Bounty derives all objective clicks from the live board. These values
 # only bound waits and the board's outer scroll gesture.

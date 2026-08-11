@@ -3974,7 +3974,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
 
         if task.get("tower_mode") == "traitless":
             self._set_status(action="Selecting Traitless...")
-            if self._click_found_image(hwnd, "tower_traitless", TOWER_SCREEN_TIMEOUT, stop_event) is None:
+            if self._click_found_image(hwnd, "Traitless_Tower", TOWER_SCREEN_TIMEOUT, stop_event) is None:
                 self._spam_back_until_gone(hwnd, stop_event)
                 return False
             self._log("[Macro] Traitless Tower selected.")

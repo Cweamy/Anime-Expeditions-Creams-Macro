@@ -129,7 +129,7 @@ expedition_flower_forest.png / expedition_rose_kingdom.png
   screen. School Grounds has NO image here: it's whatever's selected by
   default when the screen opens, so no search/click happens for it at all.
 
-tower_traitless.png
+Traitless_Tower.png
   Tower's Traitless option on the Tower screen. Normal needs no image; it is
   clicked only when Traitless is selected for the task. Crop tightly around
   the Traitless option and add variants if needed.
