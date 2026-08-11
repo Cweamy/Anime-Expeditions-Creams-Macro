@@ -38,6 +38,7 @@ _CARD_RARITIES = (
 )
 _GOLD_REROLL_LO = np.array((10, 105, 80), dtype=np.uint8)
 _GOLD_REROLL_HI = np.array((35, 255, 255), dtype=np.uint8)
+_BOUNTY_WAVE_CARD_SIZE = (210, 230)
 
 
 def _word_similarity(word: str, wanted: str) -> float:
@@ -71,6 +72,127 @@ def _classify_card_rarity_texts(texts) -> str | None:
     if word_score < 0.62:
         return None
     return "mythic" if rarity == "mythic" else "other"
+
+
+def _extract_wave_targets(reads: list, *, allow_clear_number: bool = False) -> list:
+    """Extract final-wave bounty targets from OCR near a wave label.
+
+    Infinite bounty targets seen in code/tests are two-digit wave goals such as
+    15, 20, 30, 45, 50, and 60. A lone OCR digit after ``Wave`` is therefore a
+    clipped trailing zero in this UI, not a safe completed-wave target.
+    """
+    targets = []
+    digit_map = str.maketrans({
+        "O": "0", "o": "0", "S": "5", "s": "5",
+        "Z": "2", "z": "2", "I": "1", "i": "1",
+        "L": "1", "l": "1",
+    })
+    for raw in reads or []:
+        raw = str(raw or "")
+        words = list(re.finditer(r"[A-Za-z]{2,14}", raw))
+        for match in words:
+            word = match.group()
+            normalized = re.sub(r"[^a-z]", "", word.lower())
+            is_wave = "wave" in normalized or _word_similarity(word, "wave") >= 0.50
+            is_clear = _word_similarity(word, "clear") >= 0.55
+            if not is_wave and not (allow_clear_number and is_clear):
+                continue
+
+            tail = raw[match.end():match.end() + 12]
+            number_match = re.match(
+                r"[\s:.,_\-\u2013\u2014|/]*([0-9OSZIlCc]{1,3})(?=\D|$)",
+                tail,
+                re.IGNORECASE,
+            )
+            if number_match is None:
+                continue
+
+            raw_token = number_match.group(1)
+            if raw_token[-1:] in ("C", "c"):
+                if len(raw_token) != 2:
+                    continue
+                raw_token = raw_token[:-1] + "0"
+            token = raw_token.translate(digit_map)
+            if not token.isdigit():
+                continue
+            if len(token) == 1:
+                if not is_wave:
+                    continue
+                token = f"{token}0"
+            value = int(token)
+            if 10 <= value <= 100:
+                targets.append(value)
+    return targets
+
+
+def _wave_read_quality(text: str) -> int:
+    """Score OCR evidence from one read without pretending it is OCR confidence."""
+    text = str(text or "")
+    words = re.findall(r"[A-Za-z]{2,14}", text)
+    has_wave = any(
+        "wave" in re.sub(r"[^a-z]", "", word.lower())
+        or _word_similarity(word, "wave") >= 0.50
+        for word in words
+    )
+    has_clear = any(_word_similarity(word, "clear") >= 0.55 for word in words)
+    return (2 if has_wave else 0) + (1 if has_clear else 0) + (
+        1 if re.search(r"\bof\b", text, re.IGNORECASE) else 0)
+
+
+def _choose_wave_target(read_groups: list) -> int | None:
+    """Choose a wave from independent, card-local OCR variants."""
+    grouped = {}
+    for source, reads, _priority in read_groups:
+        counts = Counter()
+        for read in reads or []:
+            values = set(_extract_wave_targets(
+                [read], allow_clear_number=source != "context"))
+            for value in values:
+                counts[value] += 1
+        if counts:
+            grouped[source] = counts
+
+    def best(counts):
+        return max(counts, key=lambda value: (counts[value], value))
+
+    card_contrast = grouped.get("card_contrast")
+    if card_contrast:
+        candidate = best(card_contrast)
+        if card_contrast[candidate] >= 2:
+            return candidate
+
+    card_raw = grouped.get("card_raw")
+    if card_raw:
+        return best(card_raw)
+
+    local_contrast = grouped.get("local_contrast")
+    if local_contrast:
+        candidate = best(local_contrast)
+        if local_contrast[candidate] >= 2:
+            return candidate
+
+    scores = Counter()
+    evidence = {}
+    for source, reads, priority in read_groups:
+        counts = grouped.get(source, {})
+        if not counts:
+            continue
+        for value, count in counts.items():
+            representative = next(
+                (read for read in reads
+                 if value in _extract_wave_targets(
+                     [read], allow_clear_number=source != "context")),
+                "",
+            )
+            weight = max(1, int(priority) + _wave_read_quality(representative))
+            scores[value] += count * weight
+            evidence.setdefault(value, set()).add(source)
+    if not scores:
+        return None
+    return max(
+        scores,
+        key=lambda value: (scores[value], len(evidence.get(value, ())), value),
+    )
 
 
 def read_card_rarity(frame_bgr: np.ndarray, card, ocr_lines=None) -> str | None:
@@ -530,6 +652,7 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
         + _colored_components(board, _CYAN_LO, _CYAN_HI, "hard")
     )
     objectives = []
+    wave_cards = None
     board_hsv = cv2.cvtColor(board, cv2.COLOR_BGR2HSV)
     green_mask = cv2.inRange(board_hsv, _GREEN_LO, _GREEN_HI)
     for link in links:
@@ -640,6 +763,10 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
                 nearby.append(line.get("text", ""))
         text = " ".join(nearby)
         local_texts = []
+        raw_local_texts = []
+        local_contrast_texts = []
+        card_raw_texts = []
+        card_contrast_texts = []
         if ocr_lines is None:
             x1, y1 = max(0, link["x"] - 35), max(0, link["y"] - 30)
             x2 = min(board.shape[1], link["x"] + link["w"] + 35)
@@ -650,23 +777,129 @@ def detect_objectives(frame_bgr: np.ndarray, ocr_lines=None) -> list:
                         local, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
                     read = ocr_windows.ocr_image(enlarged)
                     if read:
+                        raw_local_texts.append(read)
                         local_texts.append(read)
+                raw_wave_values = _extract_wave_targets(raw_local_texts)
+                needs_wave_fallback = (
+                    link["kind"] == "infinite"
+                    and (not raw_wave_values
+                         or any(value in (20, 30) for value in raw_wave_values))
+                )
+                if needs_wave_fallback:
+                    if wave_cards is None:
+                        wave_cards = detect_card_scrolls(frame_bgr)
+
+                    link_x, link_y = bx + link["x"], by + link["y"]
+                    matched_card = None
+                    for card_item in wave_cards:
+                        card_x, card_y, card_w, card_h = card_item["card"]
+                        if (card_x - 12 <= link_x <= card_x + card_w + 12
+                                and card_y - 12 <= link_y <= card_y + card_h + 12):
+                            matched_card = card_item["card"]
+                            break
+
+                    if matched_card is not None:
+                        card_x, card_y, card_w, card_h = matched_card
+                        card_crop = frame_bgr[
+                            max(0, card_y):min(frame_bgr.shape[0], card_y + card_h),
+                            max(0, card_x):min(frame_bgr.shape[1], card_x + card_w),
+                        ]
+                        if card_crop.size:
+                            normalized = cv2.resize(
+                                card_crop,
+                                _BOUNTY_WAVE_CARD_SIZE,
+                                interpolation=cv2.INTER_CUBIC,
+                            )
+                            normalized_x = (
+                                (link_x - card_x)
+                                * _BOUNTY_WAVE_CARD_SIZE[0] / card_w
+                            )
+                            normalized_y = (
+                                (link_y - card_y)
+                                * _BOUNTY_WAVE_CARD_SIZE[1] / card_h
+                            )
+                            scaled_link_width = int(round(
+                                link["w"]
+                                * _BOUNTY_WAVE_CARD_SIZE[0] / card_w
+                            ))
+                            rx1 = max(0, int(normalized_x - 70))
+                            rx2 = min(
+                                _BOUNTY_WAVE_CARD_SIZE[0],
+                                int(normalized_x + scaled_link_width + 70),
+                            )
+                            ry1 = max(0, int(normalized_y - 25))
+                            ry2 = min(
+                                _BOUNTY_WAVE_CARD_SIZE[1],
+                                int(
+                                    normalized_y
+                                    + link["h"]
+                                    * _BOUNTY_WAVE_CARD_SIZE[1] / card_h
+                                    + 25
+                                ),
+                            )
+                            focused = normalized[ry1:ry2, rx1:rx2]
+                            if focused.size:
+                                for scale in (2, 3):
+                                    enlarged = cv2.resize(
+                                        focused,
+                                        None,
+                                        fx=scale,
+                                        fy=scale,
+                                        interpolation=cv2.INTER_CUBIC,
+                                    )
+                                    read = ocr_windows.ocr_image(enlarged)
+                                    if read:
+                                        card_raw_texts.append(read)
+                                        local_texts.append(read)
+
+                                gray = cv2.cvtColor(focused, cv2.COLOR_BGR2GRAY)
+                                for threshold in (60, 80):
+                                    _, mask = cv2.threshold(
+                                        gray, threshold, 255, cv2.THRESH_BINARY)
+                                    enlarged = cv2.resize(
+                                        mask,
+                                        None,
+                                        fx=2,
+                                        fy=2,
+                                        interpolation=cv2.INTER_CUBIC,
+                                    )
+                                    read = ocr_windows.ocr_image(enlarged)
+                                    if read:
+                                        card_contrast_texts.append(read)
+                                        local_texts.append(read)
+                    else:
+                        gray = cv2.cvtColor(local, cv2.COLOR_BGR2GRAY)
+                        for threshold, scale in ((60, 2), (90, 3)):
+                            _, mask = cv2.threshold(
+                                gray, threshold, 255, cv2.THRESH_BINARY)
+                            enlarged = cv2.resize(
+                                mask,
+                                None,
+                                fx=scale,
+                                fy=scale,
+                                interpolation=cv2.INTER_CUBIC,
+                            )
+                            read = ocr_windows.ocr_image(enlarged)
+                            if read:
+                                local_contrast_texts.append(read)
+                                local_texts.append(read)
                 text = f"{text} {' '.join(local_texts)}"
 
         wave_value = None
         if link["kind"] == "infinite":
-            votes = []
-            for read in local_texts:
-                numbers = re.findall(r"\d{1,3}", read)
-                if numbers:
-                    votes.append(int(numbers[-1]))
-            clean = re.findall(r"clear\s*\W*(?:w(?:ave|ave|ve|e))?\s*(\d+)", text, re.I)
-            votes.extend(int(value) for value in clean)
-            if not votes and "clear" in text.lower():
-                votes.extend(int(value) for value in re.findall(r"\d{1,3}", text))
-            if votes:
-                counts = Counter(votes)
-                wave_value = max(counts, key=lambda value: (counts[value], value))
+            nearby = []
+            for line in lines:
+                if abs(int(line["cy"]) - link["cy"]) <= 42 and (
+                        int(line["x"]) < link["x"] + link["w"] + 45
+                        and int(line["x"]) + int(line["w"]) > link["x"] - 45):
+                    nearby.append(line.get("text", ""))
+            wave_value = _choose_wave_target([
+                ("context", nearby, 3),
+                ("local_raw", raw_local_texts, 2),
+                ("local_contrast", local_contrast_texts, 3),
+                ("card_raw", card_raw_texts, 5),
+                ("card_contrast", card_contrast_texts, 6),
+            ])
         if link["kind"] == "infinite" and wave_value is None:
             continue
         if link["kind"] == "hard" and "difficulty" not in text.lower():

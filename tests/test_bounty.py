@@ -255,6 +255,84 @@ def test_detects_green_wave_link_from_color_and_nearby_objective():
     assert found[0]["target_wave"] == 30
 
 
+def test_wave_parser_anchors_target_and_repairs_final_zero():
+    assert bounty._extract_wave_targets([
+        "Mythic Bounty #2 Clear Wave of King's Tomb",
+    ]) == []
+    assert bounty._extract_wave_targets([
+        "Mythic Bounty #2 Clear Wave 30 of King's Tomb",
+    ]) == [30]
+    assert bounty._extract_wave_targets([
+        "Clear Wave 6 of King's Tomb",
+    ]) == [60]
+    assert bounty._extract_wave_targets([
+        "Clear Wave 6C of King's Tomb",
+    ]) == [60]
+    assert bounty._extract_wave_targets([
+        "Clear Wave 60C of King's Tomb",
+    ]) == []
+
+
+def test_wave_parser_rejects_bare_single_digit_without_wave_context():
+    assert bounty._extract_wave_targets(["Clear 6"]) == []
+    assert bounty._extract_wave_targets(
+        ["Clear 6"], allow_clear_number=True) == []
+    assert bounty._extract_wave_targets(
+        ["Clear 30"], allow_clear_number=True) == [30]
+
+
+def test_wave_selection_prefers_normalized_consensus_over_20_30_swap():
+    selected = bounty._choose_wave_target([
+        ("context", ["Clear Wave 20 of King's Tomb"], 3),
+        ("local_raw", ["Clear Wave 20 of", "Clear Wave 20 of"], 2),
+        ("card_raw", ["Clear Wave 20 of"], 5),
+        ("card_contrast", ["Clear 30", "Clear 30"], 6),
+    ])
+
+    assert selected == 30
+
+
+def test_wave_selection_uses_normalized_raw_when_contrast_is_empty():
+    selected = bounty._choose_wave_target([
+        ("local_raw", ["Clear Wave 20 of", "Clear Wave 20 of"], 2),
+        ("card_raw", ["Clear Wave 30 of"], 5),
+    ])
+
+    assert selected == 30
+
+
+def test_detect_objectives_uses_card_local_wave_consensus(monkeypatch):
+    frame = _frame()
+    link = {
+        "kind": "infinite", "x": 80, "y": 100, "w": 60, "h": 10,
+        "cx": 110, "cy": 105, "visual_id": 123,
+    }
+    reads = iter([
+        "0/1", "0/1",
+        "Clear Wave 20 of", "Clear Wave 20 of",
+        "Clear Wave 20 of", "Clear Wave 20 of",
+        "Clear 30", "Clear 30",
+    ])
+    monkeypatch.setattr(bounty.ocr_windows, "ocr_lines", lambda _image: [])
+    monkeypatch.setattr(
+        bounty.ocr_windows, "ocr_image", lambda _image: next(reads))
+    monkeypatch.setattr(
+        bounty,
+        "_colored_components",
+        lambda _board, _lower, _upper, kind: [link] if kind == "infinite" else [],
+    )
+    monkeypatch.setattr(
+        bounty,
+        "detect_card_scrolls",
+        lambda _frame: [{"card": (220, 220, 200, 230)}],
+    )
+
+    found = bounty.detect_objectives(frame)
+
+    assert len(found) == 1
+    assert found[0]["target_wave"] == 30
+
+
 def test_rejects_decorative_green_without_wave_text():
     frame = _frame()
     bx, by, _bw, _bh = bounty.BOARD_REGION
