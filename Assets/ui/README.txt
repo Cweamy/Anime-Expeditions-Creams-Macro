@@ -201,10 +201,10 @@ victory.png / defeat.png
   defeat/ folder as another variant. Victory's current-layout variants
   also cover internal UI rendering from 85-115%.
 
-next.png
-  Tower's win/result-screen Next button. Tower uses this instead of Repeat
-  Stage after a run; crop tightly around the button and add variants if the
-  result screen renders differently on your setup.
+next_floor.png / repeat_floor.png
+  Tower's result-screen floor buttons. Next Floor advances to the next floor;
+  Repeat Floor retries the current floor. Crop tightly around each button and
+  add variants if the result screen renders differently on your setup.
 
 School Grounds.png / Rose Kingdom.png / Fairy King Forest.png /
 King's Tomb.png / Flower Forest.png
