@@ -3769,14 +3769,14 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
 
     def _reach_event_act_selected(self, hwnd, stop_event: threading.Event, act: str,
                                     scroll_power: int = None, scroll_nudges: int = None) -> bool:
-        """Lobby -> Event -> Event gamemode -> Act (villain card), as one
+        """Lobby -> Event -> Villian Invasion -> Event gamemode -> Act (villain card), as one
         restartable unit -- Event's equivalent of _reach_map_selected. Event
         has its OWN lobby entry (the nav_event button), not the Play ->
         gamemode -> map flow the other modes share, so there's no gamemode
-        menu or map carousel here: click nav_event, click the event_gamemode
-        card, then the chosen Act's villain card. On any failure it backs out
-        to the lobby (_spam_back_until_gone) so the next attempt starts clean,
-        same as the map path does.
+        menu or map carousel here: click nav_event, click Villian Invasion,
+        click the event_gamemode card, then the chosen Act's villain card. On
+        any failure it backs out to the lobby (_spam_back_until_gone) so the
+        next attempt starts clean, same as the map path does.
 
         The first couple of Act cards are on screen already; later ones
         (EVENT_ACT_SCROLL_FROM_INDEX on) sit below the fold and only come into
@@ -3803,11 +3803,20 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             return False
 
         # nav_event: the lobby's Event button (its own nav entry, not under
-        # Play). Each of the three clicks below is a wait-then-click with a
+        # Play). Each image click below is a wait-then-click with a
         # focus-safe verify via _click_found_image, and each screen animates
         # in, so a short settle follows before searching the next one.
         self._set_status(action="Clicking Event...")
         if self._click_found_image(hwnd, "nav_event", EVENT_SCREEN_TIMEOUT, stop_event) is None:
+            self._spam_back_until_gone(hwnd, stop_event)
+            return False
+        if self._checkpoint(stop_event):
+            return False
+        time.sleep(SETTLE_DELAY)
+
+        self._set_status(action="Clicking Villian Invasion...")
+        match = self._click_found_image(hwnd, "Villian_Invasion", EVENT_SCREEN_TIMEOUT, stop_event)
+        if match is None:
             self._spam_back_until_gone(hwnd, stop_event)
             return False
         if self._checkpoint(stop_event):

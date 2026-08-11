@@ -1,3 +1,7 @@
+import threading
+
+import core.runner as runner_module
+from core.runner import MacroRunner
 from core import runner_constants as rc
 
 
@@ -35,3 +39,61 @@ def test_event_gamemode_click_coord_is_registered_in_both_coord_surfaces():
             f"{key} wrong or missing in core.runner_constants.DEFAULT_COORDS"
         assert main.MACRO_COORD_DEFAULTS.get(key) == value, \
             f"{key} wrong or missing in main.MACRO_COORD_DEFAULTS"
+
+
+def test_reach_event_act_selected_clicks_villian_invasion_between_event_and_gamemode(monkeypatch):
+    runner = object.__new__(MacroRunner)
+    events = []
+
+    runner._mouse = type("Mouse", (), {"click": lambda self, x, y: events.append(("coord", x, y))})()
+    runner._ensure_lobby = lambda hwnd, stop_event: True
+    runner._checkpoint = lambda stop_event: False
+    runner._set_status = lambda **kwargs: None
+    runner._log = lambda message: None
+    runner._cxy = lambda name: (10, 20)
+    runner._spam_back_until_gone = lambda hwnd, stop_event: events.append(("back",))
+
+    def click_found_image(hwnd, image_name, timeout, stop_event):
+        events.append(("image", image_name))
+        return {"score": 0.99}
+
+    runner._click_found_image = click_found_image
+
+    monkeypatch.setattr(runner_module.vision, "wait_for_image", lambda *args, **kwargs: {"score": 0.98})
+    monkeypatch.setattr(runner_module.wm, "get_window_rect_screen", lambda hwnd: (0, 0, 0, 0))
+    monkeypatch.setattr(runner_module.time, "sleep", lambda seconds: None)
+
+    assert runner._reach_event_act_selected(hwnd=123, stop_event=threading.Event(), act="1") is True
+    assert [event[1] for event in events if event[0] == "image"] == [
+        "nav_event", "Villian_Invasion", "event_gamemode", "villian1"
+    ]
+    assert events == [
+        ("image", "nav_event"),
+        ("image", "Villian_Invasion"),
+        ("coord", 10, 20),
+        ("image", "event_gamemode"),
+        ("image", "villian1"),
+    ]
+
+
+def test_reach_event_act_selected_backs_out_when_villian_invasion_missing(monkeypatch):
+    runner = object.__new__(MacroRunner)
+    clicked = []
+    backs = []
+
+    runner._ensure_lobby = lambda hwnd, stop_event: True
+    runner._checkpoint = lambda stop_event: False
+    runner._set_status = lambda **kwargs: None
+    runner._log = lambda message: None
+    runner._spam_back_until_gone = lambda hwnd, stop_event: backs.append(hwnd)
+
+    def click_found_image(hwnd, image_name, timeout, stop_event):
+        clicked.append(image_name)
+        return {"score": 0.99} if image_name == "nav_event" else None
+
+    runner._click_found_image = click_found_image
+    monkeypatch.setattr(runner_module.time, "sleep", lambda seconds: None)
+
+    assert runner._reach_event_act_selected(hwnd=456, stop_event=threading.Event(), act="1") is False
+    assert clicked == ["nav_event", "Villian_Invasion"]
+    assert backs == [456]
