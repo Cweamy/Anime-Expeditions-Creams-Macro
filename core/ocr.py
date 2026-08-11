@@ -136,6 +136,60 @@ def smoke_test_text_reader() -> tuple[bool, str]:
     return False, "Tesseract ran but recognized no text"
 
 
+_rapidocr_engine = None  # None = not checked yet, False = unavailable
+
+
+def reset_rapidocr_cache() -> None:
+    """Clear the optional RapidOCR singleton, mainly for tests."""
+    global _rapidocr_engine
+    _rapidocr_engine = None
+
+
+def get_rapidocr():
+    """Return a cached RapidOCR engine, or None when the optional package is unavailable.
+
+    rapidocr_onnxruntime currently ships ch_PP-OCRv4 models. We do not claim
+    English-only loading here; callers should post-process for their expected
+    character set, such as digit-only challenge text.
+    """
+    global _rapidocr_engine
+    if _rapidocr_engine is not None:
+        return _rapidocr_engine or None
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        _rapidocr_engine = RapidOCR()
+    except Exception:
+        _rapidocr_engine = False
+    return _rapidocr_engine or None
+
+
+def _rapidocr_text(img: np.ndarray, whitelist: str = None) -> str:
+    """Best-effort RapidOCR pass. Returns '' on miss/error so callers can fall back."""
+    engine = get_rapidocr()
+    if engine is None or img is None or img.size == 0:
+        return ""
+    try:
+        if not img.flags["C_CONTIGUOUS"]:
+            img = np.ascontiguousarray(img)
+        if img.ndim == 2:
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        else:
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        result, _elapsed = engine(rgb_img)
+    except Exception:
+        return ""
+    if not result:
+        return ""
+    text = " ".join(str(line[1]) for line in result if len(line) >= 2 and line[1])
+    if whitelist:
+        text = "".join(c for c in text if c in whitelist or c.isspace())
+    return text.strip()
+
+
+def is_rapidocr_available() -> bool:
+    return get_rapidocr() is not None
+
+
 from . import mss_manager
 
 
@@ -242,22 +296,29 @@ def _whitelist_from_config(base_config: str) -> str:
 
 
 def ocr_mask(pytesseract, mask: np.ndarray, base_config: str = "", whitelist: str = None) -> str:
-    """One OCR pass over one prepared mask, engine-agnostic: Windows OCR
-    when available (core.ocr_windows), else Tesseract. Windows output is
-    filtered to the whitelist (explicit arg, or parsed from base_config)
-    so both engines yield the same character set; Tesseract uses the
-    config as-is. Callers do their own regex/scoring on the result."""
+    """One OCR pass over one prepared mask: optional RapidOCR, Windows OCR, then Tesseract.
+
+    Windows OCR output is filtered to the explicit whitelist, or to the
+    tessedit_char_whitelist parsed from base_config when no explicit whitelist
+    is passed. This preserves stats/wave/shop callers that depend on Tesseract
+    config style whitelists while using Windows OCR.
+    """
+    wl = whitelist if whitelist is not None else _whitelist_from_config(base_config)
+
+    text = _rapidocr_text(mask, wl)
+    if text:
+        return text
+
     from core import ocr_windows
     if ocr_windows.is_available():
         text = ocr_windows.ocr_image(mask)
-        wl = whitelist if whitelist is not None else _whitelist_from_config(base_config)
         if wl:
             text = "".join(c for c in text if c in wl or c.isspace())
-        return text.strip()
+        if text.strip():
+            return text.strip()
     if pytesseract is None:
         return ""
     return pytesseract.image_to_string(mask, config=base_config).strip()
-
 
 def ocr_best(pytesseract, cell_bgr: np.ndarray, base_config: str,
              psm_modes: tuple = (7, 8), valid_pattern=None) -> str:

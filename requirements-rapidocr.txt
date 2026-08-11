@@ -1,0 +1,4 @@
+# Optional RapidOCR support for challenge/text OCR on Python versions supported by the wheel.
+# Keep this out of requirements.txt because rapidocr_onnxruntime currently declares
+# Requires-Python <3.13 while the main app supports Python 3.13 via winrt-* packages.
+rapidocr_onnxruntime; python_version < "3.13"

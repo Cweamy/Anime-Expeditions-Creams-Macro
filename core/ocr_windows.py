@@ -154,6 +154,47 @@ def _recognize(img):
             loop.close()
 
 
+def _rapidocr_text(img) -> str:
+    try:
+        from core import ocr
+        return ocr._rapidocr_text(img)
+    except Exception:
+        return ""
+
+
+def _rapidocr_lines(img) -> list:
+    try:
+        from core import ocr
+        engine = ocr.get_rapidocr()
+        if engine is None or img is None or img.size == 0:
+            return []
+        if not img.flags["C_CONTIGUOUS"]:
+            import numpy as np
+            img = np.ascontiguousarray(img)
+        if img.ndim == 2:
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        else:
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        result, _elapsed = engine(rgb_img)
+        lines = []
+        for item in result or []:
+            if len(item) < 2:
+                continue
+            bbox, text = item[0], item[1]
+            xs = [int(p[0]) for p in bbox]
+            ys = [int(p[1]) for p in bbox]
+            x1, x2 = min(xs), max(xs)
+            y1, y2 = min(ys), max(ys)
+            lines.append({
+                "text": text or "",
+                "x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1,
+                "cx": (x1 + x2) // 2, "cy": (y1 + y2) // 2,
+            })
+        return lines
+    except Exception:
+        return []
+
+
 def ocr_image(img) -> str:
     """Recognize text in a numpy image (grayscale or BGR). Returns the
     recognized text as one space-joined string, or '' on any failure --
@@ -161,19 +202,19 @@ def ocr_image(img) -> str:
     result. Never raises: OCR is best-effort everywhere it's used."""
     if not is_available():
         _warn_if_unavailable()
-        return ""
+        return _rapidocr_text(img)
     try:
         result = _recognize(img)
-        return result.text or ""
+        return result.text or _rapidocr_text(img)
     except Exception:
-        return ""
+        return _rapidocr_text(img)
 
 
 def ocr_lines(img) -> list:
     """Recognize text while preserving each line's image-space bounds."""
     if not is_available():
         _warn_if_unavailable()
-        return []
+        return _rapidocr_lines(img)
     try:
         result = _recognize(img)
         lines = []
@@ -191,6 +232,8 @@ def ocr_lines(img) -> list:
                 "x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1,
                 "cx": (x1 + x2) // 2, "cy": (y1 + y2) // 2,
             })
-        return lines
+        if lines:
+            return lines
+        return _rapidocr_lines(img)
     except Exception:
-        return []
+        return _rapidocr_lines(img)

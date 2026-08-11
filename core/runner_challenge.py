@@ -40,35 +40,37 @@ class ChallengeOps:
             return map_name
         return self._detect_challenge_map_ocr(hwnd)
 
+    def _challenge_map_ocr_crops(self, frame):
+        """Daily Challenge map label crops, HUD-anchored first and fixed relative fallback second."""
+        crops = []
+        try:
+            hud_match = vision.find_in_gray_multiscale(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), "daily_challenge_hud")
+        except vision.TemplateNotFound:
+            hud_match = None
+        if hud_match is not None:
+            x = max(0, hud_match["x"] + hud_match["w"] - 5)
+            y = max(0, hud_match["y"] - 7)
+            crop = frame[y:min(frame.shape[0], y + 43), x:frame.shape[1]]
+            if crop.size:
+                crops.append(crop)
+
+        h, w = frame.shape[:2]
+        x1 = max(0, int(w * 0.58))
+        y1 = max(0, int(h * 0.42))
+        x2 = min(w, int(w * 0.98))
+        y2 = min(h, int(h * 0.52))
+        fallback = frame[y1:y2, x1:x2]
+        if fallback.size:
+            crops.append(fallback)
+        return crops
+
     def _detect_challenge_map_ocr(self, hwnd) -> str:
         """Fallback for the tiny Daily Challenge map label shown in-game."""
         frame = vision.capture_game_bgr(hwnd)
         if frame is None:
             return None
 
-        # Anchor the crop to Daily Challenge's green HUD label instead of a
-        # fixed map-name position; longer names extend farther left.
-        try:
-            hud_match = vision.find_in_gray_multiscale(
-                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), "daily_challenge_hud")
-        except vision.TemplateNotFound:
-            return None
-        if hud_match is None:
-            return None
-        x = max(0, hud_match["x"] + hud_match["w"] - 5)
-        y = max(0, hud_match["y"] - 7)
-        crop = frame[y:min(frame.shape[0], y + 43), x:frame.shape[1]]
-        if crop.size == 0:
-            return None
-
-        # The raw glyphs are only around 10px tall. Color upscaling preserves
-        # their white fill and dark outline better than a global threshold.
-        candidates = [
-            cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_CUBIC),
-            cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_LANCZOS4),
-        ]
-        candidates.extend(ocr.candidate_masks(crop, upscale=8))
-        texts = [ocr_windows.ocr_image(candidate) for candidate in candidates]
         aliases = {
             "School Grounds": "grounds",
             "Rose Kingdom": "kingdom",
@@ -76,22 +78,36 @@ class ChallengeOps:
             "King's Tomb": "tomb",
             "Flower Forest": "flower",
         }
-        for text in texts:
-            tokens = re.findall(r"[a-z]+", text.lower())
-            scores = sorted(
-                (
-                    max((difflib.SequenceMatcher(None, alias, token).ratio() for token in tokens), default=0),
-                    map_name,
+
+        try:
+            pytesseract = ocr.get_pytesseract()
+        except ocr.TesseractNotAvailable:
+            pytesseract = None
+
+        for crop in ChallengeOps._challenge_map_ocr_crops(self, frame):
+            # The raw glyphs are only around 10px tall. Color upscaling preserves
+            # their white fill and dark outline better than a global threshold.
+            candidates = [
+                cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_CUBIC),
+                cv2.resize(crop, None, fx=8, fy=8, interpolation=cv2.INTER_LANCZOS4),
+            ]
+            candidates.extend(ocr.candidate_masks(crop, upscale=8))
+            texts = [ocr.ocr_mask(pytesseract, candidate, "--psm 7") for candidate in candidates]
+            for text in texts:
+                tokens = re.findall(r"[a-z]+", text.lower())
+                scores = sorted(
+                    (
+                        max((difflib.SequenceMatcher(None, alias, token).ratio() for token in tokens), default=0),
+                        map_name,
+                    )
+                    for map_name, alias in aliases.items()
                 )
-                for map_name, alias in aliases.items()
-            )
-            best_score, best_map = scores[-1]
-            runner_up = scores[-2][0]
-            if best_score >= 0.65 and best_score - runner_up >= 0.12:
-                self._log(
-                    f'[Macro] Challenge map OCR: "{text.strip()}" -> '
-                    f'"{best_map}" (score {best_score:.2f}).')
-                return best_map
+                best_score, best_map = scores[-1]
+                runner_up = scores[-2][0]
+                if best_score >= 0.65 and best_score - runner_up >= 0.12:
+                    self._log(
+                        f'[Macro] Challenge map OCR: "{text.strip()}" -> "{best_map}" (score {best_score:.2f}).')
+                    return best_map
         return None
 
     def _challenge_has_ready_stage(self) -> bool:

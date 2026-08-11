@@ -207,6 +207,8 @@ if sys.platform != "darwin":
     for projection in ("winsdk", "winrt"):
         if importlib.util.find_spec(projection) is not None:
             cmd += [f"--collect-submodules={projection}"]
+if importlib.util.find_spec("rapidocr_onnxruntime") is not None:
+    cmd += ["--collect-data=rapidocr_onnxruntime"]
 for src, dest in ADD_DATA:
     # --add-data's separator is ';' on Windows but ':' on POSIX -- exactly
     # what os.pathsep is. Hardcoded ';' was the mac CI build's first
