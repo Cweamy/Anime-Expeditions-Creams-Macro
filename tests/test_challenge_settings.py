@@ -59,6 +59,45 @@ def test_challenge_settings_report_incomplete_story_map_setup(monkeypatch):
     assert result["invalid_maps"] == []
 
 
+def test_existing_enabled_five_map_setup_stays_enabled_and_reports_east_town_missing(monkeypatch):
+    old_maps = main.CHALLENGE_STORY_MAPS[:-1]
+    state = _state(
+        {name: f"{name} Farm" for name in old_maps},
+        enabled=True,
+        daily_enabled=True,
+    )
+    state["challenge"]["maps"].pop("East Town")
+    _patch_settings(monkeypatch, state)
+    monkeypatch.setattr(main.tpl, "template_exists", lambda _name: True)
+    monkeypatch.setattr(main.tpl, "load_template", _modern_template)
+
+    result = _api().get_challenge_settings()
+
+    assert result["enabled"] is True
+    assert result["daily"]["enabled"] is True
+    assert result["maps"]["East Town"] == {"macro": ""}
+    assert result["setup_ready"] is False
+    assert result["missing_maps"] == ["East Town"]
+
+
+def test_east_town_macro_can_be_assigned_and_completes_setup(monkeypatch):
+    macros = {
+        name: f"{name} Farm"
+        for name in main.CHALLENGE_STORY_MAPS[:-1]
+    }
+    state = _state(macros)
+    _patch_settings(monkeypatch, state)
+    monkeypatch.setattr(main.tpl, "template_exists", lambda _name: True)
+    monkeypatch.setattr(main.tpl, "load_template", _modern_template)
+
+    result = _api().set_challenge_map_macro("East Town", "East Town Farm")
+
+    assert result["ok"] is True
+    assert result["setup_ready"] is True
+    assert result["missing_maps"] == []
+    assert state["challenge"]["maps"]["East Town"] == {"macro": "East Town Farm"}
+
+
 def test_regular_challenge_cannot_enable_until_every_map_has_a_macro(monkeypatch):
     state = _state()
     _patch_settings(monkeypatch, state)

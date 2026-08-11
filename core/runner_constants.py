@@ -285,14 +285,14 @@ EXPEDITION_MAP_IMAGES = {
     "East Town": "expedition_east_town",
 }
 # Regular Challenge is Story's own flow, just with the game picking a
-# random one of these 5 maps for you instead of you picking it -- so
+# random one of these 6 maps for you instead of you picking it -- so
 # there's no map-select step to skip past, only a "which map did it land
 # on" check once you're in. Reference images live in Assets/ui/<map>.png
 # (a different folder/purpose than Assets/maps/<map>.png, which is the
 # scrolling map-CARD search used to pick a map by hand -- these instead
 # confirm which map is already showing). Mirrors main.py's
 # CHALLENGE_STORY_MAPS and ui/app.js's TASK_DATA.story.maps.
-CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest"]
+CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest", "East Town"]
 # Mirrors main.py's CHALLENGE_STAGE_SLOTS.
 CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
 # Fixed click points for the 3 Regular Challenge stage rows -- no image

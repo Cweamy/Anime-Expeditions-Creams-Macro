@@ -77,6 +77,7 @@ class ChallengeOps:
             "Fairy King Forest": "fairy",
             "King's Tomb": "tomb",
             "Flower Forest": "flower",
+            "East Town": "eas",
         }
 
         try:

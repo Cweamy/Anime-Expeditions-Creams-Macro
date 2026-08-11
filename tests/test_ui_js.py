@@ -19,6 +19,7 @@ import textwrap
 import pytest
 
 APP_JS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui", "app.js")
+INDEX_HTML = os.path.join(os.path.dirname(APP_JS), "index.html")
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node is not installed; ui/app.js behaviour tests need it")
@@ -52,6 +53,16 @@ def run_js(body, tmp_path):
     proc = subprocess.run(["node", str(script)], capture_output=True, text=True, env=env, timeout=60)
     assert proc.returncode == 0, f"node failed:\n{proc.stdout}\n{proc.stderr}"
     return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_challenge_ui_lists_six_maps_and_updates_visible_copy():
+    with open(APP_JS, encoding="utf-8") as handle:
+        app_source = handle.read()
+    with open(INDEX_HTML, encoding="utf-8") as handle:
+        index_source = handle.read()
+
+    assert "const CHALLENGE_STORY_MAPS = ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', \"King's Tomb\", 'Flower Forest', 'East Town'];" in app_source
+    assert "Regular Challenge rotates one of the 6 Story maps" in index_source
 
 
 def test_fuel_interval_input_converts_hours_to_minutes(tmp_path):

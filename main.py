@@ -213,14 +213,14 @@ RUN_HISTORY_LIMIT = 50  # oldest entries drop off past this -- a running log, no
 
 # Challenge tab (Settings-adjacent, but its own screen -- see get_challenge_
 # settings): Regular Challenge has 3 fixed stage slots that each rotate
-# through one of the 5 Story maps over time, so config/count-tracking is
+# through one of the 6 Story maps over time, so config/count-tracking is
 # keyed by MAP (which macro to run for it, how many times it's been played
 # today) while the 3 slots are just simple on/off toggles for "attempt
 # whatever's in this slot". CHALLENGE_STORY_MAPS matches TASK_DATA.story's
 # maps in ui/app.js. Daily counts and the once-a-day Daily Challenge use the
 # game's shared 00:00 UTC rollover; the independent Regular Challenge
 # stage-availability clock still rotates every :00/:30.
-CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest"]
+CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest", "East Town"]
 CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
 CHALLENGE_DAILY_CAP = 10  # fixed, not user-editable -- see get_challenge_settings
 CHALLENGE_RESET_SCHEDULE = "utc_midnight_v1"
