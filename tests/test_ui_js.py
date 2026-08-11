@@ -54,6 +54,18 @@ def run_js(body, tmp_path):
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+def test_fuel_interval_input_converts_hours_to_minutes(tmp_path):
+    out = run_js("""
+        eval(extract('normalizeFuelIntervalInput'));
+        console.log(JSON.stringify([
+          normalizeFuelIntervalInput('30', 'minutes'),
+          normalizeFuelIntervalInput('2', 'hours'),
+          normalizeFuelIntervalInput('bad', 'hours')
+        ]));
+    """, tmp_path)
+    assert out == [30, 120, 60]
+
+
 # ---------------------------------------------------------------------------
 # Infinite task wave limit
 # ---------------------------------------------------------------------------

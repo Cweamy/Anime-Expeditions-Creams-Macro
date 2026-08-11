@@ -641,9 +641,27 @@
           <div class="setting-row" style="padding: 10px 0;">
             <div>
               <div class="setting-label">Enable Auto Fuel <span id="fuel-summary-status" class="challenge-ready-chip">Disabled</span></div>
-              <div class="setting-desc">Refills at safe Task Queue boundaries: Max after 8 hours, or numeric amounts based on their fuel duration.</div>
+              <div class="setting-desc">Refills at safe Task Queue boundaries: Auto uses Max after 8 hours or numeric fuel duration; custom interval overrides both resources.</div>
             </div>
             <button id="toggle-fuel-enabled" class="toggle-switch" onclick="toggleFuelEnabled(this)"></button>
+          </div>
+
+          <div class="setting-row" style="padding: 10px 0;">
+            <div>
+              <div class="setting-label">Refill every</div>
+              <div class="setting-desc">Auto: Max refills after 8 hours, numeric amounts based on fuel duration. Custom: refills every X minutes/hours.</div>
+            </div>
+            <div class="fuel-amount-control">
+              <div id="fuel-interval-controls" class="flex items-center gap-2">
+                <input id="fuel-interval-value" type="number" class="block-input" min="1" placeholder="30" style="width: 72px;"
+                       onchange="setFuelIntervalValue()">
+                <select id="fuel-interval-unit" class="task-select" onchange="setFuelIntervalValue()">
+                  <option value="minutes">Minutes</option>
+                  <option value="hours">Hours</option>
+                </select>
+              </div>
+              <button type="button" id="fuel-interval-auto" class="seg-btn" onclick="setFuelIntervalAuto(this)">Auto</button>
+            </div>
           </div>
 
           <div class="setting-row" style="padding: 10px 0;">

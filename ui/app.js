@@ -3448,6 +3448,37 @@ function formatFuelCountdown(seconds) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+function normalizeFuelIntervalInput(value, unit) {
+  const amount = Math.max(1, parseInt(value, 10) || 1);
+  return unit === 'hours' ? amount * 60 : amount;
+}
+
+function renderFuelIntervalControl() {
+  const minutes = Math.max(0, parseInt(fuelState && fuelState.interval_minutes, 10) || 0);
+  const input = document.getElementById('fuel-interval-value');
+  const unit = document.getElementById('fuel-interval-unit');
+  const controls = document.getElementById('fuel-interval-controls');
+  const autoButton = document.getElementById('fuel-interval-auto');
+  const isAuto = minutes === 0;
+  if (autoButton) autoButton.classList.toggle('active', isAuto);
+  if (controls) {
+    controls.style.display = isAuto ? 'none' : 'flex';
+    controls.style.opacity = isAuto ? '0.5' : '1';
+  }
+  if (input && unit) {
+    if (isAuto) {
+      input.value = '';
+      unit.value = 'minutes';
+    } else if (minutes >= 60 && minutes % 60 === 0) {
+      input.value = minutes / 60;
+      unit.value = 'hours';
+    } else {
+      input.value = minutes;
+      unit.value = 'minutes';
+    }
+  }
+}
+
 function renderFuelTimers() {
   if (!fuelState) return;
   const now = Date.now() / 1000;
@@ -3506,6 +3537,7 @@ async function refreshFuelScreen() {
       amountInput.style.visibility = isMax ? 'hidden' : 'visible';
     }
   }
+  renderFuelIntervalControl();
   renderFuelTimers();
   renderFuelPaths();
 }
@@ -3539,6 +3571,23 @@ async function setFuelResourceAmount(resource, amount) {
     ? 'max'
     : Math.max(1, Math.min(100, parseInt(amount, 10) || 1));
   try { await pywebview.api.set_fuel_resource_amount(resource, normalized); } catch (e) {}
+  await refreshFuelScreen();
+}
+
+async function setFuelIntervalValue() {
+  const input = document.getElementById('fuel-interval-value');
+  const unit = document.getElementById('fuel-interval-unit');
+  const minutes = normalizeFuelIntervalInput(input ? input.value : 1, unit ? unit.value : 'minutes');
+  try { await pywebview.api.set_fuel_interval(minutes); } catch (e) {}
+  await refreshFuelScreen();
+}
+
+async function setFuelIntervalAuto(btn) {
+  if (btn) {
+    btn.classList.add('active');
+    bounceToggle(btn);
+  }
+  try { await pywebview.api.set_fuel_interval(0); } catch (e) {}
   await refreshFuelScreen();
 }
 
