@@ -184,6 +184,11 @@ MACRO_COORD_DEFAULTS = {
     "story_click_x": 666, "story_click_y": 147,
     "stage_row_x": 246, "stage_row_y": 230, "stage_row_height": 56,
     "act_row_x": 250, "act_row_y": 267, "act_row_height": 129,
+    # Event gamemode card click point (see runner._reach_event_act_selected):
+    # the card is clicked HERE by coordinate first, then the event_gamemode
+    # button (the image with the "Event Gamemode" text) is found and clicked
+    # by image search.
+    "event_gamemode_x": 152, "event_gamemode_y": 253,
     "challenge_stage_1_x": 460, "challenge_stage_1_y": 277,
     "challenge_stage_2_x": 460, "challenge_stage_2_y": 400,
     "challenge_stage_3_x": 460, "challenge_stage_3_y": 533,
@@ -2295,9 +2300,12 @@ class Api:
         transfer_dir = self._transfer_directory(filename_prefix)
         os.makedirs(transfer_dir, exist_ok=True)
         dialog_type = getattr(getattr(webview, "FileDialog", None), "SAVE", getattr(webview, "SAVE_DIALOG", 2))
-        result = self._window.create_file_dialog(
-            dialog_type, directory=transfer_dir, save_filename=fname,
-            file_types=("JSON files (*.json)",))
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type, directory=transfer_dir, save_filename=fname,
+                file_types=("JSON files (*.json)",))
+        except Exception as exc:
+            return {"ok": False, "reason": f"dialog_error: {exc}"}
         if not result:
             return {"ok": False, "reason": "cancelled"}
         path = result[0] if isinstance(result, (list, tuple)) else result
@@ -2316,8 +2324,15 @@ class Api:
         transfer_dir = self._transfer_directory(folder_kind)
         os.makedirs(transfer_dir, exist_ok=True)
         dialog_type = getattr(getattr(webview, "FileDialog", None), "OPEN", getattr(webview, "OPEN_DIALOG", 1))
-        result = self._window.create_file_dialog(
-            dialog_type, directory=transfer_dir, file_types=("JSON files (*.json)",))
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type, directory=transfer_dir, file_types=("JSON files (*.json)",))
+        except Exception as exc:
+            # The native dialog can fail (window hidden/minimized, WebView2
+            # hiccup, etc.) -- surface it as a normal result so the JS side
+            # always has something to show instead of a silently-rejected
+            # promise that reads as "nothing happened".
+            return {"ok": False, "reason": f"dialog_error: {exc}"}
         if not result:
             return {"ok": False, "reason": "cancelled"}
         path = result[0] if isinstance(result, (list, tuple)) else result
@@ -3774,9 +3789,13 @@ class Api:
         if not self._window:
             return {"ok": False, "reason": "no_window"}
         fname = f"AnimeExpeditions-report-{time.strftime('%Y%m%d-%H%M%S')}.zip"
-        result = self._window.create_file_dialog(
-            webview.SAVE_DIALOG, directory=os.path.expanduser("~"), save_filename=fname,
-            file_types=("Zip files (*.zip)",))
+        dialog_type = getattr(getattr(webview, "FileDialog", None), "SAVE", getattr(webview, "SAVE_DIALOG", 2))
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type, directory=os.path.expanduser("~"), save_filename=fname,
+                file_types=("Zip files (*.zip)",))
+        except Exception as exc:
+            return {"ok": False, "reason": f"dialog_error: {exc}"}
         if not result:
             return {"ok": False, "reason": "cancelled"}
         path = result[0] if isinstance(result, (list, tuple)) else result

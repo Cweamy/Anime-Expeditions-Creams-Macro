@@ -44,6 +44,11 @@ advapi32.GetTokenInformation.argtypes = [
     wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+PROCESS_TERMINATE = 0x0001
+kernel32.TerminateProcess.restype = wintypes.BOOL
+kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 ROBLOX_PROCESS_NAME = "robloxplayerbeta.exe"
 ROBLOX_PROCESS_NAMES = {
     "robloxplayerbeta.exe",
@@ -417,6 +422,28 @@ def get_window_pid(hwnd: int) -> int:
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     return pid.value
+
+
+def close_roblox_process(hwnd: int) -> None:
+    """Forcefully terminate the Roblox client owning ``hwnd``.
+
+    Used by the rejoin path: a client wedged on Roblox's Reconnect/Retry
+    prompt never answers the deep link, so the macro closes it outright
+    (same end state as a crash) and boots a fresh client instead. This is
+    TerminateProcess, deliberately -- WM_CLOSE is ignored by a stuck
+    client, and the whole point is that it MUST die. Roblox's launcher is
+    left alone: it's the process that answers the roblox:// deep link, so
+    it should stay to spawn the fresh client."""
+    pid = get_window_pid(hwnd)
+    if not pid:
+        return
+    h_process = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+    if not h_process:
+        return
+    try:
+        kernel32.TerminateProcess(h_process, 1)
+    finally:
+        kernel32.CloseHandle(h_process)
 
 
 def list_roblox_windows() -> list:

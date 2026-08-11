@@ -31,7 +31,10 @@ with a [window_mac] prefix.
 """
 
 import atexit
+import os
+import signal
 import subprocess
+import time
 
 import objc
 import Quartz
@@ -139,6 +142,37 @@ def get_window_pid(window_id: int) -> int:
         pid = int(info.get(Quartz.kCGWindowOwnerPID) or 0)
         _window_pids[window_id] = pid
     return pid or 0
+
+
+def close_roblox_process(window_id: int) -> None:
+    """Terminate the Roblox client owning ``window_id``.
+
+    Same role as window_win.close_roblox_process: the rejoin path closes a
+    client wedged on the Reconnect/Retry prompt outright (crash-equivalent
+    end state) so the deep link boots a fresh one. Tries the graceful
+    AppKit terminate first; a wedged client can ignore that, so it then
+    SIGKILLs after a short grace period. The launcher app is left alone --
+    it answers the roblox:// deep link that spawns the fresh client."""
+    pid = get_window_pid(window_id)
+    if not pid:
+        return
+    try:
+        app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        if app is not None:
+            app.terminate()
+    except Exception as exc:
+        _log(f"graceful terminate raised: {exc}")
+    time.sleep(1.0)
+    try:
+        os.kill(pid, 0)  # still alive after the grace period?
+    except (ProcessLookupError, PermissionError):
+        return
+    except Exception:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception as exc:
+        _log(f"force-kill of Roblox (pid {pid}) failed: {exc}")
 
 
 def is_window(window_id: int) -> bool:

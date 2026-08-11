@@ -1765,6 +1765,18 @@
 
           <div class="setting-row" style="padding: 14px;">
             <div>
+              <div class="setting-label">Event Gamemode Card</div>
+              <div class="setting-desc">Click point on the Event (Villian Invasion) gamemode card. The click lands here instead of the matched crop's center -- pick this if the card's center click doesn't register.</div>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <input id="coord-event_gamemode_x" class="block-input" style="width: 56px;" type="number" onchange="setMacroCoord('event_gamemode_x', this.value)">
+              <input id="coord-event_gamemode_y" class="block-input" style="width: 56px;" type="number" onchange="setMacroCoord('event_gamemode_y', this.value)">
+              <button onclick="openCoordPicker('event_gamemode')" class="text-xs font-semibold px-2 py-1.5 rounded-lg border flex-shrink-0 settings-action-btn" style="color: var(--slate); border-color: var(--border);" title="Capture the Roblox screen and click the Event gamemode card">Pick</button>
+            </div>
+          </div>
+
+          <div class="setting-row" style="padding: 14px;">
+            <div>
               <div class="setting-label">Challenge Stage Slots</div>
               <div class="setting-desc">Click points for the 3 Regular Challenge stage rows.</div>
             </div>

@@ -2355,7 +2355,8 @@ async function exportSettings() {
     };
     const result = await pywebview.api.export_tasks_file(payload, 'settings');
     if (result && result.ok) addLog(`[Settings] Exported settings to ${result.path}`);
-    else if (result && result.reason !== 'cancelled') addLog(`[Settings] Export failed: ${result.reason || 'error'}`);
+    else if (result && result.reason === 'cancelled') addLog('[Settings] Export cancelled.');
+    else if (result) addLog(`[Settings] Export failed: ${result.reason || 'error'}`);
   } catch (e) {
     addLog(`[Settings] Export failed: ${e.message || e}`);
   }
@@ -2365,7 +2366,13 @@ async function importSettings() {
   try {
     const result = await pywebview.api.import_tasks_file();
     if (!result || !result.ok) {
-      if (result && result.reason !== 'cancelled') addLog(`[Settings] Import failed: ${result.reason || 'error'}`);
+      if (!result) {
+        addLog('[Settings] Import failed: the file dialog could not be opened.');
+      } else if (result.reason === 'cancelled') {
+        addLog('[Settings] Import cancelled.');
+      } else {
+        addLog(`[Settings] Import failed: ${result.reason || 'error'}`);
+      }
       return;
     }
     const data = result.data || {};
@@ -2425,16 +2432,27 @@ async function exportTasks() {
     tasks: taskCards, templates, paths, recordings,
   };
   let result = null;
-  try { result = await pywebview.api.export_tasks_file(payload); } catch (e) {}
+  let errMsg = null;
+  try { result = await pywebview.api.export_tasks_file(payload); } catch (e) { errMsg = (e && e.message) || String(e); }
   if (result && result.ok) addLog(`[Task] Exported ${taskCards.length} task(s) to ${result.path}`);
-  else if (result && result.reason !== 'cancelled') addLog(`[Task] Export failed: ${result.reason || 'error'}`);
+  else if (!result) addLog(`[Task] Export failed: the save dialog could not be opened${errMsg ? ` (${errMsg})` : ''}.`);
+  else if (result.reason === 'cancelled') addLog('[Task] Export cancelled.');
+  else addLog(`[Task] Export failed: ${result.reason || 'error'}`);
 }
 
 async function importTasks() {
   let result = null;
-  try { result = await pywebview.api.import_tasks_file('tasks'); } catch (e) {}
+  let errMsg = null;
+  try { result = await pywebview.api.import_tasks_file('tasks'); }
+  catch (e) { errMsg = (e && e.message) || String(e); }
   if (!result || !result.ok) {
-    if (result && result.reason !== 'cancelled') addLog(`[Task] Import failed: ${result.reason || 'error'}`);
+    if (!result) {
+      addLog(`[Task] Import failed: the file dialog could not be opened${errMsg ? ` (${errMsg})` : ''}.`);
+    } else if (result.reason === 'cancelled') {
+      addLog('[Task] Import cancelled.');
+    } else {
+      addLog(`[Task] Import failed: ${result.reason || 'error'}`);
+    }
     return;
   }
   const data = result.data || {};
@@ -4385,6 +4403,7 @@ const MACRO_COORD_KEYS = [
   'story_click_x', 'story_click_y',
   'stage_row_x', 'stage_row_y', 'stage_row_height',
   'act_row_x', 'act_row_y', 'act_row_height',
+  'event_gamemode_x', 'event_gamemode_y',
   'challenge_stage_1_x', 'challenge_stage_1_y',
   'challenge_stage_2_x', 'challenge_stage_2_y',
   'challenge_stage_3_x', 'challenge_stage_3_y',
@@ -6887,16 +6906,27 @@ async function exportTemplates() {
     templates, paths, recordings,
   };
   let result = null;
-  try { result = await pywebview.api.export_tasks_file(payload, 'templates'); } catch (e) {}
+  let errMsg = null;
+  try { result = await pywebview.api.export_tasks_file(payload, 'templates'); } catch (e) { errMsg = (e && e.message) || String(e); }
   if (result && result.ok) addLog(`[Macro Manager] Exported ${names.length} template(s) to ${result.path}`);
-  else if (result && result.reason !== 'cancelled') addLog(`[Macro Manager] Export failed: ${result.reason || 'error'}`);
+  else if (!result) addLog(`[Macro Manager] Export failed: the save dialog could not be opened${errMsg ? ` (${errMsg})` : ''}.`);
+  else if (result.reason === 'cancelled') addLog('[Macro Manager] Export cancelled.');
+  else addLog(`[Macro Manager] Export failed: ${result.reason || 'error'}`);
 }
 
 async function importTemplates() {
   let result = null;
-  try { result = await pywebview.api.import_tasks_file('templates'); } catch (e) {}
+  let errMsg = null;
+  try { result = await pywebview.api.import_tasks_file('templates'); }
+  catch (e) { errMsg = (e && e.message) || String(e); }
   if (!result || !result.ok) {
-    if (result && result.reason !== 'cancelled') addLog(`[Macro Manager] Import failed: ${result.reason || 'error'}`);
+    if (!result) {
+      addLog(`[Macro Manager] Import failed: the file dialog could not be opened${errMsg ? ` (${errMsg})` : ''}.`);
+    } else if (result.reason === 'cancelled') {
+      addLog('[Macro Manager] Import cancelled.');
+    } else {
+      addLog(`[Macro Manager] Import failed: ${result.reason || 'error'}`);
+    }
     return;
   }
   const data = result.data || {};
