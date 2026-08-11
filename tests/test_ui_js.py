@@ -144,6 +144,43 @@ def test_tournament_task_summary_names_its_type_and_hides_play_mode(tmp_path):
     assert "Boss Rush" in out["meta"]
 
 
+def test_tower_mode_defaults_to_rose_kingdom_and_traitless_summary_chip(tmp_path):
+    out = run_js("""
+        const TASK_DATA = {
+          story: { label: 'Story', maps: ['School Grounds'], stages: ['1'], difficulties: ['Normal'] },
+          tower: {
+            label: 'Tower',
+            maps: ['Rose Kingdom', 'School Grounds', 'Flower Forest', 'Fairy King Forest', "King's Tomb", 'East Town'],
+            stages: ['1'],
+            isTower: true,
+          },
+        };
+        const DEFAULT_INFINITE_WAVE_LIMIT = 20;
+        let taskCards = [{
+          id: 't1', mode: 'story', map: 'School Grounds', stage: '1', difficulty: 'Normal',
+          repeat: 1, play_mode: 'matchmaking', macro: ''
+        }];
+        function findTask(id) { return taskCards.find(t => t.id === id); }
+        function updateQueueRowInPlace() {}
+        function renderTaskBuilder() {}
+        function saveTaskQueue() {}
+        eval(extract('setTaskProp'));
+        eval(extract('taskSummary'));
+        setTaskProp('t1', 'mode', 'tower');
+        const normal = {...taskCards[0]};
+        setTaskProp('t1', 'tower_mode', 'traitless');
+        console.log(JSON.stringify({normal, summary: taskSummary(taskCards[0])}));
+    """, tmp_path)
+    assert out["normal"]["map"] == "Rose Kingdom"
+    assert out["normal"]["stage"] == "1"
+    assert out["normal"]["play_mode"] == "solo"
+    assert out["normal"]["tower_mode"] == "normal"
+    assert out["summary"]["title"].startswith("Tower") and out["summary"]["title"].endswith("Rose Kingdom")
+    assert "Traitless" in out["summary"]["meta"]
+    assert "Solo" not in out["summary"]["meta"] and "Matchmaking" not in out["summary"]["meta"]
+
+
+
 # ---------------------------------------------------------------------------
 # removeBlock: the deferred splice must not use a stale index
 # ---------------------------------------------------------------------------

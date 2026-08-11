@@ -2186,6 +2186,12 @@ const TASK_DATA = {
     maps: ['Solo Tournament'],
     isTournament: true,
   },
+  tower: {
+    label: 'Tower',
+    maps: ['Rose Kingdom', 'School Grounds', 'Flower Forest', 'Fairy King Forest', "King's Tomb", 'East Town'],
+    stages: ['1'],
+    isTower: true,
+  },
 };
 
 let taskCards = [];
@@ -2715,6 +2721,12 @@ function setTaskProp(id, key, value) {
     // 'matchmaking'. Force it so switching from a matchmaking task can't leave
     // Tournament silently waiting on an Enter Matchmaking button.
     if (d.isTournament) t.play_mode = 'solo';
+    if (d.isTower) {
+      t.map = d.maps[0];
+      t.stage = d.stages[0];
+      if (!t.tower_mode) t.tower_mode = 'normal';
+      t.play_mode = 'solo';
+    }
   }
   if (key === 'stage' && value === 'Infinite' && !Number.isInteger(Number(t.infinite_wave_limit))) {
     t.infinite_wave_limit = DEFAULT_INFINITE_WAVE_LIMIT;
@@ -2729,7 +2741,7 @@ function taskOpts(list, current, fmt) {
 }
 
 // One accent per mode so the queue scans by color before you even read it.
-const TASK_MODE_COLORS = { story: 'var(--brand)', raid: 'var(--rose)', expedition: 'var(--teal)', event: 'var(--amber)', tournament: 'var(--lilac)' };
+const TASK_MODE_COLORS = { story: 'var(--brand)', raid: 'var(--rose)', expedition: 'var(--teal)', event: 'var(--amber)', tournament: 'var(--lilac)', tower: 'var(--slate)' };
 
 // The two text lines a queue row shows for a task -- where it goes, then how
 // it runs. All editing happens in the Builder, rows are read-only summaries.
@@ -2738,7 +2750,7 @@ function taskSummary(t) {
   let title = d.label;
   if (t.mode === 'story' || t.mode === 'raid') {
     title += ` · ${t.map} · ${/^\d+$/.test(t.stage) ? 'Stage ' + t.stage : t.stage}`;
-  } else if (t.mode === 'expedition' || t.mode === 'tournament') {
+  } else if (t.mode === 'expedition' || t.mode === 'tournament' || t.mode === 'tower') {
     title += ` · ${t.map}`;
   } else if (t.mode === 'event') {
     title += ` · Act ${t.stage}`;
@@ -2751,7 +2763,8 @@ function taskSummary(t) {
     diff,
     t.mode === 'story' && t.stage === 'Infinite'
       ? `Stop after wave ${t.infinite_wave_limit || DEFAULT_INFINITE_WAVE_LIMIT}` : '',
-    t.mode === 'tournament' ? '' : (t.play_mode === 'matchmaking' ? 'Matchmaking' : 'Solo'),
+    t.tower_mode === 'traitless' ? 'Traitless' : '',
+    (t.mode === 'tournament' || t.mode === 'tower') ? '' : (t.play_mode === 'matchmaking' ? 'Matchmaking' : 'Solo'),
     t.macro ? `▸ ${t.macro}` : '',
     (t.mode === 'event' && t.stage !== '4' && t.act4_on_drop)
       ? `⮡ Act 4 on drop${t.act4_mode === 'until_locked' ? ' (until locked)' : ''}` : '',
@@ -2822,7 +2835,7 @@ function renderTaskBuilder() {
   const field = (label, control, tooltip = '') => `<div class="task-field" ${tooltip ? `data-tooltip="${escapeHtml(tooltip)}"` : ''}><span>${label}</span>${control}</div>`;
 
   const fields = [
-    field('Mode', sel('mode', Object.keys(TASK_DATA), k => TASK_DATA[k].label, 'Select game mode: Story, Raid, Expedition, or Event'), 'Choose game mode'),
+    field('Mode', sel('mode', Object.keys(TASK_DATA), k => TASK_DATA[k].label, 'Select game mode: Story, Raid, Expedition, Event, Tournament, or Tower'), 'Choose game mode'),
     field('Repeat', `<div class="task-rep-group" style="width: 100%;">&times;<input type="number" min="1" value="${t.repeat}"
       oninput="setTaskProp('${t.id}', 'repeat', Math.max(1, parseInt(this.value, 10) || 1))"></div>`, 'Number of times to run this task'),
   ];
@@ -2837,6 +2850,15 @@ function renderTaskBuilder() {
     fields.push(field('Act', sel('stage', d.stages, s => 'Act ' + s, 'Select Event Act 1-4'), 'Select Event Act 1-4'));
   } else if (t.mode === 'tournament') {
     fields.push(field('Type', sel('map', d.maps, null, 'Select the Tournament type to enter'), 'Select the Tournament type to enter'));
+  } else if (t.mode === 'tower') {
+    fields.push(field('Map', sel('map', d.maps, null, 'Select Tower map')));
+    const towerMode = t.tower_mode || 'normal';
+    const towerSeg = `
+      <div class="seg-toggle">
+        <button type="button" class="seg-btn ${towerMode !== 'traitless' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'tower_mode', 'normal'); renderTaskBuilder()">Normal</button>
+        <button type="button" class="seg-btn ${towerMode === 'traitless' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'tower_mode', 'traitless'); renderTaskBuilder()">Traitless</button>
+      </div>`;
+    fields.push(field('Tower Mode', towerSeg));
   }
 
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
@@ -2859,10 +2881,9 @@ function renderTaskBuilder() {
       `Number of extraction prompts to decline before extracting (maximum ${MAX_EXTRACT_AFTER})`));
   }
 
-  // Tournament has no Solo/Matchmaking choice -- "Solo Tournament" is already
-  // the mode, and the runner forces the solo Start tail for it (see
-  // setTaskProp's mode switch), so the toggle would be a no-op here.
-  if (t.mode !== 'tournament') {
+  // Tournament and Tower have no Solo/Matchmaking choice -- their runner paths
+  // force the solo Start tail, so the toggle would be a no-op here.
+  if (t.mode !== 'tournament' && t.mode !== 'tower') {
     const playSeg = `
       <div class="seg-toggle" data-tooltip="Select Solo or Matchmaking / Party mode">
         <button type="button" class="seg-btn ${t.play_mode === 'solo' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'play_mode', 'solo'); renderTaskBuilder()">Solo</button>
