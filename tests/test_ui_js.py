@@ -175,7 +175,7 @@ def test_tower_mode_defaults_to_rose_kingdom_and_traitless_summary_chip(tmp_path
     assert out["normal"]["stage"] == "1"
     assert out["normal"]["play_mode"] == "solo"
     assert out["normal"]["tower_mode"] == "normal"
-    assert out["summary"]["title"].startswith("Tower") and out["summary"]["title"].endswith("Rose Kingdom")
+    assert out["summary"]["title"] == "Tower"
     assert "Traitless" in out["summary"]["meta"]
     assert "Solo" not in out["summary"]["meta"] and "Matchmaking" not in out["summary"]["meta"]
 

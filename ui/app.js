@@ -2188,7 +2188,7 @@ const TASK_DATA = {
   },
   tower: {
     label: 'Tower',
-    maps: ['Rose Kingdom', 'School Grounds', 'Flower Forest', 'Fairy King Forest', "King's Tomb", 'East Town'],
+    maps: ['Rose Kingdom'],  // internal default only -- Tower has no map picker in-game
     stages: ['1'],
     isTower: true,
   },
@@ -2750,7 +2750,7 @@ function taskSummary(t) {
   let title = d.label;
   if (t.mode === 'story' || t.mode === 'raid') {
     title += ` · ${t.map} · ${/^\d+$/.test(t.stage) ? 'Stage ' + t.stage : t.stage}`;
-  } else if (t.mode === 'expedition' || t.mode === 'tournament' || t.mode === 'tower') {
+  } else if (t.mode === 'expedition' || t.mode === 'tournament') {
     title += ` · ${t.map}`;
   } else if (t.mode === 'event') {
     title += ` · Act ${t.stage}`;
@@ -2851,7 +2851,7 @@ function renderTaskBuilder() {
   } else if (t.mode === 'tournament') {
     fields.push(field('Type', sel('map', d.maps, null, 'Select the Tournament type to enter'), 'Select the Tournament type to enter'));
   } else if (t.mode === 'tower') {
-    fields.push(field('Map', sel('map', d.maps, null, 'Select Tower map')));
+    // Tower has no map choice in-game -- map stays at its internal default.
     const towerMode = t.tower_mode || 'normal';
     const towerSeg = `
       <div class="seg-toggle">
