@@ -440,3 +440,67 @@ def test_legacy_auto_upgrade_block_still_uses_click_mode(monkeypatch):
         (300, 400),
         (10, 20),
     ]
+
+
+def test_auto_upgrade_click_waits_for_a_slow_info_panel(monkeypatch):
+    """The panel can still be rendering AUTO_UPGRADE_CLICK_SETTLE after the
+    unit is clicked -- a unit placed while a wave spawns was reported missing
+    that one check and logging "not found" against a panel that showed up right
+    afterwards. Keep looking until it does."""
+    from core import runner_blocks
+    import threading
+
+    runner = _AutoUpgradeRunner("g")
+    monkeypatch.setattr(runner_blocks.wm, "get_window_rect_screen",
+                        lambda hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_blocks.time, "sleep", lambda seconds: None)
+
+    attempts = []
+
+    def slow_panel(*a, **k):
+        attempts.append(1)
+        if len(attempts) < 3:
+            return (None, None)
+        return ({"cx": 300, "cy": 400, "score": 0.99}, "priority_upgrade")
+
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", slow_panel)
+
+    block = {
+        "type": "auto_upgrade_unit",
+        "params": {"index": 1, "priority": 2, "input": "click"},
+    }
+    assert runner._run_auto_upgrade_unit_tick(123, threading.Event(), block, 1) is True
+
+    assert len(attempts) == 3, "gave up instead of waiting for the panel"
+    assert [item.args for item in runner._mouse.click.call_args_list] == [
+        (100, 200),   # select the unit
+        (300, 400),   # cycle to priority 2
+        (300, 400),
+        (10, 20),     # close the info panel
+    ]
+    assert not any("not found" in message for message in runner.logs)
+
+
+def test_auto_upgrade_click_gives_up_when_the_panel_never_opens(monkeypatch):
+    """Waiting must be bounded -- a panel that genuinely never opens still has
+    to end the block rather than poll forever, and must not cycle anything."""
+    from core import runner_blocks
+    import threading
+
+    runner = _AutoUpgradeRunner("g")
+    monkeypatch.setattr(runner_blocks.wm, "get_window_rect_screen",
+                        lambda hwnd: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_blocks.time, "sleep", lambda seconds: None)
+    ticks = iter([step * 0.5 for step in range(200)])
+    monkeypatch.setattr(runner_blocks.time, "time", lambda: next(ticks))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any",
+                        lambda *a, **k: (None, None))
+
+    block = {
+        "type": "auto_upgrade_unit",
+        "params": {"index": 1, "priority": 2, "input": "click"},
+    }
+    assert runner._run_auto_upgrade_unit_tick(123, threading.Event(), block, 1) is True
+
+    assert any("not found on the info panel" in message for message in runner.logs)
+    assert [item.args for item in runner._mouse.click.call_args_list] == [(100, 200)]

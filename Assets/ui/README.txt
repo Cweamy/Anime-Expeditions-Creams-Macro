@@ -288,6 +288,53 @@ upgradeable.png / not_upgradeable.png
   not_upgradeable.png (greyed out / insufficient gold / on cooldown,
   whatever this game shows) means wait and retry later instead of clicking.
 
+priority_upgrade/
+  The Priority / Auto-Upgrade control on a unit's info panel -- labelled
+  "Quote" in-game. Searched by Auto Upgrade Unit blocks whose Input is set
+  to Click (core.runner_blocks._run_auto_upgrade_unit_tick): the runner
+  selects the unit, finds this control, and CLICKS it once per priority
+  step. It is a cycling button, not a menu -- priority N is N clicks, and
+  one click past the last priority wraps back to off. Hotkey input never
+  searches for it at all, which is also why Hotkey input cannot report
+  whether it worked.
+
+  This name's job is LOCATING the control, so its folder deliberately
+  holds crops of it in EVERY state: the control is unset at the moment a
+  priority is first applied, so an off-state crop has to match then. What
+  each shipped file shows:
+
+    off (cycle-arrow glyph) ..... priority_upgrade.png, _2, _9
+    enabled, priority 1 ......... _1, _3
+    enabled, priority 2 ......... _4
+    enabled, priority 3 ......... _5
+    enabled, priority 4 ......... _6
+    enabled, priority 5 ......... _7
+    enabled, priority 6 ......... _8
+
+  Because it matches every state, this name cannot tell you WHICH state
+  the control is in. Use quote_off/quote_on below for that.
+
+quote_off/ and quote_on/
+  The same control split by state, for Detect blocks that need to read
+  whether auto-upgrade actually took: quote_off matches the unset (grey,
+  cycle-arrow) button, quote_on the enabled (blue, numbered) one. No
+  runner code searches for either -- they exist for user-built Detect
+  conditions, e.g.
+
+    find('quote_off') and not find('quote_on')
+
+  meaning "this control is on screen and still unset". quote_on's files
+  are named for the priority they show (quote_on_1.png, quote_on_2.png,
+  ...), so quote_on_1 and quote_on_2 also resolve as search names of
+  their own through the shallow-subfolder fallback described above, if
+  you need to check for one specific priority.
+
+  Setting a priority is NOT idempotent -- the control cycles, so applying
+  "priority 2" a second time leaves it on 4. Gate any retry on a POSITIVE
+  match of the unset state rather than on failing to match the set state:
+  a missing image and an unopened panel both read as "not found", and a
+  gate built the other way round turns every such unknown into a retry.
+
 cannot_place.png / max_placement_reached.png
   Place Unit block, checked right after each placement click. Both
   optional -- missing template just skips the check. max_placement_reached

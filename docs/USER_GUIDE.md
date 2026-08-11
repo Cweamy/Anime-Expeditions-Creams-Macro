@@ -157,6 +157,44 @@ queue.
 - Crop tightly, but retain enough unique pixels to avoid matching unrelated UI.
 - Remove overlays, notifications, and unusual UI scaling, then test again.
 
+Reference crops are specific to the size the game renders at. `core.vision`
+only sweeps +/-10% around a crop's own size, so a crop captured on a different
+setup can miss outright rather than score slightly lower. On one machine a
+shipped crop peaked at 0.61 where a locally captured crop of the same button
+scored 1.00. If a name will not match, capture it yourself in the Image Manager
+before adjusting thresholds.
+
+### Two similar states match each other's crop
+
+Templates are matched in greyscale, so two states of the same control that
+share a border, background shape, and label can score highly against each
+other. Colour differences do not help. On one setup a whole-button crop of an
+*unset* control matched the *set* version of that same button at 0.92, over the
+0.90 default threshold.
+
+- Crop tightly around the part that actually differs (the glyph or digit)
+  rather than the whole button.
+- Or raise that name's Match threshold in the Image Manager above the score the
+  wrong state reaches.
+- Check both directions with the Detect block's **Test now** button: a crop
+  should hit on the state it is named for and miss on the other one. Read the
+  reported location too -- a miss whose best hit is somewhere unrelated on
+  screen is no match at all, not a near miss.
+
+### A Detect block drives an action that must not repeat
+
+Detect treats a missing reference image, an unreadable screen, and an invalid
+condition all as *not found*, so every unknown lands in the Else branch. Put
+the branch that must not fire by accident behind a positive match:
+
+```
+find('quote_off') and not find('quote_on')    -> Then = retry
+```
+
+Written the other way round -- retrying whenever a "done" image fails to match
+-- every unknown becomes a retry. This matters for controls that cycle rather
+than being set, where applying the same value twice is not a no-op.
+
 ### Clicks land in the wrong place
 
 - Stop the macro, return Roblox to its normal docked/side-by-side position, and
