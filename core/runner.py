@@ -1835,6 +1835,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         else:
             deadline = time.time() + MATCH_RESULT_TIMEOUT
         lobby_sightings = 0   # consecutive polls that found the lobby's Play button
+        afk_clicked_at = 0.0  # last time the AFK Chamber exit was clicked
         while deadline is None or time.time() < deadline:
             if self._checkpoint(stop_event):
                 return None
@@ -1915,6 +1916,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     self._set_status(action="Back on the lobby -- re-entering...")
                     return "left"
                 self._log("[Macro] Play button visible mid-match -- confirming on the next poll.")
+
+            afk_clicked_at = self._dismiss_afk_chamber(hwnd, afk_clicked_at)
 
             if watch_close_popup:
                 self._click_close_popup_if_found(hwnd)
@@ -4299,6 +4302,36 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
 
         self._log(f"[Macro] Couldn't click {label} without reopening a party overlay -- stopping.")
         return False
+
+    def _dismiss_afk_chamber(self, hwnd, last_clicked_at: float) -> float:
+        """Click out of the AFK Chamber if the run has been parked in it.
+
+        An Expedition encounter node can drop the client into the AFK Chamber.
+        Nothing about that looks like a disconnect or a lobby, so the runner
+        used to keep polling a screen where Victory/Defeat can never appear
+        until MATCH_RESULT_TIMEOUT, once per node, for the rest of the run.
+
+        Optional, like nav_disband/max_placement_reached: no afk_chamber.png
+        means the check silently does nothing rather than failing a run.
+
+        Returns the timestamp to carry into the next poll. Rate-limited,
+        because the banner stays up for a moment after the exit is clicked and
+        re-clicking every poll would fight the transition it just started.
+        """
+        if time.time() - last_clicked_at < AFK_CHAMBER_CLICK_COOLDOWN:
+            return last_clicked_at
+        try:
+            match = vision.find_image(hwnd, "afk_chamber", region=AFK_CHAMBER_REGION)
+        except vision.TemplateNotFound:
+            return last_clicked_at
+        if match is None:
+            return last_clicked_at
+
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._log(f'[Macro] In the AFK Chamber (score {match["score"]:.2f}) -- clicking out of it.')
+        self._set_status(action="Leaving the AFK Chamber...")
+        self._mouse.click(left + AFK_CHAMBER_EXIT_CLICK[0], top + AFK_CHAMBER_EXIT_CLICK[1])
+        return time.time()
 
     def _find_gamemode_card(self, hwnd, stop_event: threading.Event, names, label: str):
         """Locate a gamemode card, widening the search before giving up.

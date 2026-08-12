@@ -378,6 +378,22 @@ GAMEMODE_CARD_WIDE_TIMEOUT = 5.0
 # and one frame caught mid-transition is not worth acting on.
 LOBBY_RESYNC_CONFIRMATIONS = 2
 
+# AFK Chamber: an Expedition encounter node can drop the client in here, and
+# nothing about it reads as a disconnect or a lobby -- so the runner sat
+# polling a screen that can never show Victory/Defeat until MATCH_RESULT_
+# TIMEOUT, once per node, for the rest of the run.
+# The banner is a fixed HUD element at the top centre, so it gets a band
+# rather than a full-window scan: this check runs on EVERY result poll, and a
+# whole-window template sweep at that rate is not worth it for a title that
+# does not move. Optional, like nav_disband -- no afk_chamber.png just skips.
+AFK_CHAMBER_REGION = (451, 30, 258, 38)
+# The exit sits below the banner, at a fixed spot in the 1152x756 reference
+# space -- same kind of measured constant as STORY_CLICK.
+AFK_CHAMBER_EXIT_CLICK = (660, 716)
+# The banner lingers while the exit animates, so re-clicking every poll would
+# fight the transition the first click already started.
+AFK_CHAMBER_CLICK_COOLDOWN = 5.0
+
 NAV_PLAY_IMAGE_NAMES = ("nav_play",)
 EXPEDITION_IMAGE_NAMES = ("expedition",)
 CHALLENGE_IMAGE_NAMES = ("challenge",)
