@@ -103,6 +103,14 @@ EXPEDITION_CONTINUE_COOLDOWN = 5.0  # settle after exp_continue/continue_2 -- a 
 # Measured in elapsed time rather than poll count so it means the same
 # thing regardless of how long each retry cycle happens to take.
 EXPEDITION_STALL_TIMEOUT = 300.0
+# A Start Game popup or a level-up reward card is handled BEFORE the
+# checkpoint is looked at, and that poll returns early -- so those polls see
+# no checkpoint either way. They must not age the stall clock above (the
+# checkpoint may have cleared while they were in the way, unobserved), but a
+# run that never gets past them is not progressing either, so they get their
+# own cap rather than resetting anything. Kept separate so the log can say
+# which of the two actually happened.
+EXPEDITION_INTERCEPT_TIMEOUT = 300.0
 
 # ── Color-based Expedition checkpoint detection (the default engine --
 # Settings > Debug > "Expedition Color Detection" toggles back to the

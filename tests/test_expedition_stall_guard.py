@@ -13,7 +13,11 @@ from unittest.mock import MagicMock
 from core import runner as runner_module
 from core import runner_expedition as expedition_module
 from core.runner import MacroRunner
-from core.runner_constants import EXPEDITION_STALL_TIMEOUT, MATCH_RESULT_TIMEOUT
+from core.runner_constants import (
+    EXPEDITION_INTERCEPT_TIMEOUT,
+    EXPEDITION_STALL_TIMEOUT,
+    MATCH_RESULT_TIMEOUT,
+)
 
 
 class _Clock:
@@ -189,3 +193,102 @@ def test_back_to_back_checkpoints_are_tolerated_while_the_run_still_advances(mon
 
     assert result is None
     assert clock.now - 1000.0 >= MATCH_RESULT_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# Popups and reward cards, which take the poll before the checkpoint is read
+# ---------------------------------------------------------------------------
+
+def test_an_intercepted_poll_holds_the_checkpoint_clock_instead_of_aging_it(monkeypatch):
+    """A card in the way means nobody LOOKED at the checkpoint -- it may well
+    have cleared meanwhile. Ageing the stall clock through those polls would
+    abandon a run for a checkpoint that is not there."""
+    runner = _runner()
+    clock = _Clock()
+    monkeypatch.setattr(expedition_module.time, "time", clock.time)
+
+    runner._note_checkpoint_seen()
+    for _ in range(100):                       # 100 * 10s = far past the timeout
+        clock.advance(10.0)
+        runner._note_checkpoint_intercepted()
+
+    assert runner._expedition_checkpoint_stalled() is False
+
+
+def test_intercepts_do_not_reset_the_checkpoint_clock_either(monkeypatch):
+    """Held, not reset. Time the checkpoint was genuinely OBSERVED up before
+    the cards started still counts once they stop -- so a stall that a burst
+    of level-ups interrupts is still caught, just later."""
+    runner = _runner()
+    clock = _Clock()
+    monkeypatch.setattr(expedition_module.time, "time", clock.time)
+
+    # 290s of the checkpoint actually being seen, one poll at a time.
+    runner._note_checkpoint_seen()
+    for _ in range(29):
+        clock.advance(10.0)
+        runner._note_checkpoint_seen()
+    assert runner._expedition_checkpoint_stalled() is False
+
+    # 600s of cards taking every poll -- none of it ages the clock.
+    for _ in range(60):
+        clock.advance(10.0)
+        runner._note_checkpoint_intercepted()
+    assert runner._expedition_checkpoint_stalled() is False
+
+    # One more observed poll tips it over the 300s of real evidence.
+    clock.advance(10.0)
+    runner._note_checkpoint_seen()
+
+    assert runner._expedition_checkpoint_stalled() is True
+
+
+def test_endless_intercepts_are_their_own_stall(monkeypatch):
+    """Handling cards IS useful work, so this must not fire on a burst -- but
+    a run that never gets past them is not progressing either."""
+    runner = _runner()
+    clock = _Clock()
+    monkeypatch.setattr(expedition_module.time, "time", clock.time)
+
+    runner._note_checkpoint_intercepted()
+    clock.advance(EXPEDITION_INTERCEPT_TIMEOUT - 1.0)
+    assert runner._expedition_intercepts_stalled() is False
+
+    clock.advance(1.0)
+    assert runner._expedition_intercepts_stalled() is True
+
+
+def test_reaching_the_checkpoint_search_ends_a_run_of_intercepts(monkeypatch):
+    """A normal burst of level-ups clears and the run carries on."""
+    runner = _runner()
+    clock = _Clock()
+    monkeypatch.setattr(expedition_module.time, "time", clock.time)
+
+    for _ in range(20):
+        clock.advance(10.0)
+        runner._note_checkpoint_intercepted()
+    runner._note_checkpoint_cleared()
+
+    assert runner._exp_intercept_streak == 0
+    assert runner._expedition_intercepts_stalled() is False
+
+
+def test_a_card_that_never_clears_still_ends_the_match(monkeypatch):
+    """The whole point of the separate cap: an undismissable card used to be
+    an unbounded loop, and must not become one again now that it holds the
+    checkpoint clock rather than ageing it."""
+    runner = _runner()
+    clock = _Clock()
+    started_at = clock.now
+
+    def always_intercepted():
+        clock.advance(10.0)
+        runner._note_checkpoint_intercepted()
+        return None
+
+    result = _drive_expedition_poll(monkeypatch, runner, clock, always_intercepted)
+    elapsed = clock.now - started_at
+
+    assert result is None
+    assert elapsed >= EXPEDITION_INTERCEPT_TIMEOUT
+    assert elapsed < MATCH_RESULT_TIMEOUT / 4
