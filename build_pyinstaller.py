@@ -188,8 +188,9 @@ if sys.platform == "darwin":
     # the app's identity (bundle id + code signature), so a build with no
     # fixed identifier looks like a different app on each release/relaunch and
     # the grant silently stops matching. Pinned here so the grant sticks to
-    # ONE identity across versions. (The other half is the ad-hoc codesign
-    # step after the build below.)
+    # ONE identity across versions. (The other half is the codesign step after
+    # the build below -- a stable self-signed CERT identity in CI releases,
+    # ad-hoc locally -- see that block for the full story.)
     cmd.append("--osx-bundle-identifier=com.cweamy.creams-macro-anime-expeditions")
 else:
     cmd.append(f"--icon={os.path.join(ROOT, 'logo.ico')}")
@@ -224,26 +225,63 @@ if result.returncode != 0:
 
 if sys.platform == "darwin":
     # The other half of the Accessibility-permission fix (see the
-    # --osx-bundle-identifier note above): give the whole .app a consistent
-    # ad-hoc signature so TCC has a stable code identity to key the grant to.
-    # `--sign -` is ad-hoc (no Apple Developer account needed); `--deep` also
-    # signs the nested binaries/dylibs; `--force` replaces the signature
-    # PyInstaller applies on Apple Silicon so the whole bundle is signed the
-    # same way on both Intel and Apple Silicon runners. Without a paid
-    # Developer ID this still can't survive the binary CHANGING (an update
-    # gives a new cdhash, so macOS may ask once more after updating), but it
-    # stops the "asks on every single launch" case. Not fatal if it somehow
-    # fails -- the app still runs unsigned, just with the old permission
-    # flakiness -- so this warns and continues rather than failing the build.
+    # --osx-bundle-identifier note above): give the whole .app a code
+    # signature so TCC has a stable code identity to key the grant to.
+    #
+    # Two signing modes, chosen by the MACOS_CODESIGN_IDENTITY env var:
+    #
+    #   STABLE (CI releases): `--sign "<identity>"`, where the identity is
+    #   the common name (or SHA-1 fingerprint) of the self-signed
+    #   code-signing certificate that tools/make_macos_codesign_cert.sh
+    #   generates ONCE and the release workflow imports from the
+    #   MACOS_CODESIGN_P12 secret (see .github/workflows/release.yml). With
+    #   a real identity, macOS keys the TCC grant to the CERTIFICATE (leaf
+    #   hash + bundle id) rather than to the binary's cdhash, so re-signing
+    #   every build with the same cert makes the grant SURVIVE in-app
+    #   updates -- the user grants once and stops being re-prompted.
+    #
+    #   AD-HOC (local builds, or CI with no cert secret): `--sign -`. No
+    #   Apple Developer account is needed, but an ad-hoc signature's
+    #   designated requirement includes the cdhash, which changes with
+    #   every build -- so a local rebuild asks once more for permissions.
+    #   That is the exact per-update re-prompt the stable identity fixes;
+    #   it is kept as the fallback so a no-cert build still works.
+    #
+    # `--deep` also signs the nested binaries/dylibs; `--force` replaces the
+    # signature PyInstaller applies on Apple Silicon so the whole bundle is
+    # signed the same way on both Intel and Apple Silicon runners. Signing
+    # is never fatal: if it somehow fails the app still runs unsigned, just
+    # with the old permission flakiness -- so this warns and continues
+    # rather than failing the build (same policy as before this change).
     app_path = os.path.join(ROOT, "dist", f"{EXE_NAME}.app")
-    print(f"\nAd-hoc code-signing {app_path} (stable identity for macOS permissions)...")
-    sign = subprocess.run(
-        ["codesign", "--force", "--deep", "--sign", "-", app_path])
-    if sign.returncode == 0:
-        print("Code-signing done.")
+    identity = os.environ.get("MACOS_CODESIGN_IDENTITY", "").strip()
+    if identity:
+        print(f"\nCode-signing {app_path} with stable identity "
+              f"{identity!r} (macOS permissions will survive updates)...")
+        sign = subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", identity, app_path])
+        if sign.returncode == 0:
+            print("Code-signing done.")
+        else:
+            # No ad-hoc fallback here on purpose: a failed --force --sign
+            # may have already half-replaced the bundle's signature, and
+            # silently signing ad-hoc after that would produce a bundle
+            # whose identity is a fresh cdhash anyway -- the very loop this
+            # path exists to stop. Warn and ship unsigned instead.
+            print("WARNING: code-signing with the stable identity failed -- the .app "
+                  "will still run, but macOS Accessibility/Input Monitoring/Screen "
+                  "Recording grants may not persist across updates. Check that "
+                  "MACOS_CODESIGN_P12 is present and imported into the build keychain.")
     else:
-        print("WARNING: ad-hoc code-signing failed -- the .app will still run, but macOS "
-              "Accessibility/Input Monitoring grants may not persist reliably.")
+        print(f"\nAd-hoc code-signing {app_path} (no MACOS_CODESIGN_IDENTITY set, "
+              "so permissions will re-prompt after a rebuild)...")
+        sign = subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", "-", app_path])
+        if sign.returncode == 0:
+            print("Ad-hoc code-signing done.")
+        else:
+            print("WARNING: ad-hoc code-signing failed -- the .app will still run, but macOS "
+                  "Accessibility/Input Monitoring grants may not persist reliably.")
 
 artifact = f"{EXE_NAME}.app" if sys.platform == "darwin" else f"{EXE_NAME}.exe"
 print(f"\nDone! Check dist/{artifact}")
