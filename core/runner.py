@@ -1834,6 +1834,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             )
         else:
             deadline = time.time() + MATCH_RESULT_TIMEOUT
+        lobby_sightings = 0   # consecutive polls that found the lobby's Play button
         while deadline is None or time.time() < deadline:
             if self._checkpoint(stop_event):
                 return None
@@ -1886,6 +1887,34 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 if reconnect_match is not None:
                     self._handle_disconnect(hwnd, stop_event, webhook, task)
                     return None
+
+            # Back on the lobby mid-match. Nothing the runner did put us here:
+            # someone clicked Return to Lobby by hand, or the game ejected us.
+            # Either way Victory/Defeat can never arrive, so without this the
+            # run just polls a lobby screen until MATCH_RESULT_TIMEOUT.
+            # nav_play only renders on the lobby, which is what makes it a safe
+            # signal from inside a match. Reported as "left" -- the same result
+            # Leave at Minute and the Infinite wave-limit exit use, so _run_task
+            # re-runs the whole setup (Play -> gamemode -> map -> stage) rather
+            # than waiting on a teleport that is not coming.
+            # Confirmed over two consecutive polls, not one: aborting a live
+            # match is expensive, and a single frame caught mid-transition is
+            # not worth acting on. Same confirm-then-commit shape wait_wave's
+            # target check uses.
+            try:
+                lobby_match = vision.find_image(hwnd, "nav_play")
+            except vision.TemplateNotFound:
+                lobby_match = None
+            if lobby_match is None:
+                lobby_sightings = 0
+            else:
+                lobby_sightings += 1
+                if lobby_sightings >= LOBBY_RESYNC_CONFIRMATIONS:
+                    self._log("[Macro] Back on the lobby mid-match (found Play twice) -- "
+                               "re-entering the stage from scratch.")
+                    self._set_status(action="Back on the lobby -- re-entering...")
+                    return "left"
+                self._log("[Macro] Play button visible mid-match -- confirming on the next poll.")
 
             if watch_close_popup:
                 self._click_close_popup_if_found(hwnd)
@@ -4271,6 +4300,39 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._log(f"[Macro] Couldn't click {label} without reopening a party overlay -- stopping.")
         return False
 
+    def _find_gamemode_card(self, hwnd, stop_event: threading.Event, names, label: str):
+        """Locate a gamemode card, widening the search before giving up.
+
+        The cards panel is normally boxed to GAMEMODE_CARD_REGION so the left
+        3D viewport (player silhouettes, party [+] buttons) can't false-match.
+        That box assumes a fixed layout, and the menu keeps growing -- Tower
+        and Event cards landed in v0.19.0 -- so a card can now render outside
+        it and the whole task fails with "never showed up".
+
+        A boxed miss falls back to the full window instead. Template matching
+        still only accepts a match by score (vision.DEFAULT_THRESHOLD), so the
+        wider scan costs a few seconds, not accuracy -- the same reasoning
+        that moved nav_play off its own fixed region.
+        """
+        try:
+            match, name = vision.wait_for_image_any(
+                hwnd, names, region=GAMEMODE_CARD_REGION,
+                timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't find {label}: {exc}")
+            return None, None
+        if match is not None or stop_event.is_set():
+            return match, name
+
+        self._log(f'[Macro] {label} not in the cards panel within '
+                   f'{GAMEMODE_CLICK_TIMEOUT:.0f}s -- widening to the whole window.')
+        try:
+            return vision.wait_for_image_any(
+                hwnd, names, timeout=GAMEMODE_CARD_WIDE_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound as exc:
+            self._log(f"[Macro] Can't find {label}: {exc}")
+            return None, None
+
     def _click_gamemode(self, hwnd, stop_event: threading.Event, mode: str, wait_for_menu: bool = True) -> bool:
         # Story's card position doesn't move once the menu is open, so it's
         # just a fixed coordinate (see STORY_CLICK's comment). Raid's isn't
@@ -4319,12 +4381,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if mode == "expedition":
             self._log("[Macro] Menu open -- searching for Expedition...")
             self._set_status(action="Clicking Expedition...")
-            try:
-                match, name = vision.wait_for_image_any(
-                    hwnd, EXPEDITION_IMAGE_NAMES, region=GAMEMODE_CARD_REGION, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't find Expedition: {exc}")
-                return False
+            match, name = self._find_gamemode_card(
+                hwnd, stop_event, EXPEDITION_IMAGE_NAMES, "Expedition")
             if match is None:
                 if not stop_event.is_set():
                     self._log(f'[Macro] "expedition" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
@@ -4339,12 +4397,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if mode == "challenge":
             self._log("[Macro] Menu open -- searching for Challenge...")
             self._set_status(action="Clicking Challenge...")
-            try:
-                match, name = vision.wait_for_image_any(
-                    hwnd, CHALLENGE_IMAGE_NAMES, region=GAMEMODE_CARD_REGION, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't find Challenge: {exc}")
-                return False
+            match, name = self._find_gamemode_card(
+                hwnd, stop_event, CHALLENGE_IMAGE_NAMES, "Challenge")
             if match is None:
                 if not stop_event.is_set():
                     self._log(f'[Macro] "challenge" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
@@ -4359,12 +4413,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if mode == "raid":
             self._log("[Macro] Menu open -- searching for Raid...")
             self._set_status(action="Clicking Raid...")
-            try:
-                match, name = vision.wait_for_image_any(
-                    hwnd, RAID_IMAGE_NAMES, region=GAMEMODE_CARD_REGION, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
-            except vision.TemplateNotFound as exc:
-                self._log(f"[Macro] Can't find Raid: {exc}")
-                return False
+            match, name = self._find_gamemode_card(
+                hwnd, stop_event, RAID_IMAGE_NAMES, "Raid")
             if match is None:
                 if not stop_event.is_set():
                     self._log(f'[Macro] "raid" not found within {GAMEMODE_CLICK_TIMEOUT:.0f}s -- the '
@@ -4384,11 +4434,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # fixed coordinate.
         self._log("[Macro] Menu open -- searching for Story...")
         self._set_status(action="Clicking Story...")
-        try:
-            match, name = vision.wait_for_image_any(
-                hwnd, STORY_IMAGE_NAMES, region=GAMEMODE_CARD_REGION, timeout=GAMEMODE_CLICK_TIMEOUT, stop_event=stop_event)
-        except vision.TemplateNotFound:
-            match, name = None, None
+        match, name = self._find_gamemode_card(hwnd, stop_event, STORY_IMAGE_NAMES, "Story")
         if match is not None:
             debug_path = self._debug_save(hwnd, name, match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
