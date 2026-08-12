@@ -71,13 +71,7 @@ class ChallengeOps:
         if frame is None:
             return None
 
-        aliases = {
-            "School Grounds": "grounds",
-            "Rose Kingdom": "kingdom",
-            "Fairy King Forest": "fairy",
-            "King's Tomb": "tomb",
-            "Flower Forest": "flower",
-        }
+        aliases = CHALLENGE_MAP_OCR_ALIASES
 
         try:
             pytesseract = ocr.get_pytesseract()
@@ -94,7 +88,15 @@ class ChallengeOps:
             candidates.extend(ocr.candidate_masks(crop, upscale=8))
             texts = [ocr.ocr_mask(pytesseract, candidate, "--psm 7") for candidate in candidates]
             for text in texts:
-                tokens = re.findall(r"[a-z]+", text.lower())
+                # The label reads "<Map> - Act N", so every read carries the
+                # same boilerplate word alongside the part that identifies the
+                # map. Left in, it competes for the best score -- "act" sits
+                # about as close to "east" as a garbled "Tornb" does to "tomb",
+                # which collapses the runner-up margin below and rejects a read
+                # that was perfectly legible. Score only the words that can
+                # actually name a map.
+                tokens = [t for t in re.findall(r"[a-z]+", text.lower())
+                          if t not in CHALLENGE_MAP_OCR_STOPWORDS]
                 scores = sorted(
                     (
                         max((difflib.SequenceMatcher(None, alias, token).ratio() for token in tokens), default=0),
