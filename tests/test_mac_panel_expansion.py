@@ -36,6 +36,22 @@ def test_capture_region_from_window_crops_the_backing_store(monkeypatch):
     assert result[0, 0].tolist() == [10, 20, 30]
 
 
+def test_capture_region_from_window_clamps_zero_sized_crops(monkeypatch):
+    """The screen-space twin floors dims at 1x1 (capture_region's
+    max(1, ...)); the window twin must do the same so a drifted/zero-sized
+    settings region averages a real pixel instead of an empty array
+    (NaN -> False in the color probe)."""
+    seen = {}
+
+    def fake_capture(hwnd, region):
+        seen["region"] = region
+        return np.zeros((1, 1, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(vision, "capture_window_region_bgr", fake_capture)
+    ocr.capture_region_from_window(123, 0, 0, 0, -5)
+    assert seen["region"] == (0, 0, 1, 1)
+
+
 def test_sample_color_matches_window_is_false_when_capture_fails(monkeypatch):
     monkeypatch.setattr(vision, "capture_window_region_bgr", lambda hwnd, region: None)
     assert ocr.sample_color_matches_window(123, 0, 0, 10, 10, 0xFFFFFF) is False

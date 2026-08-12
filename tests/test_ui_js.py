@@ -1186,6 +1186,54 @@ def test_show_docked_reasserts_panel_width_on_mac():
         "showDocked never re-asserts the width a non-Dashboard screen needs"
 
 
+def test_show_docked_reasserts_panel_width_on_mac_behaviorally(tmp_path):
+    """Behavioural twin of the source-contract check above: actually run the
+    shipped showDocked() (lifted by brace-matching) against a stand-in DOM and
+    pywebview bridge, and assert the re-assert fires exactly when it should.
+    A non-Dashboard screen needs the full frame; the Dashboard keeps the strip;
+    and on Windows the call must not happen at all (the bridge method is
+    mac-only)."""
+    out = run_js("""
+        const calls = [];
+        // First dock already happened, so showDocked does not auto-hop to
+        // Dashboard and clobber currentScreen -- we want the re-assert path.
+        let hasAutoShownDashboard = true;
+        let currentScreen = 'manager';
+        function switchScreen() {}
+        function isBlockingOverlayOpen() { return false; }
+        function runPendingFirstRun() {}
+        // Any id gets a fresh {style:{}} so the three display writes land
+        // without a real DOM; show_game/hide_game are no-ops for this test.
+        global.document = { getElementById: id => ({ style: {} }) };
+        global.window = { pywebview: {} };
+        global.pywebview = { api: {
+          set_panel_expanded: v => calls.push(v),
+          show_game: () => {},
+          hide_game: () => {},
+        }};
+        global.IS_MAC = true;
+
+        eval(extract('showDocked'));
+
+        showDocked();
+        const managerCall = calls.slice();
+        calls.length = 0;
+        currentScreen = 'dashboard';
+        showDocked();
+        const dashboardCall = calls.slice();
+        calls.length = 0;
+        global.IS_MAC = false;
+        currentScreen = 'manager';
+        showDocked();
+        const nonMacCall = calls.slice();
+
+        console.log(JSON.stringify({ managerCall, dashboardCall, nonMacCall }));
+    """, tmp_path)
+    assert out["managerCall"] == [True], "non-Dashboard screen did not expand the panel on mac"
+    assert out["dashboardCall"] == [False], "Dashboard kept the narrow strip instead of collapsing the panel"
+    assert out["nonMacCall"] == [], "set_panel_expanded fired when not on mac"
+
+
 # ---------------------------------------------------------------------------
 # Detect block: nested then/else and its advanced fields must round-trip
 # through the real serializeBlock/blockFromSaved pair.

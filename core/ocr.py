@@ -224,8 +224,13 @@ def capture_region_from_window(hwnd: int, x: int, y: int, width: int, height: in
     guaranteed image should treat that as a failed capture.
     """
     from . import vision
+    # Same max(1, ...) floor the screen-space twin (capture_region) applies:
+    # a zero/negative width or height would make vision's crop an empty
+    # array, and sample_color_matches_window would then average nothing
+    # (NaN -> False) instead of sampling a pixel. Unreachable through the
+    # fixed scrollbar probe, but settings-provided regions can drift.
     return vision.capture_window_region_bgr(
-        hwnd, (int(x), int(y), int(width), int(height))
+        hwnd, (int(x), int(y), max(1, int(width)), max(1, int(height)))
     )
 
 
