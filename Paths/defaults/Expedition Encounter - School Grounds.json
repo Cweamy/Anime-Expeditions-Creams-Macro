@@ -1,0 +1,85 @@
+{
+  "name": "Expedition Encounter - School Grounds",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 0.183,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 0.428,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 0.702,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 0.947,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 1.1,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 1.374,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 1.527,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 2.076,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 2.26,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 2.808,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 2.9,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 3.328,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 3.45,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 5.438,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 5.499,
+      "key": "d",
+      "state": "up"
+    }
+  ]
+}

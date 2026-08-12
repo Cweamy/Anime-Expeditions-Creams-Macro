@@ -1,0 +1,95 @@
+{
+  "name": "Expedition Encounter - Flower Forest",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 0.183,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 0.583,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 0.827,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 1.011,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 1.194,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 1.376,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 1.528,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 1.65,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 1.834,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 2.199,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 2.29,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 2.656,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 2.809,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 3.054,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 3.146,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 3.696,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 3.819,
+      "key": "d",
+      "state": "up"
+    }
+  ]
+}

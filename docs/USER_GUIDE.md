@@ -121,6 +121,26 @@ Common blocks include:
 Keep recordings short and deterministic. Prefer dedicated blocks over a long
 recording when possible, because they are easier to adjust after a game update.
 
+### Expedition encounters
+
+Expedition nodes can drop an encounter that has to be walked to and talked to.
+The macro handles this itself: when the encounter marker appears it teleports to
+spawn, walks that map's route, and interacts. Nothing is needed in your template
+beyond your unit placements.
+
+Routes ship for School Grounds, Rose Kingdom, Flower Forest, and East Town. For
+any other map the encounter is left alone and logged. To add one, record a walk
+from spawn to that map's NPC and map it in
+`Assets/default_encounter_walk_paths.json`:
+
+```json
+{ "Your Map": "Your recorded path name" }
+```
+
+A route that does not fit your spawn stops safely: the interact prompt has to be
+found before anything is clicked, so a walk that lands somewhere wrong logs and
+gives up rather than clicking at the world.
+
 ## 5. Create the task queue
 
 Open **Task**, add tasks in the order they should run, and configure each one:

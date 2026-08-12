@@ -80,6 +80,66 @@ PLAY_CLICK_RETRY_ATTEMPTS = 3
 START_GAME_CLICK_RETRY_ATTEMPTS = 3
 START_GAME_CLICK_VERIFY_SETTLE = 1.0  # after clicking, how long to wait before checking it's actually gone
 START_GAME_BUTTON_WAIT_TIMEOUT = 5.0  # how long to poll for Start Game right after Pre Start hands off
+# ── Native Expedition encounter handling (_handle_expedition_encounter).
+# An encounter node parks the client somewhere a match result can never come
+# from. Recovering means: reset position, walk to that map's NPC, talk to it.
+# All coordinates are in the 1152x756 reference space, measured on a real
+# client -- the same kind of constant as STORY_CLICK. Where an image exists for
+# a step it is used instead (nav_settings / nav_closeui are already shipped),
+# because an image survives a layout shift and a coordinate does not.
+ENCOUNTER_REGION = (414, 58, 41, 45)      # the encounter marker's HUD slot
+ENCOUNTER_TELEPORT_SPAWN_CLICK = (621, 443)  # "teleport to spawn" inside Settings
+# Dialogue advance clicks, in order. The prompt is opened with E; these step
+# through the exchange that follows.
+ENCOUNTER_DIALOGUE_CLICKS = ((403, 663), (581, 577), (667, 665), (581, 577))
+ENCOUNTER_STEP_SETTLE = 0.3        # between UI steps, so each registers
+ENCOUNTER_ARRIVE_SETTLE = 1.5      # after the walk, before looking for the prompt
+ENCOUNTER_SPEAK_TIMEOUT = 4.0      # how long to wait for the interact prompt
+# Opening Settings is the step most likely to be blocked: a level-up "Select an
+# upgrade!" modal renders over the gear, so the search legitimately fails while
+# one is up. Longer than the others, and the modal is cleared first.
+ENCOUNTER_SETTINGS_TIMEOUT = 6.0
+# A level-up "Select an upgrade!" modal covers the settings gear, and several
+# can queue up back to back after a wave. Clearing one and pressing on is not
+# enough -- the next is already rendering. Wait until none is left, up to this
+# long, dismissing each as it appears. Bounded rather than a flat sleep, so a
+# run with nothing blocking pays nothing.
+ENCOUNTER_MODAL_CLEAR_TIMEOUT = 12.0
+ENCOUNTER_MODAL_POLL = 0.4
+# Closing Settings took more than one click in practice: observed closing on
+# the second attempt roughly as often as the first.
+ENCOUNTER_CLOSE_ATTEMPTS = 3
+# The dialogue is several boxes, not one. Firing the click sequence once and
+# moving on left the run standing in an open box, so it repeats until the
+# interact prompt is gone -- bounded, because a dialogue that never clears is
+# a different problem and should not loop forever.
+ENCOUNTER_DIALOGUE_ROUNDS = 3
+# One second between dialogue clicks, matching the spacing the template version
+# actually ran at: each Click block there advances on its own battle tick, and
+# MATCH_RESULT_POLL_INTERVAL is 1.0s. Firing them back to back instead landed
+# clicks on a box that had not advanced yet -- same coordinates, wrong pace.
+ENCOUNTER_DIALOGUE_CLICK_GAP = 1.0
+# Two separate pauses, because they wait on different things.
+#
+# The first is before ANY of the menu work: the encounter has just appeared,
+# the wave that triggered it is still resolving, and level-up cards are still
+# queueing. Reaching for Settings into that is what produced the alternating
+# "nav_settings not found" / "Settings is still open" failures.
+#
+# DEFERRED, never slept: the handler returns and lets the caller's poll loop
+# carry on picking upgrade cards and clicking wave Continues, and only starts
+# the menu once this much has passed since the icon first appeared. A blocking
+# wait here froze the whole run -- reward cards auto-selected untouched.
+ENCOUNTER_PRE_MENU_SETTLE = 20.0
+# The second is after the teleport, before replaying the route: the world is
+# reloading around the player and keys pressed through that are lost, so the
+# route would start part-way in and land short of the NPC. Short, because the
+# 20s above has already absorbed the encounter settling.
+ENCOUNTER_TELEPORT_SETTLE = 3.0
+# Do not re-enter while the marker is still fading, and never twice in a row
+# for one encounter.
+ENCOUNTER_COOLDOWN = 20.0
+
 EXPEDITION_WAVE_TIMEOUT = 8.0  # how long to wait for Continue_2/extract after clicking exp_continue/exp_extract
 # A level-up "Select an upgrade!" reward modal can be on screen at the exact
 # same moment as the extract/continue choice (confirmed via a real capture:
@@ -377,6 +437,15 @@ GAMEMODE_CARD_WIDE_TIMEOUT = 5.0
 # consecutive polls before acting, since aborting a live match is expensive
 # and one frame caught mid-transition is not worth acting on.
 LOBBY_RESYNC_CONFIRMATIONS = 2
+# The same "are we actually on the lobby" question during a teleport wait, but
+# that loop can run for five minutes on matchmaking and polls fast, so the
+# check runs every Nth poll rather than every one -- a full-window search per
+# tick would be real cost for a state that does not change that quickly.
+# Counted in polls rather than seconds deliberately: the wait's timing is
+# asserted tick-by-tick (see tests/test_runner_teleport.py), and reading the
+# clock again here would change that shape for a rate limit that does not need
+# wall time to be correct.
+LOBBY_CHECK_EVERY_N_POLLS = 6
 
 # AFK Chamber: an Expedition encounter node can drop the client in here, and
 # nothing about it reads as a disconnect or a lobby -- so the runner sat
@@ -402,6 +471,13 @@ STORY_IMAGE_NAMES = ("story",)
 NAV_START_IMAGE_NAMES = ("nav_start",)
 NAV_DISBAND_IMAGE_NAMES = ("nav_disband",)
 PARTY_OVERLAY_IMAGE_NAMES = NAV_DISBAND_IMAGE_NAMES + ("invite_players_open",)
+# Modals that cover the LOBBY rather than the gamemode menu -- the Update Log
+# shown after a game update or a fresh login is the common one. Play renders
+# behind it and still matches, so the click is found and lands on the modal
+# instead: observed as three "nav_back not found -- still on the lobby,
+# re-clicking Play" retries in a row while the patch notes sat on screen.
+# Optional like nav_disband: no image means the check does nothing.
+LOBBY_OVERLAY_CLOSE_IMAGE_NAMES = ("update_log_close",)
 # 10 visual variants on file, all inside Assets/ui/priority_upgrade/ --
 # every one tried per search, same folder-variant mechanism as above.
 PRIORITY_UPGRADE_IMAGE_NAMES = ("priority_upgrade",)

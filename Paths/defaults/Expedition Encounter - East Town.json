@@ -1,0 +1,45 @@
+{
+  "name": "Expedition Encounter - East Town",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 0.183,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 0.825,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 1.192,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 1.894,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 2.29,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 2.961,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 3.357,
+      "key": "d",
+      "state": "up"
+    }
+  ]
+}
