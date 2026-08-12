@@ -159,6 +159,12 @@ jobs:
     # launch on an Intel Mac. Keep the public download Intel-compatible.
     runs-on: macos-15-intel
     needs: build-and-release
+    # GitHub does not allow the `secrets` context inside `if:` conditions
+    # (the whole workflow fails to load with a "workflow file issue"), so
+    # the p12 is mirrored into a job-level env var here and the import step
+    # below gates on that instead.
+    env:
+      MACOS_CODESIGN_P12: ${{ secrets.MACOS_CODESIGN_P12 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -184,10 +190,9 @@ jobs:
       # that stable identity non-interactively; otherwise this step no-ops and
       # the build falls back to ad-hoc signing (still works, just re-prompts).
       - name: Import macOS code signing identity
-        if: ${{ secrets.MACOS_CODESIGN_P12 != '' }}
+        if: ${{ env.MACOS_CODESIGN_P12 != '' }}
         shell: bash
         env:
-          MACOS_CODESIGN_P12: ${{ secrets.MACOS_CODESIGN_P12 }}
           MACOS_CODESIGN_PASSWORD: ${{ secrets.MACOS_CODESIGN_PASSWORD }}
         run: |
           set -euo pipefail

@@ -67,9 +67,21 @@ def test_workflows_import_the_p12_and_export_the_identity():
 def test_workflows_are_conditional_on_the_secret():
     # Builds without the secret must still succeed: the import step is
     # guarded, so a fork or a pre-secret build just skips to ad-hoc signing.
+    #
+    # The guard is `env.MACOS_CODESIGN_P12`, NOT `secrets.MACOS_CODESIGN_P12`
+    # in the if: -- GitHub does not allow the secrets context in if:
+    # conditions and rejects the whole workflow file at load time ("workflow
+    # file issue", no jobs created, 0s run). The documented workaround is a
+    # job-level env var mirroring the secret, which is what the if tests.
+    # Assert both halves so a regression to the secrets-in-if form (which
+    # parses fine as YAML and passes every local check) is caught here.
     for wf in ("release.yml", "macos-asset.yml"):
         text = _read(pathlib.PurePath(".github", "workflows", wf).as_posix())
-        assert "if: ${{ secrets.MACOS_CODESIGN_P12 != '' }}" in text
+        assert "if: ${{ env.MACOS_CODESIGN_P12 != '' }}" in text
+        assert "if: ${{ secrets.MACOS_CODESIGN_P12 != '' }}" not in text, \
+            "secrets context in if: breaks workflow loading on GitHub"
+        assert "MACOS_CODESIGN_P12: ${{ secrets.MACOS_CODESIGN_P12 }}" in text, \
+            "workflows must mirror the secret into a job-level env var for the if guard"
 
 
 def test_cert_script_is_idempotent_safe():

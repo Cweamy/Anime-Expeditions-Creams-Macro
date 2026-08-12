@@ -24,6 +24,12 @@ jobs:
     # Match the tagged-release job: the downloadable app must contain an
     # x86_64 interpreter and native dependencies for Intel Macs.
     runs-on: macos-15-intel
+    # GitHub does not allow the `secrets` context inside `if:` conditions
+    # (the whole workflow fails to load with a "workflow file issue"), so
+    # the p12 is mirrored into a job-level env var here and the import step
+    # below gates on that instead.
+    env:
+      MACOS_CODESIGN_P12: ${{ secrets.MACOS_CODESIGN_P12 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,10 +50,9 @@ jobs:
       # signs with it non-interactively; otherwise this no-ops and the build
       # falls back to ad-hoc signing.
       - name: Import macOS code signing identity
-        if: ${{ secrets.MACOS_CODESIGN_P12 != '' }}
+        if: ${{ env.MACOS_CODESIGN_P12 != '' }}
         shell: bash
         env:
-          MACOS_CODESIGN_P12: ${{ secrets.MACOS_CODESIGN_P12 }}
           MACOS_CODESIGN_PASSWORD: ${{ secrets.MACOS_CODESIGN_PASSWORD }}
         run: |
           set -euo pipefail
