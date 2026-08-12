@@ -92,6 +92,17 @@ EXPEDITION_WAVE_TIMEOUT = 8.0  # how long to wait for Continue_2/extract after c
 EXPEDITION_EXTRACT_CONFIRM_TIMEOUT = 16.0
 EXTRACT_CONFIRM_SETTLE = 5.0  # settle after clicking "extract" -- reported as a click that can visually land without registering
 EXPEDITION_CONTINUE_COOLDOWN = 5.0  # settle after exp_continue/continue_2 -- a lingering banner right after the
+# How long a checkpoint may stay up, being re-found and re-clicked on every
+# poll, before the run is treated as stalled rather than progressing. Every
+# individual step of the checkpoint chain is already bounded, but nothing
+# noticed the WHOLE chain repeating: a Continue that never clears is
+# re-clicked every poll, and the only escape was MATCH_RESULT_TIMEOUT half
+# an hour later. A healthy run cannot trip this -- waves are minutes apart,
+# so the polls between two checkpoints find no Continue at all and reset
+# the clock. Only a checkpoint that never clears keeps it running.
+# Measured in elapsed time rather than poll count so it means the same
+# thing regardless of how long each retry cycle happens to take.
+EXPEDITION_STALL_TIMEOUT = 300.0
 
 # ── Color-based Expedition checkpoint detection (the default engine --
 # Settings > Debug > "Expedition Color Detection" toggles back to the

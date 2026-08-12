@@ -157,6 +157,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Expedition camera's O-zoom hold (Settings > Debug).
         self._expedition_color_buttons = True
         self._exp_last_sighting_at = 0.0
+        # Consecutive polls that found a checkpoint Continue, and when that
+        # run of them started. See EXPEDITION_STALL_TIMEOUT -- a checkpoint
+        # that never clears would otherwise be re-clicked all the way to
+        # MATCH_RESULT_TIMEOUT.
+        self._exp_checkpoint_streak = 0
+        self._exp_checkpoint_since = 0.0
         self._expedition_camera_o_ms = 100.0
         # Wrapped to remember the most recent action text locally: the
         # stop path (_checkpoint) reports "Stopped. (was: <action>)" so a
@@ -1710,6 +1716,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._expedition_extract_accept_at = _parse_extract_after(
             task.get("extract_after")) + 1
         self._exp_last_sighting_at = 0.0  # fresh match, fresh sighting-debounce clock (see EXP_COLOR_SIGHTING_DEBOUNCE)
+        self._exp_checkpoint_streak = 0   # and a fresh stall clock (see EXPEDITION_STALL_TIMEOUT)
+        self._exp_checkpoint_since = 0.0
+        self._exp_checkpoint_streak = 0   # and a fresh stall streak (see EXPEDITION_STALL_LIMIT)
         # Spirit City Act 3's boss/cutscene "Click anywhere to close" popup
         # (see _click_close_popup_if_found) only ever shows up there.
         watch_close_popup = (task.get("mode") == "raid" and task.get("map") == "Spirit City"
@@ -1894,6 +1903,26 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 result = self._check_expedition_wave_result(hwnd, stop_event)
                 if result is not None:
                     return result
+                # Every step of the checkpoint chain is individually bounded,
+                # but nothing used to notice the whole chain repeating: a
+                # Continue that never clears is re-found and re-clicked on
+                # every poll, and the run only escaped at
+                # MATCH_RESULT_TIMEOUT, half an hour later. Give up once the
+                # streak says the checkpoint is not clearing and let the
+                # normal recovery path re-enter from the lobby -- exactly
+                # what the 30-minute timeout below does, just far sooner.
+                if self._expedition_checkpoint_stalled():
+                    self._log(
+                        f"[Macro] Expedition checkpoint still up after "
+                        f"{EXPEDITION_STALL_TIMEOUT / 60:.0f} min and "
+                        f"{self._exp_checkpoint_streak} polls -- the run isn't progressing, "
+                        f"so it's being abandoned instead of clicking at it until the "
+                        f"{MATCH_RESULT_TIMEOUT / 60:.0f} min timeout. Common causes: an "
+                        f"encounter node waiting on an NPC, or a click that lands visually "
+                        f"without registering.")
+                    self._save_debug_screenshot_unconditional(hwnd, "expedition_checkpoint_stall")
+                    self._note_checkpoint_cleared()
+                    return None
                 self._interruptible_sleep(MATCH_RESULT_POLL_INTERVAL, stop_event)
                 continue
 
