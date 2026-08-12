@@ -383,6 +383,48 @@ def _mac_panel_layout() -> dict:
     }
 
 
+def _capture_game_region(hwnd: int, region: dict):
+    """Read the game's pixels for a settings-calibrated region.
+
+    Region dicts from Settings > Debug are stored in game-client coordinates
+    (see get_reward_region / get_stats_region): offsets from the game
+    window's own top-left. On Windows the game is a child window inside this
+    one, so the screen-space rect is the game's screen origin plus the
+    region. On macOS the game is a separate top-level window that the panel
+    can cover when it is expanded (see set_panel_expanded), so a screen grab
+    would read the panel -- there we read the window's own backing store
+    through vision's window-content path, which uses the same client-space
+    convention. Raises if the window capture comes back empty so callers'
+    existing error handling treats it as a failed capture.
+    """
+    if sys.platform == "darwin":
+        from core.ocr import capture_region_from_window
+        image = capture_region_from_window(
+            hwnd, region["x"], region["y"], region["width"], region["height"])
+        if image is None:
+            raise RuntimeError("window capture returned no image")
+        return image
+    from core.ocr import capture_region
+    game_left, game_top, _, _ = wm.get_window_rect_screen(hwnd)
+    return capture_region(
+        game_left + int(region["x"]), game_top + int(region["y"]),
+        int(region["width"]), int(region["height"]))
+
+
+def _game_region_color_matches(hwnd: int, x: int, y: int, width: int, height: int,
+                               expected_rgb_hex: int, tolerance: int = 20) -> bool:
+    """Color-probe twin of _capture_game_region, for a client-space rect."""
+    if sys.platform == "darwin":
+        from core.ocr import sample_color_matches_window
+        return sample_color_matches_window(
+            hwnd, x, y, width, height, expected_rgb_hex, tolerance)
+    from core.ocr import sample_color_matches
+    game_left, game_top, _, _ = wm.get_window_rect_screen(hwnd)
+    return sample_color_matches(
+        game_left + int(x), game_top + int(y), int(width), int(height),
+        expected_rgb_hex, tolerance)
+
+
 class Api:
     """Exposed to the frontend as `pywebview.api.*`: the JS <-> Python bridge.
     Grows as the task/placement/upgrade systems get built; for now it just
@@ -2840,16 +2882,14 @@ class Api:
         -- set by the dock arranger or skip_waiting); before that the window is
         still the small waiting-screen box and must stay that way.
 
-        Never expands WHILE THE MACRO IS RUNNING. Expanding covers Roblox, and
-        not everything that reads the game can see through that: core/vision.py
-        is immune (it reads the window's own backing store on mac -- see
-        _use_window_capture there), but core/ocr.py's capture_region is a plain
-        screen grab of a screen-space rect, so wave/reward/stats OCR would read
-        the panel's own pixels instead of the game. Staying collapsed mid-run
-        costs a cramped Settings screen; expanding costs silently wrong OCR."""
+        Expansion is safe even WHILE THE MACRO IS RUNNING: core/vision.py was
+        already immune (it reads the window's own backing store on mac -- see
+        _use_window_capture there), and the OCR crops that used to be plain
+        screen grabs (reward/stats reads, the scrollbar color probe) now go
+        through core.ocr.capture_region_from_window on mac too, so the panel's
+        own pixels are never mistaken for the game. The runner activates/
+        raises Roblox before it clicks anyway."""
         if sys.platform != "darwin" or not self._window or not self._mac_panel_ready:
-            return
-        if expanded and self.runner.is_running():
             return
         if not expanded and not self.docker.docked:
             # Nothing arranged beside us to make room for (Roblox not open, or
@@ -4092,14 +4132,11 @@ class Api:
             return {"ok": False, "reason": "no_roblox"}
 
         region = self.get_reward_region()
-        game_left, game_top, _, _ = wm.get_window_rect_screen(hwnd)
         path = os.path.join(_debug_dir(), "debug_reward_region.png")
 
         try:
             from core import rewards
-            image = rewards.capture_region(
-                game_left + region["x"], game_top + region["y"], region["width"], region["height"]
-            )
+            image = _capture_game_region(hwnd, region)
             rewards.save_region_preview(image, path)
         except Exception as exc:
             self.push_log(f"[Rewards] Preview failed: {exc}")
@@ -4148,15 +4185,12 @@ class Api:
 
         try:
             from core import rewards
-            from core.ocr import capture_region, sample_color_matches
 
-            image_top = capture_region(
-                game_left + region["x"], game_top + region["y"], region["width"], region["height"]
-            )
+            image_top = _capture_game_region(hwnd, region)
 
             probe_x, probe_y, probe_w, probe_h = REWARD_SCROLLBAR_PROBE
-            has_more = sample_color_matches(
-                game_left + probe_x, game_top + probe_y, probe_w, probe_h, REWARD_SCROLLBAR_COLOR,
+            has_more = _game_region_color_matches(
+                hwnd, probe_x, probe_y, probe_w, probe_h, REWARD_SCROLLBAR_COLOR,
                 tolerance=rewards.SCROLLBAR_TOLERANCE,
             )
             image_bottom = None
@@ -4193,9 +4227,7 @@ class Api:
                     time.sleep(0.02)
                 time.sleep(0.2)  # let the scroll-snap animation settle
 
-                image_bottom = capture_region(
-                    game_left + region["x"], game_top + region["y"], region["width"], region["height"]
-                )
+                image_bottom = _capture_game_region(hwnd, region)
                 # Move off the reward box once scrolling is done, same
                 # reasoning as core.runner's automatic post-match read.
                 self.mouse.move_to(game_left + 3, game_top + 3)
@@ -4264,15 +4296,11 @@ class Api:
             return {"ok": False, "reason": "no_roblox"}
 
         region = self.get_stats_region()
-        game_left, game_top, _, _ = wm.get_window_rect_screen(hwnd)
         path = os.path.join(_debug_dir(), "debug_game_stats.png")
 
         try:
             from core import game_stats
-            from core.ocr import capture_region
-            image = capture_region(
-                game_left + region["x"], game_top + region["y"], region["width"], region["height"]
-            )
+            image = _capture_game_region(hwnd, region)
             game_stats.save_region_preview(image, path)
         except Exception as exc:
             self.push_log(f"[Stats] Preview failed: {exc}")
@@ -4291,14 +4319,10 @@ class Api:
             return {"ok": False, "reason": "no_roblox"}
 
         region = self.get_stats_region()
-        game_left, game_top, _, _ = wm.get_window_rect_screen(hwnd)
 
         try:
             from core import game_stats
-            from core.ocr import capture_region
-            image = capture_region(
-                game_left + region["x"], game_top + region["y"], region["width"], region["height"]
-            )
+            image = _capture_game_region(hwnd, region)
             stats = game_stats.read_game_stats(image)
         except Exception as exc:
             self.push_log(f"[Stats] Read failed: {exc}")

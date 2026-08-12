@@ -1171,6 +1171,21 @@ def test_both_dock_and_skip_release_it():
         assert "runPendingFirstRun()" in body, f"{fn} never releases a queued first-run dialog"
 
 
+def test_show_docked_reasserts_panel_width_on_mac():
+    """macOS: docking (re)arranges the panel back to the narrow strip beside
+    Roblox, and if the user was on a non-Dashboard screen when Roblox
+    appeared (or reappeared after a relaunch) that strip leaves the
+    multi-column editor clipped -- the "Macro Manager shows nothing" report.
+    showDocked must re-assert the width the current screen needs, and only
+    on mac; a Dashboard dock (the common first-ever case) keeps the strip."""
+    src = open(os.path.join(os.path.dirname(INDEX_HTML), "app.js"), encoding="utf-8").read()
+    body = src[src.index("function showDocked("):]
+    body = body[:body.index("\n}\n") + 2]
+    assert "if (IS_MAC) {" in body, "re-assert is not gated on mac"
+    assert "set_panel_expanded(currentScreen !== 'dashboard')" in body, \
+        "showDocked never re-asserts the width a non-Dashboard screen needs"
+
+
 # ---------------------------------------------------------------------------
 # Detect block: nested then/else and its advanced fields must round-trip
 # through the real serializeBlock/blockFromSaved pair.

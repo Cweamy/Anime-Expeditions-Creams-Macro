@@ -167,6 +167,15 @@ function showDocked() {
   // Last: the window is now at its docked size, so a queued welcome opens
   // into something readable. showOnboarding hides the game itself.
   runPendingFirstRun();
+
+  // macOS: docking (re)arranges the panel back to the narrow strip beside
+  // Roblox. If the user was on a non-Dashboard screen when Roblox appeared
+  // (or reappeared after a relaunch), that strip leaves the multi-column
+  // editor clipped. Re-assert the width the current screen needs -- the
+  // first-ever dock just switched to Dashboard above, which keeps the strip.
+  if (IS_MAC) {
+    try { window.pywebview && pywebview.api.set_panel_expanded(currentScreen !== 'dashboard'); } catch (e) {}
+  }
 }
 
 // Set by the two capture dances (usePlaceUnitRobloxScreen /

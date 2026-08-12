@@ -206,6 +206,40 @@ def capture_region(left: int, top: int, width: int, height: int) -> np.ndarray:
     return cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
 
 
+def capture_region_from_window(hwnd: int, x: int, y: int, width: int, height: int) -> np.ndarray:
+    """Capture a game-client-space rect from the window's OWN backing store.
+
+    A plain screen grab (capture_region) reads whatever happens to be on
+    screen at those coordinates. On macOS the game is a separate top-level
+    window that the expanded panel can sit directly on top of (see
+    main.Api.set_panel_expanded), so a screen grab there would read the
+    panel's pixels instead of the game. This reuses vision's window-content
+    capture -- PrintWindow on Windows, CGWindowListCreateImage on macOS, see
+    core.vision.capture_window_region_bgr -- which reads the window even when
+    it is occluded. The region is in the same reference/client space every
+    settings-calibrated OCR crop already uses, and the result is BGR exactly
+    like capture_region, so downstream OCR code is unchanged.
+
+    Returns None if the window could not be rendered; callers that need a
+    guaranteed image should treat that as a failed capture.
+    """
+    from . import vision
+    return vision.capture_window_region_bgr(
+        hwnd, (int(x), int(y), int(width), int(height))
+    )
+
+
+def _patch_matches_color(patch: np.ndarray, expected_rgb_hex: int, tolerance: int) -> bool:
+    """Shared color-averaging check for the sample_color_matches pair."""
+    b, g, r = patch.reshape(-1, 3).mean(axis=0)
+    expected_r = (expected_rgb_hex >> 16) & 0xFF
+    expected_g = (expected_rgb_hex >> 8) & 0xFF
+    expected_b = expected_rgb_hex & 0xFF
+    return (abs(r - expected_r) <= tolerance and
+            abs(g - expected_g) <= tolerance and
+            abs(b - expected_b) <= tolerance)
+
+
 def sample_color_matches(left: int, top: int, width: int, height: int,
                           expected_rgb_hex: int, tolerance: int = 20) -> bool:
     """Grabs a small screen-space patch and checks whether its average color
@@ -215,13 +249,21 @@ def sample_color_matches(left: int, top: int, width: int, height: int,
     Averaged over the patch instead of a single pixel so antialiasing/
     compression noise at the sampled point doesn't cause a false miss."""
     patch = capture_region(left, top, max(1, width), max(1, height))
-    b, g, r = patch.reshape(-1, 3).mean(axis=0)
-    expected_r = (expected_rgb_hex >> 16) & 0xFF
-    expected_g = (expected_rgb_hex >> 8) & 0xFF
-    expected_b = expected_rgb_hex & 0xFF
-    return (abs(r - expected_r) <= tolerance and
-            abs(g - expected_g) <= tolerance and
-            abs(b - expected_b) <= tolerance)
+    return _patch_matches_color(patch, expected_rgb_hex, tolerance)
+
+
+def sample_color_matches_window(hwnd: int, x: int, y: int, width: int, height: int,
+                                expected_rgb_hex: int, tolerance: int = 20) -> bool:
+    """Window-content twin of sample_color_matches, in game-client space.
+
+    Same averaging and tolerance, but over a region read from the window's
+    own backing store -- for macOS's side-by-side layout where the expanded
+    panel can cover Roblox (see capture_region_from_window).
+    """
+    patch = capture_region_from_window(hwnd, x, y, width, height)
+    if patch is None:
+        return False
+    return _patch_matches_color(patch, expected_rgb_hex, tolerance)
 
 
 def candidate_masks(cell_bgr: np.ndarray, upscale: int = 6, sharpen_amount: float = 1.5) -> list:
