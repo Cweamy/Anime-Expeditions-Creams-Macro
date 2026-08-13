@@ -595,13 +595,31 @@ EXPEDITION_WAVE_REGION = (417, 16, 110, 33)
 # Story/Raid keep waiting for a real number; their badge always exists, and
 # an unreadable one there means a detection problem worth surfacing rather
 # than working around.
-# Long rather than just-enough on purpose. The first card lands early, while
-# the round is still opening up: waves are still spawning in, the Start Game
-# popup can still reappear, and more cards are queued behind this one. Placing
-# a second after the first card means placing into all of that. Waiting out a
-# stretch of it costs nothing -- the poll loop keeps playing the match, taking
-# cards and clicking Continues, the whole time.
-WAIT_WAVE_NO_COUNTER_SETTLE = 15.0
+# A QUIET PERIOD, not a countdown from the first card -- every fresh
+# disruption restarts it, deliberately. A card means the round is still
+# churning; a mid-run Start Game means it is re-staging and the units have
+# just run off the board. Placing into either is what this exists to avoid,
+# so the clock measures "nothing has happened for a while" rather than "some
+# time has passed since the battle began".
+#
+# Waiting costs nothing: the poll loop keeps playing the match -- taking
+# cards, clicking Continues, handling encounters -- the entire time.
+#
+# The trade-off, stated plainly: on a run where cards keep arriving closer
+# together than this, the wait never releases and the deferred placements
+# never happen. MATCH_RESULT_TIMEOUT is the only backstop.
+WAIT_WAVE_NO_COUNTER_SETTLE = 20.0
+# A mid-run "Start Game?" stages a new sub-round, and the units already
+# placed run off the board entirely -- their tiles free up, so the Battle
+# phase is replayed from the top to put them back.
+#
+# Once per MATCH, on that match's FIRST Start Game only -- and every repeat
+# of the stage is its own match, so each one gets its own replay. Later Start
+# Game popups within the same match are left alone deliberately: re-arming on
+# each would let a chatty popup rewind the phase indefinitely, so the
+# placements keep restarting and never finish. One replay covers the case
+# this exists for -- the re-stage that empties the board -- and anything past
+# that is the run misbehaving in a way more re-placing will not fix.
 # OCR here is several real Tesseract subprocess spawns (see core.wave/
 # core.ocr's multi-mask sweep) -- checked on this cadence, not every single
 # Battle-tick poll, so a long wait for a distant wave doesn't spend most of

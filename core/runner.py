@@ -159,7 +159,13 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # picked. Together they let Wait for Wave release on a gamemode that
         # has no wave counter -- see WAIT_WAVE_NO_COUNTER_SETTLE.
         self._is_expedition_match = False
+        # Proof the battle is genuinely under way (cards drop for kills), and
+        # the quiet-period clock the deferred placements wait on. Anything
+        # that disrupts the board -- a card, a mid-run Start Game -- restarts
+        # the clock. See WAIT_WAVE_NO_COUNTER_SETTLE.
         self._last_reward_card_at = 0.0
+        self._last_board_disruption_at = 0.0
+        self._battle_replayed = False
         # Expedition checkpoint engine choice (see the EXP_COLOR_* block) +
         # the sighting debounce clock it uses; the real values arrive via
         # start()/_run, these are just never-ran-yet defaults. Same for the
@@ -611,6 +617,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # fighting has started -- this is what Wait for Wave falls back to on
         # a gamemode with no wave counter.
         self._last_reward_card_at = time.time()
+        self._last_board_disruption_at = self._last_reward_card_at
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
         return True
@@ -1708,6 +1715,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._is_expedition_match = task.get("mode") == "expedition"
         self._wave_region = EXPEDITION_WAVE_REGION if self._is_expedition_match else WAVE_REGION
         self._last_reward_card_at = 0.0
+        self._last_board_disruption_at = 0.0
+        self._battle_replayed = False
         # Loop A / Loop B: their own index+state, ticked and restarted every
         # poll alongside Battle (see _tick_loop_phases).
         loop_blocks = self._load_loop_blocks(task)

@@ -668,11 +668,11 @@ class BlockOps:
             # visibly started. Story/Raid keep waiting for a real number:
             # their badge always exists, so an unreadable one there is a
             # detection problem worth surfacing rather than working around.
-            since_card = time.time() - self._last_reward_card_at
+            quiet_for = time.time() - self._last_board_disruption_at
             if (self._is_expedition_match and self._last_reward_card_at
-                    and since_card >= WAIT_WAVE_NO_COUNTER_SETTLE):
+                    and quiet_for >= WAIT_WAVE_NO_COUNTER_SETTLE):
                 self._log(f"{label}: no wave counter on this gamemode, but the battle is "
-                          f"under way (an upgrade card was picked {since_card:.0f}s ago) -- "
+                          f"under way and the board has been quiet for {quiet_for:.0f}s -- "
                           f"treating the wait as done.")
                 return True
             self._log(f"{label}: couldn't read the wave counter -- retrying in {WAIT_WAVE_POLL_INTERVAL:.0f}s.")

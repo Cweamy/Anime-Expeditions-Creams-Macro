@@ -130,6 +130,7 @@ def test_expedition_releases_once_the_battle_is_visibly_under_way(monkeypatch):
     _unreadable_wave(runner, monkeypatch)
     runner._is_expedition_match = True
     runner._last_reward_card_at = time.time() - (WAIT_WAVE_NO_COUNTER_SETTLE + 1)
+    runner._last_board_disruption_at = runner._last_reward_card_at
 
     assert runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1) is True
 
@@ -141,6 +142,7 @@ def test_it_does_not_release_on_the_same_tick_the_card_is_being_clicked(monkeypa
     _unreadable_wave(runner, monkeypatch)
     runner._is_expedition_match = True
     runner._last_reward_card_at = time.time()
+    runner._last_board_disruption_at = runner._last_reward_card_at
 
     assert runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1) is False
 
@@ -163,5 +165,87 @@ def test_story_keeps_waiting_for_a_real_number(monkeypatch):
     _unreadable_wave(runner, monkeypatch)
     runner._is_expedition_match = False
     runner._last_reward_card_at = time.time() - 999
+    runner._last_board_disruption_at = runner._last_reward_card_at
 
     assert runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1) is False
+
+
+# ---------------------------------------------------------------------------
+# A mid-run re-stage empties the board
+# ---------------------------------------------------------------------------
+
+def _restage_runner():
+    runner = _runner()
+    runner._battle_block_index = 4
+    runner._battle_block_state = {"something": 1}
+    runner._battle_replayed = False
+    runner._last_board_disruption_at = 0.0
+    return runner
+
+
+def test_a_restage_replays_the_battle_phase_from_the_top(monkeypatch):
+    """The units run off the board, so the placements have to run again."""
+    runner = _restage_runner()
+
+    runner._replay_battle_after_restage()
+
+    assert runner._battle_block_index == 0
+    assert runner._battle_block_state == {}
+
+
+def test_a_restage_restarts_the_quiet_period(monkeypatch):
+    """A Wait for Wave at the top of the phase must hold its full wait again
+    -- the round is still re-staging and gold is still accruing."""
+    runner = _restage_runner()
+
+    runner._replay_battle_after_restage()
+
+    assert time.time() - runner._last_board_disruption_at < 1.0
+
+
+def test_only_the_first_restage_replays(monkeypatch):
+    """Re-arming on every Start Game popup would let a chatty one rewind the
+    phase indefinitely -- the placements would keep restarting and never
+    finish."""
+    runner = _restage_runner()
+
+    runner._replay_battle_after_restage()
+    assert runner._battle_block_index == 0
+
+    runner._battle_block_index = 4          # phase has moved on again
+    runner._replay_battle_after_restage()
+
+    assert runner._battle_block_index == 4, "a later re-stage must not rewind"
+
+
+def test_the_quiet_period_restarts_on_every_disruption(monkeypatch):
+    """Deliberate: a card means the round is still churning, so the clock
+    measures 'nothing has happened lately', not 'time since it began'."""
+    runner = _runner()
+    _unreadable_wave(runner, monkeypatch)
+    runner._is_expedition_match = True
+    runner._last_reward_card_at = time.time() - 999      # battle is live
+    runner._last_board_disruption_at = time.time() - 1   # but something just happened
+
+    assert runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1) is False
+
+    # Fresh block state: the tick sets its own next_check after a failed
+    # read, so a second call in the same instant would short-circuit on the
+    # poll gate rather than on the thing under test.
+    runner._battle_block_state = {}
+    runner._last_board_disruption_at = time.time() - (WAIT_WAVE_NO_COUNTER_SETTLE + 1)
+    assert runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1) is True
+
+
+def test_each_match_gets_its_own_replay(monkeypatch):
+    """Per match, not per session -- every Repeat Stage is a fresh match and
+    deserves its own replay. _play_one_match clears the flag; this pins that
+    a cleared flag re-enables it."""
+    runner = _restage_runner()
+    runner._replay_battle_after_restage()
+    runner._battle_block_index = 4
+
+    runner._battle_replayed = False          # what _play_one_match does
+    runner._replay_battle_after_restage()
+
+    assert runner._battle_block_index == 0
