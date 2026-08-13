@@ -155,6 +155,11 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # renders it somewhere the shared box does not reach -- see
         # EXPEDITION_WAVE_REGION. Set per match in _play_one_match.
         self._wave_region = WAVE_REGION
+        # Whether THIS match is an Expedition, and when a reward card was last
+        # picked. Together they let Wait for Wave release on a gamemode that
+        # has no wave counter -- see WAIT_WAVE_NO_COUNTER_SETTLE.
+        self._is_expedition_match = False
+        self._last_reward_card_at = 0.0
         # Expedition checkpoint engine choice (see the EXP_COLOR_* block) +
         # the sighting debounce clock it uses; the real values arrive via
         # start()/_run, these are just never-ran-yet defaults. Same for the
@@ -602,6 +607,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         debug_path = self._debug_save(hwnd, "select upgrade card", match)
         suffix = f" Debug: {debug_path}" if debug_path else ""
         self._log(f'[Macro] Found "select upgrade card" (score {match["score"]:.2f}) -- clicking it.{suffix}')
+        # Cards are handed out for kills, so one cannot appear before the
+        # fighting has started -- this is what Wait for Wave falls back to on
+        # a gamemode with no wave counter.
+        self._last_reward_card_at = time.time()
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
         return True
@@ -1696,8 +1705,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Reset per match so the minute is measured from THIS battle's start.
         self._battle_started_at = time.time()
         self._battle_leave_requested = False
-        self._wave_region = (EXPEDITION_WAVE_REGION if task.get("mode") == "expedition"
-                             else WAVE_REGION)
+        self._is_expedition_match = task.get("mode") == "expedition"
+        self._wave_region = EXPEDITION_WAVE_REGION if self._is_expedition_match else WAVE_REGION
+        self._last_reward_card_at = 0.0
         # Loop A / Loop B: their own index+state, ticked and restarted every
         # poll alongside Battle (see _tick_loop_phases).
         loop_blocks = self._load_loop_blocks(task)

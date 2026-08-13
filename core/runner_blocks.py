@@ -629,6 +629,24 @@ class BlockOps:
 
         if current is None:
             state.pop("wave_target_confirmation", None)
+            # Some Expedition gamemodes have no waves at all -- the payload
+            # ones count enemies around the objective, and their HUD shows
+            # "<n> enemies" where the badge would be. Waiting for a number
+            # that will never exist strands every block behind this one, which
+            # is exactly the placements it tends to be put in front of.
+            #
+            # A reward card is proof the battle is genuinely under way (they
+            # drop for kills), so it releases the block once the fighting has
+            # visibly started. Story/Raid keep waiting for a real number:
+            # their badge always exists, so an unreadable one there is a
+            # detection problem worth surfacing rather than working around.
+            since_card = time.time() - self._last_reward_card_at
+            if (self._is_expedition_match and self._last_reward_card_at
+                    and since_card >= WAIT_WAVE_NO_COUNTER_SETTLE):
+                self._log(f"{label}: no wave counter on this gamemode, but the battle is "
+                          f"under way (an upgrade card was picked {since_card:.0f}s ago) -- "
+                          f"treating the wait as done.")
+                return True
             self._log(f"{label}: couldn't read the wave counter -- retrying in {WAIT_WAVE_POLL_INTERVAL:.0f}s.")
             state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
             return False

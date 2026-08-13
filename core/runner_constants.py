@@ -581,6 +581,21 @@ WAVE_REGION = (467, 21, 104, 61)
 # Only Expedition is changed; the shared box above is left exactly as it is,
 # since it is what Story/Raid/Infinite have been reading correctly.
 EXPEDITION_WAVE_REGION = (417, 16, 110, 33)
+# Not every Expedition gamemode HAS waves. The payload modes count enemies
+# around the objective instead, and their HUD shows "<n> enemies" where a
+# wave badge would be -- so a Wait for Wave block there waits on a number
+# that will never exist, and every block behind it (the placements it was
+# put in front of) never runs at all.
+#
+# A level-up "Select an upgrade!" card is proof the battle is genuinely
+# under way: they are handed out for kills, so one cannot appear before the
+# fighting starts. On Expedition, that is accepted as the release condition
+# when the badge cannot be read -- after a short settle, so the block does
+# not fire on the same tick the card is still being clicked through.
+# Story/Raid keep waiting for a real number; their badge always exists, and
+# an unreadable one there means a detection problem worth surfacing rather
+# than working around.
+WAIT_WAVE_NO_COUNTER_SETTLE = 1.0
 # OCR here is several real Tesseract subprocess spawns (see core.wave/
 # core.ocr's multi-mask sweep) -- checked on this cadence, not every single
 # Battle-tick poll, so a long wait for a distant wave doesn't spend most of
