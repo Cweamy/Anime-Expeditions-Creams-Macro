@@ -2,6 +2,19 @@
 
 All notable changes to Anime Expeditions (Cream's Macro) are documented here.
 
+## [0.19.1] - 2026-08-13
+
+### Improved
+- **Auto Fuel interval control**: the minutes/hours fields now remain available while Auto is selected, so a custom refill wait can be entered instead of being locked to the automatic 8-hour Max interval.
+- **Expedition encounters**: added native encounter handling, routes, and screen references for East Town, Flower Forest, Rose Kingdom, and School Grounds.
+- **Expedition reliability**: improved checkpoint, wave counter, Repeat Stage, Start Game, upgrade-card, and unit re-placement handling.
+- **Navigation recovery**: widened card searches, added lobby re-sync, and exits the AFK Chamber when it blocks progress.
+- **macOS**: stabilized code-signing identity across updates and fixed the Macro Manager panel rendering blank while the macro runs.
+
+### Fixed
+- Villian Invasion navigation now opens the event card before selecting the game mode.
+- East Town is now available in the Challenge and Bounty Story map list.
+
 ## [0.19.0] - 2026-08-11
 
 ### New

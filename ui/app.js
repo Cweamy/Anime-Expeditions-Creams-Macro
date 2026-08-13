@@ -3473,8 +3473,8 @@ function renderFuelIntervalControl() {
   const isAuto = minutes === 0;
   if (autoButton) autoButton.classList.toggle('active', isAuto);
   if (controls) {
-    controls.style.display = isAuto ? 'none' : 'flex';
-    controls.style.opacity = isAuto ? '0.5' : '1';
+    controls.style.display = 'flex';
+    controls.style.opacity = '1';
   }
   if (input && unit) {
     if (isAuto) {

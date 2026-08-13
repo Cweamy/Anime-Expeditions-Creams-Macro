@@ -66,6 +66,33 @@ def test_fuel_interval_input_converts_hours_to_minutes(tmp_path):
     assert out == [30, 120, 60]
 
 
+def test_fuel_interval_input_stays_editable_in_auto_mode(tmp_path):
+    out = run_js("""
+        let fuelState = {interval_minutes: 0};
+        const elements = {
+          'fuel-interval-value': {value: '30'},
+          'fuel-interval-unit': {value: 'hours'},
+          'fuel-interval-controls': {style: {}},
+          'fuel-interval-auto': {classList: {toggle() {}}},
+        };
+        const document = {getElementById: id => elements[id] || null};
+        eval(extract('renderFuelIntervalControl'));
+        renderFuelIntervalControl();
+        console.log(JSON.stringify({
+          display: elements['fuel-interval-controls'].style.display,
+          opacity: elements['fuel-interval-controls'].style.opacity,
+          input: elements['fuel-interval-value'].value,
+          unit: elements['fuel-interval-unit'].value,
+        }));
+    """, tmp_path)
+    assert out == {
+        "display": "flex",
+        "opacity": "1",
+        "input": "",
+        "unit": "minutes",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Infinite task wave limit
 # ---------------------------------------------------------------------------
