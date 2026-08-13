@@ -3218,7 +3218,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         return False
 
     def _click_found_image(self, hwnd, name: str, timeout: float, stop_event: threading.Event = None,
-                            shuffle: bool = False, threshold: float = vision.DEFAULT_THRESHOLD) -> dict:
+                            shuffle: bool = False, threshold: float = vision.DEFAULT_THRESHOLD, region: tuple = None) -> dict:
         """Shared wait-for-it-then-click for a plain nav button (nav_settings,
         nav_search, ...) -- no per-button quirks like Story/Play have, so one
         helper covers all of them instead of a bespoke method each.
@@ -3227,6 +3227,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         clicking (see vision.click_match) -- for buttons that need genuine
         hover-in movement to register the click (the lobby Event button).
 
+        Region allows us to isolate part of the 1152x756 screen resolution
+        This was made for the Tower game mode where each element is similar
+        to one another.
+        
         Returns the match dict (truthy) on success or None (falsy) on
         failure -- existing `if not self._click_found_image(...)` call sites
         work unchanged either way, but callers that need the click position
@@ -3235,7 +3239,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         re-searching for the same button a second time.
         """
         try:
-            match = vision.wait_for_image(hwnd, name, timeout=timeout, threshold=threshold, stop_event=stop_event)
+            match = vision.wait_for_image(hwnd, name, region=region, timeout=timeout, threshold=threshold, stop_event=stop_event)
         except vision.TemplateNotFound as exc:
             self._log(f"[Macro] {exc}")
             return None
@@ -4167,8 +4171,22 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 self._spam_back_until_gone(hwnd, stop_event)
                 return False
             self._log("[Macro] Traitless Tower selected.")
+            if self._click_found_image(hwnd, "Floor", TOWER_SCREEN_TIMEOUT, stop_event, TOWER_CARD_REGION) is None:
+                self._spam_back_until_gone(hwnd, stop_event)
+                return False
+            self._log("[Macro] Found Floor card -- waiting for select stage...")
         else:
-            self._log("[Macro] Normal Tower -- no Traitless click needed.")
+            # Ensure that normal mode is actually selected so that we don't go off to some random place.
+            self._set_status(action="Selecting Normal...")
+            if self._click_found_image(hwnd, "normal_tower", TOWER_SCREEN_TIMEOUT, stop_event) is None:
+                self._spam_back_until_gone(hwnd, stop_event)
+                return False
+            time.sleep(SETTLE_DELAY)
+            self._log("[Macro] Normal Tower selected.")
+            if self._click_found_image(hwnd, "Floor", TOWER_SCREEN_TIMEOUT, stop_event, region=TOWER_CARD_REGION) is None:
+                self._spam_back_until_gone(hwnd, stop_event)
+                return False
+            self._log("[Macro] Found Floor card -- waiting for select stage...")
         time.sleep(SETTLE_DELAY)
         return not self._checkpoint(stop_event)
 

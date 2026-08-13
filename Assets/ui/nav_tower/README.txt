@@ -1,5 +1,5 @@
-nav_tower.png
-
-Crop tightly around the Tower gamemode card on the Play menu.
-Use Settings > General > Image Manager to capture the crop when needed.
-If it is not found on your setup, add another crop in this folder as a variant.
+Tower.png
+  Not referenced by code yet. Likely an alternative crop of the Tower card;
+  the runner currently clicks Assets/ui/nav_tower/ to open the Tower screen.
+  If nav_tower never matches on your setup, this crop is the candidate to
+  wire in (or add it as a variant inside nav_tower/).

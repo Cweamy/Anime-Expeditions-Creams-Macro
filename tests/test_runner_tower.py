@@ -49,7 +49,7 @@ def test_reach_tower_traitless_clicks_tower_then_traitless(monkeypatch):
         probe, 123, threading.Event(), {"mode": "tower", "tower_mode": "traitless"}
     ) is True
 
-    assert [name for name, _timeout in probe.clicked] == ["nav_tower", "Traitless_Tower"]
+    assert [name for name, _timeout in probe.clicked] == ["nav_tower", "Traitless_Tower", "Floor"]
     assert probe.ensure_lobby_calls == 1
     assert probe.click_play_calls == 1
     assert any("Traitless Tower selected" in message for message in probe.logs)
@@ -64,7 +64,7 @@ def test_reach_tower_normal_clicks_tower_only(monkeypatch):
         probe, 123, threading.Event(), {"mode": "tower", "tower_mode": "normal"}
     ) is True
 
-    assert [name for name, _timeout in probe.clicked] == ["nav_tower"]
+    assert [name for name, _timeout in probe.clicked] == ["nav_tower", "normal_tower", "Floor"]
     assert any("Normal Tower" in message for message in probe.logs)
 
 
