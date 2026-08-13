@@ -595,7 +595,13 @@ EXPEDITION_WAVE_REGION = (417, 16, 110, 33)
 # Story/Raid keep waiting for a real number; their badge always exists, and
 # an unreadable one there means a detection problem worth surfacing rather
 # than working around.
-WAIT_WAVE_NO_COUNTER_SETTLE = 1.0
+# Long rather than just-enough on purpose. The first card lands early, while
+# the round is still opening up: waves are still spawning in, the Start Game
+# popup can still reappear, and more cards are queued behind this one. Placing
+# a second after the first card means placing into all of that. Waiting out a
+# stretch of it costs nothing -- the poll loop keeps playing the match, taking
+# cards and clicking Continues, the whole time.
+WAIT_WAVE_NO_COUNTER_SETTLE = 15.0
 # OCR here is several real Tesseract subprocess spawns (see core.wave/
 # core.ocr's multi-mask sweep) -- checked on this cadence, not every single
 # Battle-tick poll, so a long wait for a distant wave doesn't spend most of

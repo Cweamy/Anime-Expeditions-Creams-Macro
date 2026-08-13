@@ -30,6 +30,9 @@ def _runner(card_present):
 
     runner._dismiss_reward_card_if_found = dismiss
     runner._run_place_unit_block = lambda *a, **k: runner.placed.append(1)
+    # No Start Game popup unless a test says otherwise.
+    runner._is_expedition_match = True
+    runner._find_start_game_button = lambda _hwnd: (None, None)
     return runner
 
 
@@ -73,3 +76,36 @@ def test_a_clear_board_places_immediately(monkeypatch):
     assert runner.placed == [1]
     assert runner.cards_taken == []
     assert runner._battle_block_index == 1
+
+
+def test_the_start_game_popup_also_defers_the_placement(monkeypatch):
+    """The "Start Game?" confirmation can come back mid-run and covers the
+    board the same way a card does. It is handled later in the same poll by
+    _check_expedition_wave_result, so waiting a tick is enough."""
+    runner = _runner(card_present=False)
+    seen = {"n": 0}
+
+    def start_game(_hwnd):
+        seen["n"] += 1
+        return ("nav_start_game", {"score": 1.0}) if seen["n"] == 1 else (None, None)
+
+    runner._find_start_game_button = start_game
+
+    _tick(runner)
+    assert runner.placed == [], "placed while Start Game was covering the board"
+    assert runner._battle_block_index == 0
+
+    _tick(runner)   # the expedition handler cleared it between polls
+    assert runner.placed == [1]
+
+
+def test_the_start_game_guard_is_expedition_only(monkeypatch):
+    """Only Expedition has a mid-run handler for that popup. Deferring on a
+    mode with nobody to clear it would stall the block, not delay it."""
+    runner = _runner(card_present=False)
+    runner._is_expedition_match = False
+    runner._find_start_game_button = lambda _hwnd: ("nav_start_game", {"score": 1.0})
+
+    _tick(runner)
+
+    assert runner.placed == [1]

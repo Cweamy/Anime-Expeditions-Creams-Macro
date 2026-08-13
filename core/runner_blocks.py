@@ -232,6 +232,18 @@ class BlockOps:
                     self._log(f'[Macro] Battle block #{self._battle_block_index + 1} '
                               f'(Place Unit): cleared an upgrade card first -- placing next poll.')
                     return
+                # The "Start Game?" confirmation can come back mid-run, and it
+                # covers the board the same way. Only deferred, not clicked
+                # here: _check_expedition_wave_result already handles it later
+                # in this very poll (with the Z-deselect it needs), so waiting
+                # a tick is enough and there is no second click path to keep
+                # in step. Gated on Expedition because that handler is the
+                # thing that clears it -- deferring on a mode with nobody to
+                # clear it would stall the block instead of delaying it.
+                if self._is_expedition_match and self._find_start_game_button(hwnd)[1] is not None:
+                    self._log(f'[Macro] Battle block #{self._battle_block_index + 1} '
+                              f'(Place Unit): "Start Game" is up -- placing after it is dealt with.')
+                    return
                 # Mid-battle placement (a reinforcement dropped in later,
                 # not a Pre Start starter) -- same pixel-search-place/verify
                 # logic Pre Start uses, one-shot like Sell Unit. Continues
