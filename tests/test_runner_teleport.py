@@ -73,6 +73,10 @@ def test_teleport_wait_simulation_matrix(
             return {"score": 1.0} if success_at is not None and clock.now >= success_at else None
         if image_name == "reconnect":
             return {"score": 1.0} if reconnect_at is not None and clock.now >= reconnect_at else None
+        # Rate-limited lobby check -- being on the lobby means no teleport is
+        # coming. Every case here is genuinely loading, so never found.
+        if image_name == "nav_play":
+            return None
         raise AssertionError(f"unexpected teleport search: {image_name}")
 
     monkeypatch.setattr(runner_module.time, "time", clock.time)
@@ -124,6 +128,8 @@ def test_teleport_wait_delay_sweep_covers_poll_boundaries(monkeypatch):
                 return {"score": 1.0} if clock.now >= success_at else None
             if image_name == "reconnect":
                 return None
+            if image_name == "nav_play":
+                return None      # genuinely loading, never on the lobby
             raise AssertionError(f"unexpected teleport search: {image_name}")
 
         monkeypatch.setattr(runner_module.time, "time", clock.time)

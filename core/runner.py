@@ -175,6 +175,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Used only by opt-in progress notifications to describe what a
         # Challenge will resume after it finishes.
         self._active_task_progress = None
+        self._current_task = None
         # (result: "win"|"loss", map_name, duration_str) -> persists to run
         # history / win-loss counters (see main.Api._record_match_result).
         self._record_result = record_result or (lambda *a, **kw: None)
@@ -746,6 +747,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         default_walk_paths = default_walk_paths or {}
         webhook = webhook or {}
         self._active_task_progress = None
+        self._current_task = None
 
         hwnd = hwnd_getter()
         if not hwnd or not wm.is_window(hwnd):
@@ -953,6 +955,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         repeat_total = max(1, int(task.get("repeat") or 1))
         progress_task = dict(task)
         progress_task["map"] = map_name or mode.title()
+        # The running task, so mid-match handlers can ask which map they are
+        # on without the task being threaded through every tick.
+        self._current_task = task
         self._active_task_progress = {
             "index": task_index,
             "count": task_count,
@@ -1836,6 +1841,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             deadline = time.time() + MATCH_RESULT_TIMEOUT
         lobby_sightings = 0   # consecutive polls that found the lobby's Play button
         afk_clicked_at = 0.0  # last time the AFK Chamber exit was clicked
+        # {"handled_at", "seen_at"} -- the settle is deferred, not slept, so the
+        # poll loop keeps picking upgrade cards and clicking Continues meanwhile.
+        encounter_state = {"handled_at": 0.0, "seen_at": 0.0}
         while deadline is None or time.time() < deadline:
             if self._checkpoint(stop_event):
                 return None
@@ -1923,6 +1931,11 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 self._click_close_popup_if_found(hwnd)
 
             if mode == "expedition":
+                # An encounter node parks the client where no result can come
+                # from. Checked before the wave result, since the wave check
+                # cannot resolve while one is up.
+                encounter_state = self._handle_expedition_encounter(
+                    hwnd, stop_event, encounter_state)
                 result = self._check_expedition_wave_result(hwnd, stop_event)
                 if result is not None:
                     return result
@@ -2759,6 +2772,14 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         if result == "disconnected":
             self._handle_disconnect(hwnd, stop_event, webhook, task)
             return False
+        if result == "lobby":
+            # Back on the lobby with no teleport coming. Reported as a failed
+            # setup so _run_task recovers and retries the task from the top,
+            # rather than sitting out the remaining timeout.
+            self._log("[Macro] Still on the lobby -- no teleport is coming (matchmaking left or never "
+                       "started). Retrying this task from the lobby.")
+            self._set_status(action="Back on the lobby -- retrying the task...")
+            return False
         if result == "timeout" and not stop_event.is_set():
             screenshot_path = self._save_debug_screenshot_unconditional(hwnd, "teleport_timeout")
             suffix = f" Debug: {screenshot_path}" if screenshot_path else ""
@@ -2774,8 +2795,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         ``teleportstuck`` is only Roblox's ordinary black loading screen, not
         a distinct error state. Normal loading gets the caller's full timeout;
         only the Reconnect/Retry prompt is an immediate failure. Returns
-        "ok", "disconnected", "stopped", or "timeout"."""
+        "ok", "disconnected", "lobby", "stopped", or "timeout"."""
         deadline = time.time() + timeout
+        lobby_sightings = 0     # consecutive checks that found the lobby's Play button
+        polls = 0
         while time.time() < deadline:
             if stop_event.is_set():
                 return "stopped"
@@ -2794,6 +2817,32 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     continue  # that particular crop hasn't been added -- try the next one
                 if reconnect_match is not None:
                     return "disconnected"
+
+            # Still on the lobby. Matchmaking was left, cancelled, or never
+            # took -- either way no teleport is coming, and waiting out the
+            # full timeout (5 minutes for matchmaking) achieves nothing. Play
+            # only renders on the lobby, which is what makes it safe to read
+            # here: during a real teleport the lobby is already gone.
+            # Confirmed over consecutive checks, since the lobby is briefly
+            # still drawn as a teleport begins.
+            #
+            # Rate-limited: this loop polls fast and can run for minutes, so a
+            # full-window search every tick would be real cost for a state that
+            # does not change that quickly.
+            polls += 1
+            if polls % LOBBY_CHECK_EVERY_N_POLLS:
+                time.sleep(TELEPORT_POLL_INTERVAL)
+                continue
+            try:
+                lobby_match = vision.find_image(hwnd, "nav_play")
+            except vision.TemplateNotFound:
+                lobby_match = None
+            if lobby_match is None:
+                lobby_sightings = 0
+            else:
+                lobby_sightings += 1
+                if lobby_sightings >= LOBBY_RESYNC_CONFIRMATIONS:
+                    return "lobby"
 
             time.sleep(TELEPORT_POLL_INTERVAL)
         return "timeout"
@@ -3705,6 +3754,28 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                    f'(likely a silent disconnect), attempting a rejoin via deep link.')
         return self._attempt_rejoin(hwnd, stop_event)
 
+    def _dismiss_lobby_overlay(self, hwnd) -> bool:
+        """Close a modal covering the lobby, e.g. the Update Log after a game
+        update or a fresh login.
+
+        Play renders behind such a modal and still matches, so the click is
+        found and then lands on the overlay -- seen as Play being re-clicked
+        until PLAY_CLICK_RETRY_ATTEMPTS runs out while patch notes sit on
+        screen. Optional, like the party overlay: no image, no check.
+
+        Returns True if something was closed.
+        """
+        try:
+            match, name = vision.find_image_any(hwnd, LOBBY_OVERLAY_CLOSE_IMAGE_NAMES)
+        except vision.TemplateNotFound:
+            return False
+        if match is None:
+            return False
+        self._log(f'[Macro] A lobby overlay ("{name}") is covering Play -- closing it first.')
+        vision.click_match(self._mouse, hwnd, match)
+        time.sleep(GAMEMODE_OVERLAY_CHECK_DELAY)
+        return True
+
     def _click_play(self, hwnd, stop_event: threading.Event) -> bool:
         self._set_status(action="Clicking Play...")
         try:
@@ -4397,6 +4468,14 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     # never actually registered (see PLAY_CLICK_RETRY_ATTEMPTS'
                     # comment). Re-clicking is retriable in a way waiting
                     # even longer for a click that already failed isn't.
+                    #
+                    # This is also the first moment there is EVIDENCE that
+                    # something is covering the lobby: Play matched, was
+                    # clicked, and the menu still did not open. Clearing an
+                    # overlay here rather than before every Play click means
+                    # the normal path is untouched and only a demonstrably
+                    # failed click pays for the extra search.
+                    self._dismiss_lobby_overlay(hwnd)
                     if not self._click_play(hwnd, stop_event):
                         return False
             if match is None:

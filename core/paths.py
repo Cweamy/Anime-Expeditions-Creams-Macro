@@ -48,6 +48,9 @@ DEFAULT_PATHS_DIR = os.path.join(constants.BUNDLE_DIR, "Paths", "defaults")
 # loose folder beside the exe (see core.constants.ASSETS_DIR), not inside
 # the bundle.
 SHIPPED_DEFAULT_WALK_PATHS_FILE = os.path.join(constants.ASSETS_DIR, "default_walk_paths.json")
+# Per-map ENCOUNTER walks -- same add-or-override role the file above plays
+# for stage-entry walks (see _BUILTIN_ENCOUNTER_WALK_PATHS).
+SHIPPED_ENCOUNTER_WALK_PATHS_FILE = os.path.join(constants.ASSETS_DIR, "default_encounter_walk_paths.json")
 
 _POLL_INTERVAL = 0.03  # 30ms -- well under human key-tap duration, cheap enough to poll forever
 # W/A/S/D for movement, I/O for whatever in-game action a recorded route
@@ -180,6 +183,40 @@ def load_shipped_default_walk_paths() -> dict:
     merged = dict(_BUILTIN_DEFAULT_WALK_PATHS)
     try:
         with open(SHIPPED_DEFAULT_WALK_PATHS_FILE, "r", encoding="utf-8") as f:
+            merged.update(json.load(f))
+    except (OSError, json.JSONDecodeError):
+        pass
+    return merged
+
+
+# A SECOND walk per map, walked MID-RUN rather than at stage entry. The
+# mapping above answers "where do I stand when the stage opens"; this one
+# answers "where is this map's encounter NPC".
+#
+# Expedition parks the client in the AFK Chamber when an encounter node is
+# reached and nothing handles it. Handling it means walking to an NPC whose
+# location differs per map, so the route cannot be one shared recording.
+#
+# Same two-tier delivery as the stage-entry mapping: baked into the code so an
+# exe swap carries it, with Assets/default_encounter_walk_paths.json loading on
+# top so a map can be added or a route replaced without a code change.
+_BUILTIN_ENCOUNTER_WALK_PATHS = {
+    "School Grounds": "Expedition Encounter - School Grounds",
+    "Rose Kingdom": "Expedition Encounter - Rose Kingdom",
+    "Flower Forest": "Expedition Encounter - Flower Forest",
+    "East Town": "Expedition Encounter - East Town",
+}
+
+
+def load_shipped_encounter_walk_paths() -> dict:
+    """Map name -> the recording that walks to that map's encounter NPC.
+
+    A map with no entry has no encounter walk yet; callers log and skip rather
+    than failing, so adding maps stays additive.
+    """
+    merged = dict(_BUILTIN_ENCOUNTER_WALK_PATHS)
+    try:
+        with open(SHIPPED_ENCOUNTER_WALK_PATHS_FILE, "r", encoding="utf-8") as f:
             merged.update(json.load(f))
     except (OSError, json.JSONDecodeError):
         pass

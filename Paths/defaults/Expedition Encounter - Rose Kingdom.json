@@ -1,0 +1,155 @@
+{
+  "name": "Expedition Encounter - Rose Kingdom",
+  "events": [
+    {
+      "t": 0.0,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 0.122,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 0.337,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 0.582,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 1.591,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 1.651,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 1.895,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 1.987,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 2.201,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 2.384,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 2.566,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 2.689,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 3.269,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 3.422,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 3.635,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 3.757,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 4.641,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 4.794,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 5.067,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 5.189,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 5.676,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 5.828,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 6.469,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 6.621,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 7.351,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 7.473,
+      "key": "d",
+      "state": "up"
+    },
+    {
+      "t": 12.626,
+      "key": "s",
+      "state": "down"
+    },
+    {
+      "t": 12.688,
+      "key": "s",
+      "state": "up"
+    },
+    {
+      "t": 13.206,
+      "key": "d",
+      "state": "down"
+    },
+    {
+      "t": 13.297,
+      "key": "d",
+      "state": "up"
+    }
+  ]
+}

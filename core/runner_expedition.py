@@ -11,6 +11,7 @@ import time
 
 from . import vision
 from . import window as wm
+from . import paths as walk_paths
 from .runner_constants import *  # noqa: F401,F403 -- the shared constants namespace
 from .runner_constants import _exp_green, _exp_green_loose, _exp_red  # underscore names, skipped by *
 
@@ -533,3 +534,219 @@ class ExpeditionOps:
         vision.click_match(self._mouse, hwnd, match)
         return True
 
+
+    def _wait_for_clear_screen(self, hwnd, stop_event: threading.Event, before_what: str) -> int:
+        """Dismiss level-up "Select an upgrade!" modals until none is left.
+
+        They render over the settings gear AND over the Settings panel itself,
+        and they queue up after a wave -- so clearing one and pressing on just
+        meets the next. Every click in the encounter sequence has to happen on
+        a clear screen, especially the blind teleport coordinate, which a modal
+        would swallow without any sign it had.
+
+        Bounded, so a run with nothing blocking pays nothing.
+        """
+        deadline = time.time() + ENCOUNTER_MODAL_CLEAR_TIMEOUT
+        cleared = 0
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                break
+            try:
+                blocking = vision.find_image(hwnd, "select upgrade card")
+            except vision.TemplateNotFound:
+                break                      # no image for it -> nothing to wait on
+            if blocking is None:
+                break
+            cleared += 1
+            vision.click_match(self._mouse, hwnd, blocking)
+            time.sleep(ENCOUNTER_MODAL_POLL)
+        if cleared:
+            self._log(f"[Macro] Cleared {cleared} upgrade card(s) before {before_what}.")
+        return cleared
+
+    @staticmethod
+    def _encounter_done(state: dict) -> dict:
+        """Mark this encounter finished: start the cooldown, and clear the
+        settle timer so the next one is timed from its own first sighting."""
+        state["handled_at"] = time.time()
+        state["seen_at"] = 0.0
+        return state
+
+    def _handle_expedition_encounter(self, hwnd, stop_event: threading.Event,
+                                       state: dict) -> dict:
+        """Walk an Expedition encounter to its NPC and talk to it.
+
+        An encounter node parks the client somewhere no match result can come
+        from -- unhandled, the run sits until MATCH_RESULT_TIMEOUT and then
+        lands in the AFK Chamber, once per encounter node, for the rest of the
+        run.
+
+        Handling it needs three things a template cannot express well: reset to
+        a known position, walk a route that differs per map, then interact.
+        Doing it here means an Expedition task needs no encounter blocks at
+        all -- pick units, and the walk happens.
+
+        Every step is optional-by-image: a missing reference image or an
+        unmapped map logs and returns, leaving the run no worse off than the
+        current behaviour of not noticing at all.
+
+        Returns the timestamp to carry into the next poll.
+        """
+        now = time.time()
+        if now - state.get("handled_at", 0.0) < ENCOUNTER_COOLDOWN:
+            return state
+        try:
+            marker = vision.find_image(hwnd, "expedition_encounter", region=ENCOUNTER_REGION)
+        except vision.TemplateNotFound:
+            return state                    # no image shipped -> feature is inert
+        if marker is None:
+            state["seen_at"] = 0.0          # gone again -> restart the settle timer
+            return state
+
+        # The encounter is up, but do NOT act yet. The wave that triggered it is
+        # still resolving and a level-up card is often mid-animation. Returning
+        # here instead of sleeping is the point: the caller's poll loop carries
+        # on picking upgrade cards and clicking wave Continues while the settle
+        # elapses, which a blocking wait froze entirely.
+        if not state.get("seen_at"):
+            state["seen_at"] = now
+            self._log(f"[Macro] Expedition encounter spotted -- carrying on for "
+                       f"{ENCOUNTER_PRE_MENU_SETTLE:.0f}s before handling it.")
+            return state
+        if now - state["seen_at"] < ENCOUNTER_PRE_MENU_SETTLE:
+            return state
+
+        map_name = (getattr(self, "_current_task", None) or {}).get("map")
+        path_name = walk_paths.load_shipped_encounter_walk_paths().get(map_name or "")
+        if not path_name:
+            self._log(f'[Macro] Expedition encounter on "{map_name}", but no encounter walk is '
+                       f"mapped for it -- leaving it alone. (Record one and add it to "
+                       f"Assets/default_encounter_walk_paths.json.)")
+            return self._encounter_done(state)
+
+        self._log(f'[Macro] Expedition encounter (score {marker["score"]:.2f}) on "{map_name}" -- '
+                   f'settled, resetting position and walking "{path_name}".')
+        self._set_status(action="Handling an Expedition encounter...")
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+
+        # Reset to spawn so the recorded route starts where it was recorded.
+        # Settings and Close have shipped images; the teleport button inside
+        # does not, so it is a measured coordinate.
+        #
+        # A level-up "Select an upgrade!" modal renders OVER the settings gear.
+        # One dismissal is not enough: they queue up after a wave, so the next
+        # is already rendering by the time the first is gone. Wait for a clear
+        # screen instead, dismissing each as it shows, and only then reach for
+        # Settings -- otherwise the search fails for a reason that has nothing
+        # to do with the encounter.
+        self._wait_for_clear_screen(hwnd, stop_event, "the settings button")
+        if not self._click_found_image(hwnd, "nav_settings", ENCOUNTER_SETTINGS_TIMEOUT, stop_event):
+            self._log("[Macro] Couldn't open Settings to teleport to spawn -- skipping this encounter.")
+            return self._encounter_done(state)
+        time.sleep(ENCOUNTER_STEP_SETTLE)
+        # An upgrade card can appear in the gap between Settings opening and
+        # this click -- and this is a BLIND coordinate, so a card in the way
+        # silently swallows it, no teleport happens, and the route then replays
+        # from wherever the player happened to be. Clear again, then confirm
+        # Settings is genuinely open before clicking inside it.
+        self._wait_for_clear_screen(hwnd, stop_event, "Teleport To Spawn")
+        try:
+            settings_open = vision.find_image(hwnd, "nav_settings_on")
+        except vision.TemplateNotFound:
+            settings_open = True          # cannot verify -> proceed as before
+        if settings_open is None:
+            self._log("[Macro] Settings didn't actually open (something took the click) -- "
+                       "skipping this encounter rather than clicking blind.")
+            return self._encounter_done(state)
+        self._mouse.click(left + ENCOUNTER_TELEPORT_SPAWN_CLICK[0],
+                          top + ENCOUNTER_TELEPORT_SPAWN_CLICK[1])
+        time.sleep(ENCOUNTER_STEP_SETTLE)
+        # Closing has to SUCCEED before walking. An open Settings panel eats the
+        # movement keys and covers the world, so a route replayed under it goes
+        # nowhere -- and the failure then looks like a bad recording rather than
+        # a menu that never shut.
+        #
+        # Uses the runner's own _close_settings_if_open rather than hunting the
+        # panel's X: that clicks nav_settings_on, which matches at 1.00, where
+        # nav_closeui is a small red glyph scoring around 0.92 against a 0.90
+        # bar -- it closed the panel about half the time and stalled the rest.
+        still_open = None
+        for _ in range(ENCOUNTER_CLOSE_ATTEMPTS):
+            self._close_settings_if_open(hwnd, stop_event)
+            if self._checkpoint(stop_event):
+                return self._encounter_done(state)
+            try:
+                still_open = vision.find_image(hwnd, "nav_settings_on")
+            except vision.TemplateNotFound:
+                still_open = None        # no image -> cannot verify, so trust the close
+                break
+            if still_open is None:
+                break
+            time.sleep(ENCOUNTER_STEP_SETTLE)
+        if still_open is not None:
+            self._log("[Macro] Teleported to spawn but Settings is still open after "
+                       f"{ENCOUNTER_CLOSE_ATTEMPTS} attempts -- not walking with the menu open. "
+                       "Skipping this encounter.")
+            return self._encounter_done(state)
+        # Stand still before moving. The menu work is done by now, but the
+        # teleport is still reloading the world around the player -- keys
+        # pressed through that are lost, so the route starts part-way in and
+        # ends short of the NPC.
+        self._log(f"[Macro] Teleported to spawn -- settling {ENCOUNTER_TELEPORT_SETTLE:.0f}s "
+                   f"before walking the route.")
+        self._set_status(action="Settling after teleport...")
+        time.sleep(ENCOUNTER_TELEPORT_SETTLE)
+        if self._checkpoint(stop_event):
+            return self._encounter_done(state)
+
+        events = (walk_paths.load_path(path_name) or {}).get("events") or []
+        if not events:
+            self._log(f'[Macro] Encounter walk "{path_name}" has no recorded movement -- skipping.')
+            return self._encounter_done(state)
+        walk_paths.replay_events(events, self._keyboard, stop_event)
+        if self._checkpoint(stop_event):
+            return self._encounter_done(state)
+        time.sleep(ENCOUNTER_ARRIVE_SETTLE)
+
+        # Arrived: the interact prompt is the proof, so a walk that landed
+        # somewhere wrong stops here instead of clicking blindly at the world.
+        try:
+            prompt = vision.wait_for_image(hwnd, "expedition_speak",
+                                            timeout=ENCOUNTER_SPEAK_TIMEOUT, stop_event=stop_event)
+        except vision.TemplateNotFound:
+            prompt = None
+        if prompt is None:
+            self._log("[Macro] Walked the encounter route but no interact prompt appeared -- "
+                       "the route may not fit this spawn. Leaving the encounter alone.")
+            return self._encounter_done(state)
+
+        self._log(f'[Macro] At the encounter NPC (score {prompt["score"]:.2f}) -- talking to it.')
+        self._keyboard.tap(ord("E"))
+        # The exchange is several boxes, not one. Running the click sequence
+        # once and moving on left the run standing in an open dialogue, so it
+        # repeats until the interact prompt is gone -- the same "prove it
+        # worked" the arrival check does, rather than trusting a fixed number
+        # of clicks to match however long the conversation happens to be.
+        for round_no in range(1, ENCOUNTER_DIALOGUE_ROUNDS + 1):
+            for x, y in ENCOUNTER_DIALOGUE_CLICKS:
+                time.sleep(ENCOUNTER_DIALOGUE_CLICK_GAP)
+                if self._checkpoint(stop_event):
+                    return time.time()
+                self._mouse.click(left + x, top + y)
+            time.sleep(ENCOUNTER_STEP_SETTLE)
+            try:
+                still_talking = vision.find_image(hwnd, "expedition_speak")
+            except vision.TemplateNotFound:
+                still_talking = None     # cannot verify -> one pass is all we can justify
+                break
+            if still_talking is None:
+                break
+            if round_no < ENCOUNTER_DIALOGUE_ROUNDS:
+                self._log(f"[Macro] Dialogue still open -- clicking through again "
+                           f"({round_no + 1}/{ENCOUNTER_DIALOGUE_ROUNDS}).")
+        if still_talking is not None:
+            self._log("[Macro] Dialogue is still open after clicking through it -- leaving it rather "
+                       "than clicking further at whatever is on screen.")
+            return self._encounter_done(state)
+        self._log("[Macro] Encounter handled.")
+        return self._encounter_done(state)
