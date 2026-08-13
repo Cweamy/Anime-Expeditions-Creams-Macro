@@ -96,6 +96,7 @@ class ExpeditionOps:
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
             self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
             self._note_checkpoint_intercepted()
+            self._replay_battle_after_restage()
             return None
 
         # Same idea as the nav_start_game re-check above -- a level-up
@@ -378,6 +379,38 @@ class ExpeditionOps:
         real burst of level-ups."""
         return bool(self._exp_intercept_since
                     and time.time() - self._exp_intercept_since >= EXPEDITION_INTERCEPT_TIMEOUT)
+
+    def _replay_battle_after_restage(self) -> None:
+        """A mid-run "Start Game?" stages a new sub-round, and the units
+        already on the board run off it entirely -- reported live, and the
+        reason a template that placed units earlier can finish the match with
+        none of them down.
+
+        Their tiles free up with them, which is what makes replaying the
+        Battle phase the right answer rather than a risky one: a unit still
+        standing leaves its tile occupied, so the placement finds no valid
+        tile there and skips it, and only the ones that actually left get put
+        back. No verification and no bookkeeping -- the game's own occupancy
+        is the check.
+
+        The board-disruption clock restarts too, so a Wait for Wave at the top
+        of the phase holds its full quiet period again before the placements
+        re-run. The round is still re-staging, and gold is still accruing
+        toward whatever could not be afforded last time.
+
+        Only the first re-stage of a match does any of this, and the flag
+        resets in _play_one_match -- so every repeat of the stage gets its own
+        replay, while a chatty Start Game popup inside one match cannot rewind
+        the phase over and over and leave the placements never finishing.
+        """
+        if self._battle_replayed:
+            return
+        self._battle_replayed = True
+        self._battle_block_index = 0
+        self._battle_block_state = {}
+        self._last_board_disruption_at = time.time()
+        self._log("[Macro] The round is re-staging, so the units have left the board -- "
+                  "replaying the Battle phase once to put them back.")
 
     def _check_expedition_checkpoint_by_color(self, hwnd, stop_event: threading.Event) -> str:
         """The color-first checkpoint engine (see the EXP_COLOR_* block for

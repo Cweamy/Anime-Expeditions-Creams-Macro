@@ -216,6 +216,34 @@ class BlockOps:
                 done = self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
                 self._battle_block_state = {}
             elif btype == "place_unit":
+                # A level-up "Select an upgrade!" card renders over the board,
+                # so it swallows the placement click: the unit is never placed
+                # and the tile search may not even find a highlight. Battle
+                # blocks tick BEFORE the poll loop's own card dismissal, so
+                # without this the race is simply lost whenever a card lands
+                # on the same tick as a placement.
+                #
+                # Take the card now and place on the next poll rather than
+                # clearing it in a loop here -- the whole match loop shares
+                # this tick, and a card that keeps re-appearing must not hold
+                # it. The index is not advanced, so this same block runs again
+                # a poll later against a clear board.
+                if self._dismiss_reward_card_if_found(hwnd):
+                    self._log(f'[Macro] Battle block #{self._battle_block_index + 1} '
+                              f'(Place Unit): cleared an upgrade card first -- placing next poll.')
+                    return
+                # The "Start Game?" confirmation can come back mid-run, and it
+                # covers the board the same way. Only deferred, not clicked
+                # here: _check_expedition_wave_result already handles it later
+                # in this very poll (with the Z-deselect it needs), so waiting
+                # a tick is enough and there is no second click path to keep
+                # in step. Gated on Expedition because that handler is the
+                # thing that clears it -- deferring on a mode with nobody to
+                # clear it would stall the block instead of delaying it.
+                if self._is_expedition_match and self._find_start_game_button(hwnd)[1] is not None:
+                    self._log(f'[Macro] Battle block #{self._battle_block_index + 1} '
+                              f'(Place Unit): "Start Game" is up -- placing after it is dealt with.')
+                    return
                 # Mid-battle placement (a reinforcement dropped in later,
                 # not a Pre Start starter) -- same pixel-search-place/verify
                 # logic Pre Start uses, one-shot like Sell Unit. Continues
@@ -618,7 +646,7 @@ class BlockOps:
 
         try:
             from core import wave as wave_module
-            image = vision.capture_window_region_bgr(hwnd, WAVE_REGION)
+            image = vision.capture_window_region_bgr(hwnd, self._wave_region)
             if image is None or image.size == 0:
                 raise RuntimeError("Roblox window capture returned no pixels")
             current, maximum = wave_module.read_wave(image)
@@ -629,6 +657,24 @@ class BlockOps:
 
         if current is None:
             state.pop("wave_target_confirmation", None)
+            # Some Expedition gamemodes have no waves at all -- the payload
+            # ones count enemies around the objective, and their HUD shows
+            # "<n> enemies" where the badge would be. Waiting for a number
+            # that will never exist strands every block behind this one, which
+            # is exactly the placements it tends to be put in front of.
+            #
+            # A reward card is proof the battle is genuinely under way (they
+            # drop for kills), so it releases the block once the fighting has
+            # visibly started. Story/Raid keep waiting for a real number:
+            # their badge always exists, so an unreadable one there is a
+            # detection problem worth surfacing rather than working around.
+            quiet_for = time.time() - self._last_board_disruption_at
+            if (self._is_expedition_match and self._last_reward_card_at
+                    and quiet_for >= WAIT_WAVE_NO_COUNTER_SETTLE):
+                self._log(f"{label}: no wave counter on this gamemode, but the battle is "
+                          f"under way and the board has been quiet for {quiet_for:.0f}s -- "
+                          f"treating the wait as done.")
+                return True
             self._log(f"{label}: couldn't read the wave counter -- retrying in {WAIT_WAVE_POLL_INTERVAL:.0f}s.")
             state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
             return False

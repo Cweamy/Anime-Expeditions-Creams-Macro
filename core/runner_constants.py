@@ -703,6 +703,63 @@ TEAM_LOADOUT_SCROLL_SETTLE = 0.5
 # Wait for Wave (see _run_wait_wave_tick) -- the "<current> / <max> wave"
 # HUD badge, in the docked game window's own client coordinates.
 WAVE_REGION = (467, 21, 104, 61)
+# Expedition puts the same badge somewhere else, and the box above does not
+# reach it: it starts 50px right of where Expedition renders the badge, so
+# "3 / 5 wave" is captured as just "5 wave". read_wave reports NO MAXIMUM for
+# slash-free text -- Infinite's HUD genuinely is "6 wave" -- so a finite run
+# comes back as "5 (unlimited)", the maximum read as the current. A Wait for
+# Wave block then unblocks on wave 1 while logging that it reached wave 5,
+# and every block behind it runs early. read_wave's own preference for
+# slash-bearing votes cannot rescue that: with the slash outside the crop,
+# every vote is current-only.
+#
+# It is also 61px tall against a 33px badge, reaching into the
+# "<n> / <max> units" chip underneath -- the same digits-and-slash shape,
+# feeding a second number to the same parse.
+#
+# Measured on a live Expedition frame with the Image Manager's region tool.
+# Only Expedition is changed; the shared box above is left exactly as it is,
+# since it is what Story/Raid/Infinite have been reading correctly.
+EXPEDITION_WAVE_REGION = (417, 16, 110, 33)
+# Not every Expedition gamemode HAS waves. The payload modes count enemies
+# around the objective instead, and their HUD shows "<n> enemies" where a
+# wave badge would be -- so a Wait for Wave block there waits on a number
+# that will never exist, and every block behind it (the placements it was
+# put in front of) never runs at all.
+#
+# A level-up "Select an upgrade!" card is proof the battle is genuinely
+# under way: they are handed out for kills, so one cannot appear before the
+# fighting starts. On Expedition, that is accepted as the release condition
+# when the badge cannot be read -- after a short settle, so the block does
+# not fire on the same tick the card is still being clicked through.
+# Story/Raid keep waiting for a real number; their badge always exists, and
+# an unreadable one there means a detection problem worth surfacing rather
+# than working around.
+# A QUIET PERIOD, not a countdown from the first card -- every fresh
+# disruption restarts it, deliberately. A card means the round is still
+# churning; a mid-run Start Game means it is re-staging and the units have
+# just run off the board. Placing into either is what this exists to avoid,
+# so the clock measures "nothing has happened for a while" rather than "some
+# time has passed since the battle began".
+#
+# Waiting costs nothing: the poll loop keeps playing the match -- taking
+# cards, clicking Continues, handling encounters -- the entire time.
+#
+# The trade-off, stated plainly: on a run where cards keep arriving closer
+# together than this, the wait never releases and the deferred placements
+# never happen. MATCH_RESULT_TIMEOUT is the only backstop.
+WAIT_WAVE_NO_COUNTER_SETTLE = 20.0
+# A mid-run "Start Game?" stages a new sub-round, and the units already
+# placed run off the board entirely -- their tiles free up, so the Battle
+# phase is replayed from the top to put them back.
+#
+# Once per MATCH, on that match's FIRST Start Game only -- and every repeat
+# of the stage is its own match, so each one gets its own replay. Later Start
+# Game popups within the same match are left alone deliberately: re-arming on
+# each would let a chatty popup rewind the phase indefinitely, so the
+# placements keep restarting and never finish. One replay covers the case
+# this exists for -- the re-stage that empties the board -- and anything past
+# that is the run misbehaving in a way more re-placing will not fix.
 # OCR here is several real Tesseract subprocess spawns (see core.wave/
 # core.ocr's multi-mask sweep) -- checked on this cadence, not every single
 # Battle-tick poll, so a long wait for a distant wave doesn't spend most of
