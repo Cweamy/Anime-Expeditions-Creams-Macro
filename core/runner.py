@@ -2451,7 +2451,12 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             except Exception as exc:
                 self._log(f"[Macro] Camera setup failed: {exc}")
         else:
-            self._log("[Macro] Repeat of the same stage -- skipping camera setup (already set on entry).")
+            # Skipping the camera work also skips the only thing standing
+            # between teleporting in and placing units, so the settle it
+            # relied on has to be kept explicitly -- see REPEAT_ENTRY_SETTLE.
+            self._log("[Macro] Repeat of the same stage -- skipping camera setup (already set on entry). "
+                      f"Letting the map settle for {REPEAT_ENTRY_SETTLE:.0f}s before placing.")
+            self._interruptible_sleep(REPEAT_ENTRY_SETTLE, stop_event)
         if self._checkpoint(stop_event):
             return False
 

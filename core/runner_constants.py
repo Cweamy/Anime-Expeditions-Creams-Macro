@@ -416,6 +416,20 @@ TELEPORT_IN_TIMEOUT = 30.0
 # fires a beat too early and the right-click-drag/scroll doesn't register
 # that time. This settle is the fix -- see _run_prestart.
 CAMERA_SETUP_SETTLE = 0.6
+# The same "nav_unitmanager is up but the world isn't ready" problem, on the
+# Repeat Stage path. A first entry gets CAMERA_SETUP_SETTLE plus the camera
+# drag itself (a 730ms hold and its O taps) plus Team Loadout before any
+# unit is placed -- seconds of incidental settling. A repeat skips all
+# three and goes straight from "Teleported in-game" to Place Unit, with
+# nothing between them.
+#
+# What that looks like when it goes wrong: every unit in the template
+# aligning to the SAME large offset, out at the edge of the 38px search box
+# (reported live: four units all at (18, 17), placing the whole team ~16px
+# off). A uniformly displaced view is exactly what a map still settling
+# into place reads as. Placement is the only Pre Start step that reads
+# pixels off the world, so it is the one that notices.
+REPEAT_ENTRY_SETTLE = 5.0
 # Clicking Enter Matchmaking doesn't teleport you in on its own -- it only
 # happens once the lobby actually FILLS with real players, which can take
 # anywhere from seconds to several minutes depending on server population,
