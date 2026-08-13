@@ -141,6 +141,48 @@ A route that does not fit your spawn stops safely: the interact prompt has to be
 found before anything is clicked, so a walk that lands somewhere wrong logs and
 gives up rather than clicking at the world.
 
+### Placing a unit you cannot afford yet (Expedition)
+
+Pre Start runs **before** the round begins, so no income has arrived while it
+is running. Placing a unit there only *stages* it: nothing is really on the
+board until the round starts, and anything the purse cannot cover at that
+moment is silently dropped. Expedition starts you with far less than a unit
+costs, so a team can end up a unit or two short for the whole match while the
+log reports every placement as fine.
+
+Pre Start cannot detect this. Verification has nothing to read yet -- before
+the round, no unit is deployed, so a check there reports failure for every
+unit whether or not it would have worked.
+
+Put the units you cannot afford up front in the **Battle** phase instead, with
+a wait in front of them:
+
+```
+Pre Start:  Place Unit #1        (cheap -- affordable immediately)
+            Place Unit #2
+Battle:     Wait for Wave -> 2
+            Place Unit #3
+            Place Unit #4
+```
+
+Battle blocks run once per match, in order, one block per poll -- so
+consecutive blocks land roughly a second apart, and the round keeps playing
+around them.
+
+**Use "Wait for Wave", not "Wait".** They are not interchangeable here:
+
+- **Wait for Wave** is checked between polls and gives the loop back in
+  between, so upgrade cards still get picked, wave Continues still get
+  clicked, and Expedition encounters are still handled while it waits.
+- **Wait (ms)** sleeps in place. Everything else in the match loop stops for
+  the whole duration -- a 60-second Wait in the Battle phase means a minute
+  with no card selection, no Continue clicks and no result detection. Fine
+  for a few hundred milliseconds between two clicks; not for waiting out
+  income.
+
+Waiting on a wave is also the more reliable condition, since it tracks what
+actually pays out rather than guessing how long that takes on a given map.
+
 ## 5. Create the task queue
 
 Open **Task**, add tasks in the order they should run, and configure each one:
