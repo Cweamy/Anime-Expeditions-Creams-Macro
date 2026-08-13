@@ -157,6 +157,18 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Expedition camera's O-zoom hold (Settings > Debug).
         self._expedition_color_buttons = True
         self._exp_last_sighting_at = 0.0
+        # Consecutive polls that found a checkpoint Continue, and when that
+        # run of them started. See EXPEDITION_STALL_TIMEOUT -- a checkpoint
+        # that never clears would otherwise be re-clicked all the way to
+        # MATCH_RESULT_TIMEOUT.
+        self._exp_checkpoint_streak = 0
+        self._exp_checkpoint_since = 0.0
+        # Polls a popup/reward card took before the checkpoint could be read.
+        # See EXPEDITION_INTERCEPT_TIMEOUT. _exp_clock_marked_at is what lets
+        # the checkpoint clock be HELD across those polls rather than aged.
+        self._exp_intercept_streak = 0
+        self._exp_intercept_since = 0.0
+        self._exp_clock_marked_at = 0.0
         self._expedition_camera_o_ms = 100.0
         # Wrapped to remember the most recent action text locally: the
         # stop path (_checkpoint) reports "Stopped. (was: <action>)" so a
@@ -1715,6 +1727,13 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._expedition_extract_accept_at = _parse_extract_after(
             task.get("extract_after")) + 1
         self._exp_last_sighting_at = 0.0  # fresh match, fresh sighting-debounce clock (see EXP_COLOR_SIGHTING_DEBOUNCE)
+        # ...and fresh no-progress clocks (see EXPEDITION_STALL_TIMEOUT and
+        # EXPEDITION_INTERCEPT_TIMEOUT).
+        self._exp_checkpoint_streak = 0
+        self._exp_checkpoint_since = 0.0
+        self._exp_intercept_streak = 0
+        self._exp_intercept_since = 0.0
+        self._exp_clock_marked_at = 0.0
         # Spirit City Act 3's boss/cutscene "Click anywhere to close" popup
         # (see _click_close_popup_if_found) only ever shows up there.
         watch_close_popup = (task.get("mode") == "raid" and task.get("map") == "Spirit City"
@@ -1939,6 +1958,34 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 result = self._check_expedition_wave_result(hwnd, stop_event)
                 if result is not None:
                     return result
+                # Every step of the checkpoint chain is individually bounded,
+                # but nothing used to notice the whole chain repeating: a
+                # Continue that never clears is re-found and re-clicked on
+                # every poll, and the run only escaped at
+                # MATCH_RESULT_TIMEOUT, half an hour later. Give up once the
+                # streak says the checkpoint is not clearing and let the
+                # normal recovery path re-enter from the lobby -- exactly
+                # what the 30-minute timeout below does, just far sooner.
+                stall_detail = None
+                if self._expedition_checkpoint_stalled():
+                    stall_detail = (
+                        f"the same checkpoint has been up for {self._exp_checkpoint_streak} "
+                        f"polls without ever clearing (an encounter node waiting on an NPC, "
+                        f"or a click that lands visually without registering)")
+                elif self._expedition_intercepts_stalled():
+                    stall_detail = (
+                        f"a popup or reward card has taken every one of the last "
+                        f"{self._exp_intercept_streak} polls, so the checkpoint has not been "
+                        f"readable that whole time")
+                if stall_detail is not None:
+                    self._log(
+                        f"[Macro] Expedition run hasn't progressed in "
+                        f"{EXPEDITION_STALL_TIMEOUT / 60:.0f} min -- {stall_detail}. Abandoning "
+                        f"it rather than waiting out the {MATCH_RESULT_TIMEOUT / 60:.0f} min "
+                        f"timeout; the task re-enters from the lobby.")
+                    self._save_debug_screenshot_unconditional(hwnd, "expedition_no_progress")
+                    self._note_checkpoint_cleared()
+                    return None
                 self._interruptible_sleep(MATCH_RESULT_POLL_INTERVAL, stop_event)
                 continue
 

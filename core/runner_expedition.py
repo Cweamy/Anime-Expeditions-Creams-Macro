@@ -95,6 +95,7 @@ class ExpeditionOps:
             # actually blocking it if it didn't.
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
             self._mouse.click(left + self._coords["screen_middle_x"], top + self._coords["screen_middle_y"])
+            self._note_checkpoint_intercepted()
             return None
 
         # Same idea as the nav_start_game re-check above -- a level-up
@@ -104,6 +105,7 @@ class ExpeditionOps:
         # bundled into the exp_extract branch, since it can show up on ANY
         # tick, not only the one where exp_extract happens to also be found.
         if self._dismiss_reward_card_if_found(hwnd):
+            self._note_checkpoint_intercepted()
             return None
 
         # A failed run (team/base wiped) ends on the Defeat result screen
@@ -148,6 +150,7 @@ class ExpeditionOps:
         except vision.TemplateNotFound:
             extract_match = None
         if extract_match is not None:
+            self._note_checkpoint_seen()
             self._expedition_extract_count += 1
             debug_path = self._debug_save(hwnd, "exp_extract", extract_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
@@ -268,6 +271,7 @@ class ExpeditionOps:
         except vision.TemplateNotFound:
             continue_match = None
         if continue_match is not None:
+            self._note_checkpoint_seen()
             debug_path = self._debug_save(hwnd, "exp_continue", continue_match)
             suffix = f" Debug: {debug_path}" if debug_path else ""
             self._log(f'[Macro] Found "exp_continue" (score {continue_match["score"]:.2f}) -- clicking it.{suffix}')
@@ -313,7 +317,67 @@ class ExpeditionOps:
             self._interruptible_sleep(EXPEDITION_CONTINUE_COOLDOWN, stop_event)
             return None
 
+        # Neither checkpoint button is up: mid-wave, and the last one really
+        # did clear. Same reset the color engine does above.
+        self._note_checkpoint_cleared()
         return None
+
+    def _note_checkpoint_seen(self) -> None:
+        """A checkpoint Continue is up on this poll. The first one of a run
+        starts the stall clock; the rest just extend the streak."""
+        if not self._exp_checkpoint_streak:
+            self._exp_checkpoint_since = time.time()
+        self._exp_checkpoint_streak += 1
+        self._clear_intercepts()
+
+    def _note_checkpoint_cleared(self) -> None:
+        """No checkpoint up on this poll -- whatever was there really did
+        clear, which is the only thing that proves the run is progressing."""
+        self._exp_checkpoint_streak = 0
+        self._exp_checkpoint_since = 0.0
+        self._clear_intercepts()
+
+    def _note_checkpoint_intercepted(self) -> None:
+        """A popup or reward card took this poll before the checkpoint could
+        be read at all.
+
+        That is neither progress nor a stall: the checkpoint may well have
+        cleared while the card was in the way, and nothing looked. So the
+        checkpoint clock is HELD -- its start is pushed forward by the gap
+        this poll covered -- rather than aged by time nobody observed.
+        Resetting it here instead would be wrong in the other direction: a
+        card that can never be dismissed would re-arm the clock forever and
+        restore the unbounded loop this guard exists to stop. Hence the
+        separate cap below."""
+        now = time.time()
+        if self._exp_checkpoint_since and self._exp_clock_marked_at:
+            self._exp_checkpoint_since += now - self._exp_clock_marked_at
+        if not self._exp_intercept_streak:
+            self._exp_intercept_since = now
+        self._exp_intercept_streak += 1
+        self._exp_clock_marked_at = now
+
+    def _clear_intercepts(self) -> None:
+        """Reaching the checkpoint search at all ends any run of intercepts."""
+        self._exp_intercept_streak = 0
+        self._exp_intercept_since = 0.0
+        self._exp_clock_marked_at = time.time()
+
+    def _expedition_checkpoint_stalled(self) -> bool:
+        """Has a checkpoint been observed up, continuously, for
+        EXPEDITION_STALL_TIMEOUT? A run that is advancing goes quiet between
+        waves, which resets the clock, so only one that never clears gets
+        here -- and polls that never saw the checkpoint do not count."""
+        return bool(self._exp_checkpoint_since
+                    and time.time() - self._exp_checkpoint_since >= EXPEDITION_STALL_TIMEOUT)
+
+    def _expedition_intercepts_stalled(self) -> bool:
+        """Has every poll for EXPEDITION_INTERCEPT_TIMEOUT been eaten by a
+        popup or reward card? Handling those IS useful work, so this is
+        deliberately not a stall until it has gone on far longer than any
+        real burst of level-ups."""
+        return bool(self._exp_intercept_since
+                    and time.time() - self._exp_intercept_since >= EXPEDITION_INTERCEPT_TIMEOUT)
 
     def _check_expedition_checkpoint_by_color(self, hwnd, stop_event: threading.Event) -> str:
         """The color-first checkpoint engine (see the EXP_COLOR_* block for
@@ -336,7 +400,9 @@ class ExpeditionOps:
         comes from here -- the shared defeat check above it owns that)."""
         cont = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green, EXP_COLOR_CONTINUE_MIN_RUN)
         if cont is None:
-            return None  # mid-wave -- nothing up this tick
+            self._note_checkpoint_cleared()  # mid-wave -- nothing up this tick
+            return None
+        self._note_checkpoint_seen()
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         center_x = 576  # the 1152-wide reference space's vertical centerline
         offers_extract = cont["cx"] > center_x + EXP_COLOR_MIRROR_MARGIN
