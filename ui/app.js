@@ -3096,15 +3096,17 @@ async function refreshTaskQueue() {
 // Challenge screen: Regular Challenge automation
 // ---------------------------------------------------------------------------
 // Regular Challenge has 3 fixed stage slots that each rotate through one of
-// the 5 Story maps over time (see main.py's CHALLENGE_STORY_MAPS comment) --
+// the Story maps over time (see main.py's CHALLENGE_STORY_MAPS comment) --
 // config here is split the same way the backend models it: the daily play
 // limit tracks each STAGE SLOT (whichever map is currently rotated into it),
 // while Macro Operation assignment is tracked per MAP, since that's what
 // needs to follow the map around as it rotates through slots.
 const CHALLENGE_STAGE_SLOTS = ['1', '2', '3'];
 // Mirrors main.py's CHALLENGE_STORY_MAPS -- keep in sync if Story's map
-// list (TASK_DATA.story.maps) ever changes.
-const CHALLENGE_STORY_MAPS = ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb", 'Flower Forest'];
+// list (TASK_DATA.story.maps) ever changes. This list is what renders the
+// Story Map Setup rows, so a map missing here cannot be assigned a Macro
+// Operation at all; tests/test_challenge_maps.py fails when it drifts.
+const CHALLENGE_STORY_MAPS = ['School Grounds', 'Rose Kingdom', 'Fairy King Forest', "King's Tomb", 'Flower Forest', 'East Town'];
 let challengeState = null;
 
 function renderStoryMapSetupWarning(id, state, featureName) {

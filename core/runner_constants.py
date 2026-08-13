@@ -364,14 +364,38 @@ EXPEDITION_MAP_IMAGES = {
     "East Town": "expedition_east_town",
 }
 # Regular Challenge is Story's own flow, just with the game picking a
-# random one of these 5 maps for you instead of you picking it -- so
+# random one of these maps for you instead of you picking it -- so
 # there's no map-select step to skip past, only a "which map did it land
-# on" check once you're in. Reference images live in Assets/ui/<map>.png
+# on" check once you're in. A map missing from this list is simply never
+# recognized, so the run stalls on CHALLENGE_MAP_DETECT_TIMEOUT after
+# teleporting in. Reference images live in Assets/ui/<map>.png
 # (a different folder/purpose than Assets/maps/<map>.png, which is the
 # scrolling map-CARD search used to pick a map by hand -- these instead
 # confirm which map is already showing). Mirrors main.py's
 # CHALLENGE_STORY_MAPS and ui/app.js's TASK_DATA.story.maps.
-CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest"]
+CHALLENGE_STORY_MAPS = ["School Grounds", "Rose Kingdom", "Fairy King Forest", "King's Tomb", "Flower Forest", "East Town"]
+# Daily Challenge shows its map as a ~10px label rather than the art the
+# image search above needs, so _detect_challenge_map_ocr falls back to
+# reading it. One distinctive lowercase word per map, fuzzy-matched against
+# the OCRed tokens -- a map missing an alias can never be named by that
+# fallback, so this has to cover CHALLENGE_STORY_MAPS entirely.
+# East Town is keyed on "east" rather than "town" deliberately: "town" and
+# "tomb" score about equally against a garbled read of either, which pushes
+# both below the runner-up margin and makes King's Tomb undetectable as
+# collateral (test_challenge_map_ocr_uses_unique_map_words covers that read).
+# Pick the word that no other map shares, not just any word from the name.
+CHALLENGE_MAP_OCR_ALIASES = {
+    "School Grounds": "grounds",
+    "Rose Kingdom": "kingdom",
+    "Fairy King Forest": "fairy",
+    "King's Tomb": "tomb",
+    "Flower Forest": "flower",
+    "East Town": "east",
+}
+# Words the map label carries that never identify a map ("Grounds - Act 1").
+# Scored against an alias they are just noise that can out-rank the real
+# match, so they are dropped before comparison.
+CHALLENGE_MAP_OCR_STOPWORDS = frozenset({"act", "stage", "challenge", "daily"})
 # Mirrors main.py's CHALLENGE_STAGE_SLOTS.
 CHALLENGE_STAGE_SLOTS = ["1", "2", "3"]
 # Fixed click points for the 3 Regular Challenge stage rows -- no image

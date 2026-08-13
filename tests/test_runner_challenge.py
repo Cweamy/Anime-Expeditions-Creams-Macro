@@ -164,6 +164,7 @@ def test_regular_challenge_finishes_slots_1_2_3_in_one_ordered_pass():
         ("Fary King Forest", "Fairy King Forest"),
         ("Tornb - Act 1", "King's Tomb"),
         ("Flovver Forest", "Flower Forest"),
+        ("Eest Town - Act 1", "East Town"),
     ),
 )
 def test_challenge_map_ocr_uses_unique_map_words(monkeypatch, ocr_text, expected):

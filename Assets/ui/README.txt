@@ -244,7 +244,7 @@ daily_challenge_stage.png
 daily_challenge_hud.png
   The shared green Daily Challenge label shown after teleport. It anchors
   a tight OCR crop over the tiny map name to its right, allowing the same
-  post-teleport map-detection loop to recognize any of the 5 Story maps
+  post-teleport map-detection loop to recognize any of the Story maps
   without a per-map Daily screenshot. Small/large variants cover 85-115%
   internal UI rendering.
 
