@@ -592,3 +592,78 @@ def test_gamemode_card_does_not_widen_after_a_stop(monkeypatch):
     stop.set()
     runner._find_gamemode_card(1, stop, ("expedition",), "Expedition")
     assert runner.searches == ["boxed"]
+
+
+# ---------------------------------------------------------------------------
+# AFK Chamber: click out instead of polling a dead screen
+# ---------------------------------------------------------------------------
+
+class _AfkRunner:
+    def __init__(self, match=None, raises=False):
+        self._match, self._raises = match, raises
+        self._mouse = MagicMock()
+        self.logs = []
+        self.searches = 0
+
+    _dismiss_afk_chamber = None  # bound below
+
+    def _log(self, msg):
+        self.logs.append(msg)
+
+    def _set_status(self, **kw):
+        pass
+
+
+def _make_afk_runner(match=None, raises=False, monkeypatch=None):
+    from core import runner as runner_mod
+    from core.runner import MacroRunner
+
+    r = _AfkRunner(match, raises)
+    r._dismiss_afk_chamber = MacroRunner._dismiss_afk_chamber.__get__(r, _AfkRunner)
+
+    def find_image(hwnd, name, region=None, **kw):
+        r.searches += 1
+        if r._raises:
+            raise runner_mod.vision.TemplateNotFound(name)
+        return r._match
+
+    monkeypatch.setattr(runner_mod.vision, "find_image", find_image)
+    monkeypatch.setattr(runner_mod.wm, "get_window_rect_screen", lambda hwnd: (10, 20, 1152, 756))
+    return r
+
+
+def test_afk_chamber_is_clicked_out_of(monkeypatch):
+    from core.runner_constants import AFK_CHAMBER_EXIT_CLICK
+
+    r = _make_afk_runner(match={"cx": 576, "cy": 44, "score": 0.99}, monkeypatch=monkeypatch)
+    at = r._dismiss_afk_chamber(1, 0.0)
+
+    assert r._mouse.click.call_args.args == (10 + AFK_CHAMBER_EXIT_CLICK[0],
+                                             20 + AFK_CHAMBER_EXIT_CLICK[1])
+    assert at > 0.0, "the click time must be returned so the cooldown can start"
+    assert any("AFK Chamber" in m for m in r.logs)
+
+
+def test_afk_chamber_absent_does_nothing(monkeypatch):
+    r = _make_afk_runner(match=None, monkeypatch=monkeypatch)
+    assert r._dismiss_afk_chamber(1, 0.0) == 0.0
+    r._mouse.click.assert_not_called()
+
+
+def test_afk_chamber_without_a_reference_image_is_skipped(monkeypatch):
+    """Optional check: a missing afk_chamber.png must not break a run."""
+    r = _make_afk_runner(raises=True, monkeypatch=monkeypatch)
+    assert r._dismiss_afk_chamber(1, 0.0) == 0.0
+    r._mouse.click.assert_not_called()
+
+
+def test_afk_chamber_is_not_reclicked_inside_the_cooldown(monkeypatch):
+    """The banner lingers while the exit animates -- clicking every poll would
+    fight the transition the first click started."""
+    import time as _time
+
+    r = _make_afk_runner(match={"cx": 576, "cy": 44, "score": 0.99}, monkeypatch=monkeypatch)
+    just_now = _time.time()
+    assert r._dismiss_afk_chamber(1, just_now) == just_now
+    r._mouse.click.assert_not_called()
+    assert r.searches == 0, "the cooldown should short-circuit before searching"
