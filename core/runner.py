@@ -151,6 +151,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # (which never goes through _play_one_match) resolves them too.
         self._battle_started_at = 0.0
         self._battle_leave_requested = False
+        # Which crop the Wait for Wave block reads its badge from. Expedition
+        # renders it somewhere the shared box does not reach -- see
+        # EXPEDITION_WAVE_REGION. Set per match in _play_one_match.
+        self._wave_region = WAVE_REGION
         # Expedition checkpoint engine choice (see the EXP_COLOR_* block) +
         # the sighting debounce clock it uses; the real values arrive via
         # start()/_run, these are just never-ran-yet defaults. Same for the
@@ -1692,6 +1696,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Reset per match so the minute is measured from THIS battle's start.
         self._battle_started_at = time.time()
         self._battle_leave_requested = False
+        self._wave_region = (EXPEDITION_WAVE_REGION if task.get("mode") == "expedition"
+                             else WAVE_REGION)
         # Loop A / Loop B: their own index+state, ticked and restarted every
         # poll alongside Battle (see _tick_loop_phases).
         loop_blocks = self._load_loop_blocks(task)

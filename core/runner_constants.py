@@ -563,6 +563,24 @@ TEAM_LOADOUT_SCROLL_SETTLE = 0.5
 # Wait for Wave (see _run_wait_wave_tick) -- the "<current> / <max> wave"
 # HUD badge, in the docked game window's own client coordinates.
 WAVE_REGION = (467, 21, 104, 61)
+# Expedition puts the same badge somewhere else, and the box above does not
+# reach it: it starts 50px right of where Expedition renders the badge, so
+# "3 / 5 wave" is captured as just "5 wave". read_wave reports NO MAXIMUM for
+# slash-free text -- Infinite's HUD genuinely is "6 wave" -- so a finite run
+# comes back as "5 (unlimited)", the maximum read as the current. A Wait for
+# Wave block then unblocks on wave 1 while logging that it reached wave 5,
+# and every block behind it runs early. read_wave's own preference for
+# slash-bearing votes cannot rescue that: with the slash outside the crop,
+# every vote is current-only.
+#
+# It is also 61px tall against a 33px badge, reaching into the
+# "<n> / <max> units" chip underneath -- the same digits-and-slash shape,
+# feeding a second number to the same parse.
+#
+# Measured on a live Expedition frame with the Image Manager's region tool.
+# Only Expedition is changed; the shared box above is left exactly as it is,
+# since it is what Story/Raid/Infinite have been reading correctly.
+EXPEDITION_WAVE_REGION = (417, 16, 110, 33)
 # OCR here is several real Tesseract subprocess spawns (see core.wave/
 # core.ocr's multi-mask sweep) -- checked on this cadence, not every single
 # Battle-tick poll, so a long wait for a distant wave doesn't spend most of
