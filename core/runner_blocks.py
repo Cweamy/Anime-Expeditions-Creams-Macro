@@ -216,6 +216,22 @@ class BlockOps:
                 done = self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, self._battle_block_index + 1)
                 self._battle_block_state = {}
             elif btype == "place_unit":
+                # A level-up "Select an upgrade!" card renders over the board,
+                # so it swallows the placement click: the unit is never placed
+                # and the tile search may not even find a highlight. Battle
+                # blocks tick BEFORE the poll loop's own card dismissal, so
+                # without this the race is simply lost whenever a card lands
+                # on the same tick as a placement.
+                #
+                # Take the card now and place on the next poll rather than
+                # clearing it in a loop here -- the whole match loop shares
+                # this tick, and a card that keeps re-appearing must not hold
+                # it. The index is not advanced, so this same block runs again
+                # a poll later against a clear board.
+                if self._dismiss_reward_card_if_found(hwnd):
+                    self._log(f'[Macro] Battle block #{self._battle_block_index + 1} '
+                              f'(Place Unit): cleared an upgrade card first -- placing next poll.')
+                    return
                 # Mid-battle placement (a reinforcement dropped in later,
                 # not a Pre Start starter) -- same pixel-search-place/verify
                 # logic Pre Start uses, one-shot like Sell Unit. Continues
