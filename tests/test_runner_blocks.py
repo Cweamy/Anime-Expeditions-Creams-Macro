@@ -504,3 +504,91 @@ def test_auto_upgrade_click_gives_up_when_the_panel_never_opens(monkeypatch):
 
     assert any("not found on the info panel" in message for message in runner.logs)
     assert [item.args for item in runner._mouse.click.call_args_list] == [(100, 200)]
+
+
+# ---------------------------------------------------------------------------
+# Navigation recovery: gamemode card search widening
+# ---------------------------------------------------------------------------
+
+class _CardRunner:
+    """Just enough runner for _find_gamemode_card."""
+
+    def __init__(self, boxed, wide):
+        self._boxed, self._wide = boxed, wide
+        self.searches = []
+        self.logs = []
+
+    _find_gamemode_card = None  # bound below
+
+    def _log(self, msg):
+        self.logs.append(msg)
+
+
+def _make_card_runner(boxed, wide):
+    from core.runner import MacroRunner
+    r = _CardRunner(boxed, wide)
+    r._find_gamemode_card = MacroRunner._find_gamemode_card.__get__(r, _CardRunner)
+    return r
+
+
+def _patch_card_search(monkeypatch, runner):
+    from core import runner as runner_mod
+
+    def wait_for_image_any(hwnd, names, region=None, timeout=None, stop_event=None):
+        runner.searches.append("boxed" if region else "wide")
+        # Mirrors the real helper: (None, None) when nothing matched.
+        found = runner._boxed if region else runner._wide
+        return (found, "expedition") if found is not None else (None, None)
+
+    monkeypatch.setattr(runner_mod.vision, "wait_for_image_any", wait_for_image_any)
+
+
+def test_gamemode_card_found_in_the_panel_never_widens(monkeypatch):
+    """The boxed search exists to keep the 3D viewport out of the search --
+    a hit there must not trigger a second, wider scan."""
+    import threading
+
+    runner = _make_card_runner(boxed={"cx": 700, "cy": 200, "score": 0.98}, wide=None)
+    _patch_card_search(monkeypatch, runner)
+
+    match, _ = runner._find_gamemode_card(1, threading.Event(), ("expedition",), "Expedition")
+    assert match is not None
+    assert runner.searches == ["boxed"]
+
+
+def test_gamemode_card_outside_the_panel_is_still_found(monkeypatch):
+    """The menu has gained cards (Tower, Event), so a mode can render outside
+    GAMEMODE_CARD_REGION. That used to fail the whole task."""
+    import threading
+
+    runner = _make_card_runner(boxed=None, wide={"cx": 120, "cy": 640, "score": 0.95})
+    _patch_card_search(monkeypatch, runner)
+
+    match, _ = runner._find_gamemode_card(1, threading.Event(), ("expedition",), "Expedition")
+    assert match is not None, "a card outside the box must still be found"
+    assert runner.searches == ["boxed", "wide"]
+    assert any("widening" in m for m in runner.logs)
+
+
+def test_gamemode_card_genuinely_absent_reports_nothing(monkeypatch):
+    import threading
+
+    runner = _make_card_runner(boxed=None, wide=None)
+    _patch_card_search(monkeypatch, runner)
+
+    match, name = runner._find_gamemode_card(1, threading.Event(), ("expedition",), "Expedition")
+    assert (match, name) == (None, None)
+    assert runner.searches == ["boxed", "wide"]
+
+
+def test_gamemode_card_does_not_widen_after_a_stop(monkeypatch):
+    """Stop must not be followed by another 5s scan."""
+    import threading
+
+    runner = _make_card_runner(boxed=None, wide={"cx": 1, "cy": 1, "score": 1.0})
+    _patch_card_search(monkeypatch, runner)
+
+    stop = threading.Event()
+    stop.set()
+    runner._find_gamemode_card(1, stop, ("expedition",), "Expedition")
+    assert runner.searches == ["boxed"]

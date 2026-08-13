@@ -362,6 +362,21 @@ RECONNECT_IMAGE_NAMES = ("reconnect",)
 # restricted to the right-side cards panel (x: 440..1152) to exclude the left 3D viewport
 # where player silhouettes and party [+] invite buttons render.
 GAMEMODE_CARD_REGION = (440, 0, 712, 756)
+# ...but only as the FIRST attempt. The box assumes a fixed card layout, and
+# the menu keeps gaining cards (Tower and Event in v0.19.0), so a mode can end
+# up rendering outside it -- reported as the run repeatedly clicking Play and
+# then "Expedition never showed up". A boxed miss now retries against the whole
+# window for this long before the task is failed (see _find_gamemode_card).
+# Shorter than the boxed attempt: by this point the menu is known to be open,
+# so the card is either visible or genuinely absent.
+GAMEMODE_CARD_WIDE_TIMEOUT = 5.0
+
+# Mid-match lobby re-sync: nav_play only renders on the lobby, so seeing it
+# from inside a match means we are not in one any more -- someone clicked
+# Return to Lobby by hand, or the game ejected us. Confirmed over this many
+# consecutive polls before acting, since aborting a live match is expensive
+# and one frame caught mid-transition is not worth acting on.
+LOBBY_RESYNC_CONFIRMATIONS = 2
 
 NAV_PLAY_IMAGE_NAMES = ("nav_play",)
 EXPEDITION_IMAGE_NAMES = ("expedition",)
