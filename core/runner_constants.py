@@ -312,6 +312,11 @@ TOURNAMENT_TYPE_IMAGES = {
 TOURNAMENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Tournament screen (nav_tournament / the type card / nav_entertournament) to appear
 TOWER_SCREEN_TIMEOUT = 10.0  # how long to wait for each Tower screen (nav_tower / Traitless_Tower / nav_select_stage) to appear
 
+# Reference-window region (x, y, w, h) of the Tower game mode.
+# The tower's recent floor is always in this region but it is
+# subject to change
+TOWER_CARD_REGION = (565, 230, 770 - 565, 351 - 230)  # (565, 230) -> (770, 351)
+
 # Auto Bounty derives all objective clicks from the live board. These values
 # only bound waits and the board's outer scroll gesture.
 BOUNTY_SCREEN_TIMEOUT = 10.0
