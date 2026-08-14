@@ -95,6 +95,11 @@ def _wire(monkeypatch, *, marker=True, prompt=True, events=(("w", "down", 0.0),)
         return None
 
     monkeypatch.setattr(rx.vision, "find_image", find_image)
+    # No encounter Continue unless a test asks for one. Without this the
+    # handler calls the REAL find_color_run, which captures the live screen:
+    # slow (a four-second deadline of real captures per test) and genuinely
+    # nondeterministic, since whatever is actually on screen can satisfy it.
+    monkeypatch.setattr(rx.vision, "find_color_run", lambda *_a, **_k: None)
     monkeypatch.setattr(rx.vision, "click_match", lambda m, h, match, **k: r_clicks.append(match))
     r_clicks = []
     monkeypatch.setattr(rx.vision, "wait_for_image",
