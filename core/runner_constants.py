@@ -88,6 +88,11 @@ START_GAME_BUTTON_WAIT_TIMEOUT = 5.0  # how long to poll for Start Game right af
 # a step it is used instead (nav_settings / nav_closeui are already shipped),
 # because an image survives a layout shift and a coordinate does not.
 ENCOUNTER_REGION = (414, 58, 41, 45)      # the encounter marker's HUD slot
+# How long to look for the encounter's own Continue button before giving up
+# on it. It is the same green face the wave checkpoints use, so the colour
+# engine finds it with one pixel scan and no reference image -- which makes
+# it the only part of encounter handling that needs nothing map-specific.
+ENCOUNTER_CONTINUE_TIMEOUT = 4.0
 ENCOUNTER_TELEPORT_SPAWN_CLICK = (621, 443)  # "teleport to spawn" inside Settings
 # Dialogue advance clicks, in order. The prompt is opened with E; these step
 # through the exchange that follows.

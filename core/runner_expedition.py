@@ -634,6 +634,33 @@ class ExpeditionOps:
         return True
 
 
+    def _encounter_cleared_by_continue(self, hwnd, stop_event: threading.Event) -> bool:
+        """Try to end the encounter with its own Continue button.
+
+        It is the same green Continue the wave checkpoints put up, so the
+        colour engine finds it with one pixel scan -- no reference image,
+        nothing recorded, nothing map-specific. That is what makes it usable
+        on a map with no bundled route, where the walk cannot help at all.
+
+        Returns False if no Continue appears, leaving the caller to fall back
+        on whatever it would have done otherwise.
+        """
+        deadline = time.time() + ENCOUNTER_CONTINUE_TIMEOUT
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return False
+            cont = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green,
+                                          EXP_COLOR_CONTINUE_MIN_RUN)
+            if cont is not None:
+                left, top, _, _ = wm.get_window_rect_screen(hwnd)
+                self._log(f'[Macro] Encounter offers Continue (x={cont["cx"]}) -- clicking it, '
+                          f'no route needed for this map.')
+                self._mouse.click(left + cont["cx"], top + cont["cy"])
+                self._interruptible_sleep(ENCOUNTER_STEP_SETTLE, stop_event)
+                return True
+            time.sleep(ENCOUNTER_MODAL_POLL)
+        return False
+
     def _wait_for_clear_screen(self, hwnd, stop_event: threading.Event, before_what: str) -> int:
         """Dismiss level-up "Select an upgrade!" modals until none is left.
 
@@ -718,9 +745,20 @@ class ExpeditionOps:
         map_name = (getattr(self, "_current_task", None) or {}).get("map")
         path_name = walk_paths.load_shipped_encounter_walk_paths().get(map_name or "")
         if not path_name:
-            self._log(f'[Macro] Expedition encounter on "{map_name}", but no encounter walk is '
-                       f"mapped for it -- leaving it alone. (Record one and add it to "
-                       f"Assets/default_encounter_walk_paths.json.)")
+            # No recorded route for this map, which used to end the matter --
+            # the encounter was logged and abandoned, and only the four
+            # mapped maps ever got handled at all.
+            #
+            # The encounter's own Continue needs nothing map-specific: it is
+            # the same green face the checkpoints use, found by colour with
+            # no reference image and no recording. So an unmapped map is
+            # worth one look at that before giving up, rather than being
+            # written off for want of a walk it may not even need.
+            if self._encounter_cleared_by_continue(hwnd, stop_event):
+                return self._encounter_done(state)
+            self._log(f'[Macro] Expedition encounter on "{map_name}", no Continue offered and no '
+                       f"encounter walk mapped for it -- leaving it alone. (Record one and add it "
+                       f"to Assets/default_encounter_walk_paths.json.)")
             return self._encounter_done(state)
 
         self._log(f'[Macro] Expedition encounter (score {marker["score"]:.2f}) on "{map_name}" -- '
