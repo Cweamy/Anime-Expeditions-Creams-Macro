@@ -119,6 +119,29 @@ class ExpeditionOps:
         # optional template -- a missing defeat image just skips the check
         # (and a real failure then falls back to the old slow
         # timeout-and-recover path).
+        # The run can end in a WIN the macro did not cause. Extraction is a
+        # party decision: when the others take it, the match is over and the
+        # result screen comes up regardless of what this client chose. Story
+        # and Raid have always watched for that; Expedition never did, because
+        # its only route to "win" was its own extract confirming.
+        #
+        # So a party that extracts left the run sitting on the Victory screen,
+        # still clicking at checkpoints that are no longer there, until
+        # MATCH_RESULT_TIMEOUT. Reported live, with Victory on screen and the
+        # log still repeating the play-on line.
+        #
+        # Checked alongside defeat, and before the checkpoint handling, for
+        # the same reason defeat is: once this screen is up none of those
+        # buttons exist any more.
+        try:
+            victory_match = vision.find_image(hwnd, "victory")
+        except vision.TemplateNotFound:
+            victory_match = None
+        if victory_match is not None:
+            self._log(f"[Macro] Expedition run finished -- Victory screen found "
+                       f"(score {victory_match['score']:.2f}).")
+            return "win"
+
         try:
             defeat_match = vision.find_image(hwnd, "defeat")
         except vision.TemplateNotFound:
