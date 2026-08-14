@@ -150,6 +150,18 @@ EXPEDITION_WAVE_TIMEOUT = 8.0  # how long to wait for Continue_2/extract after c
 # go anywhere in the meantime (see _check_expedition_wave_result), so this
 # just avoids burning a couple of whole retry cycles on the same modal.
 EXPEDITION_EXTRACT_CONFIRM_TIMEOUT = 16.0
+# Extraction is not entirely yours to decide. In a matchmaking lobby the run
+# carries on while other players keep going, so the confirm can simply never
+# register no matter how cleanly it is clicked. The old behaviour retried the
+# whole extract chain at EVERY later checkpoint -- the count is already past
+# accept-at by then -- which is minutes of clicking at something that is not
+# going to happen, repeated for the rest of the match.
+#
+# After this many checkpoints where extraction was attempted and did not
+# take, stop asking and just play the run out: decline each checkpoint and
+# let it end on its own. Losing the early exit is a far smaller cost than
+# stalling every checkpoint from here to the end.
+EXPEDITION_EXTRACT_ATTEMPTS_BEFORE_PLAYING_ON = 3
 EXTRACT_CONFIRM_SETTLE = 5.0  # settle after clicking "extract" -- reported as a click that can visually land without registering
 EXPEDITION_CONTINUE_COOLDOWN = 5.0  # settle after exp_continue/continue_2 -- a lingering banner right after the
 # How long a checkpoint may stay up, being re-found and re-clicked on every

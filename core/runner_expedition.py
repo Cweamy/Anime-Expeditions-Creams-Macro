@@ -456,15 +456,32 @@ class ExpeditionOps:
             refound = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green, EXP_COLOR_CONTINUE_MIN_RUN)
             if refound is not None:
                 cont = refound
-            if self._expedition_extract_count >= self._expedition_extract_accept_at:
+            playing_on = self._exp_failed_extracts >= EXPEDITION_EXTRACT_ATTEMPTS_BEFORE_PLAYING_ON
+            if playing_on:
+                # Extraction has been tried and did not take, repeatedly. It
+                # is not entirely ours to decide -- in a matchmaking lobby the
+                # run carries on while other players keep going. Stop asking
+                # and play it out rather than spending the whole extract chain
+                # at every remaining checkpoint on something that is not
+                # going to happen.
+                self._log("[Macro] Extraction isn't taking -- the others are still going, so "
+                          "the run plays on and this checkpoint is just continued.")
+            elif self._expedition_extract_count >= self._expedition_extract_accept_at:
                 if self._extract_via_mirrored_button(hwnd, stop_event, left, top, center_x, cont):
                     return "win"
                 if stop_event is not None and stop_event.is_set():
                     return None
+                self._exp_failed_extracts += 1
+                remaining = EXPEDITION_EXTRACT_ATTEMPTS_BEFORE_PLAYING_ON - self._exp_failed_extracts
                 # Never stall on a failed extract: continuing costs one more
-                # wave and another (immediate -- count already past
-                # accept-at) extract chance at the next checkpoint.
-                self._log("[Macro] Extract confirm never registered -- continuing this checkpoint instead.")
+                # wave and another extract chance at the next checkpoint --
+                # but only while there are attempts left to spend.
+                self._log(f"[Macro] Extract confirm never registered -- continuing this checkpoint "
+                          f"instead ({remaining} more {'try' if remaining == 1 else 'tries'} before "
+                          f"the run just plays on)."
+                          if remaining > 0 else
+                          "[Macro] Extract confirm never registered -- that was the last try, so "
+                          "the run plays itself out from here.")
             else:
                 self._log('[Macro] Not the configured sighting yet -- declining (continuing).')
         else:
