@@ -314,7 +314,7 @@ TOWER_SCREEN_TIMEOUT = 10.0  # how long to wait for each Tower screen (nav_tower
 
 # Reference-window region (x, y, w, h) of the Tower game mode.
 # The tower's recent floor is always in this region but it is
-# subject to change
+# subject to change.
 TOWER_CARD_REGION = (565, 230, 770 - 565, 351 - 230)  # (565, 230) -> (770, 351)
 
 # Auto Bounty derives all objective clicks from the live board. These values
@@ -821,12 +821,7 @@ DEFAULT_COORDS = {
     "stage_row_height": STAGE_ROW_HEIGHT,
     "act_row_x": ACT_CLICK_BASE[0], "act_row_y": ACT_CLICK_BASE[1],
     "act_row_height": ACT_ROW_HEIGHT,
-    # Event gamemode card click point (see runner._reach_event_act_selected):
-    # the card is clicked HERE by coordinate, then the event_gamemode button
-    # (the image with the "Event Gamemode" text) is found and clicked by
-    # image search. No tuple constant above -- keep it in sync with main.py's
     # MACRO_COORD_DEFAULTS.
-    "event_gamemode_x": 152, "event_gamemode_y": 253,
     "challenge_stage_1_x": CHALLENGE_STAGE_CLICK["1"][0], "challenge_stage_1_y": CHALLENGE_STAGE_CLICK["1"][1],
     "challenge_stage_2_x": CHALLENGE_STAGE_CLICK["2"][0], "challenge_stage_2_y": CHALLENGE_STAGE_CLICK["2"][1],
     "challenge_stage_3_x": CHALLENGE_STAGE_CLICK["3"][0], "challenge_stage_3_y": CHALLENGE_STAGE_CLICK["3"][1],

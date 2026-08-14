@@ -3998,8 +3998,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             return False
         time.sleep(SETTLE_DELAY)
 
-        self._set_status(action="Clicking Villian Invasion...")
-        match = self._click_found_image(hwnd, "Villian_Invasion", EVENT_SCREEN_TIMEOUT, stop_event)
+        # (1) Click Villain Invasion from the event menu
+        self._set_status(action="Clicking Villain Invasion...")
+        match = self._click_found_image(hwnd, "Villain_Invasion", EVENT_SCREEN_TIMEOUT, stop_event)
         if match is None:
             self._spam_back_until_gone(hwnd, stop_event)
             return False
@@ -4007,42 +4008,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             return False
         time.sleep(SETTLE_DELAY)
 
-        self._set_status(action="Clicking Event gamemode...")
-        # Three steps on this screen. (1) WAIT for the Event gamemode screen
-        # to actually be up before touching the card -- nav_event's own
-        # verify only proves the lobby button was clicked, not that this
-        # screen has rendered, and a blind settle alone clicked the card
-        # mid-animation (reported: "click too fast"). The event_gamemode
-        # image is this screen's anchor. If the crop doesn't match, the
-        # user-configured coordinate below is still the fallback (same
-        # blind-click spirit as Story's story_click).
-        try:
-            match = vision.wait_for_image(
-                hwnd, "event_gamemode", timeout=EVENT_SCREEN_TIMEOUT, stop_event=stop_event)
-        except vision.TemplateNotFound as exc:
-            self._log(f"[Macro] {exc}")
-            return False
-        if match is not None:
-            self._log(f"[Macro] Event gamemode screen is up (score {match['score']:.2f}).")
-        else:
-            if stop_event.is_set():
-                return False
-            self._log(f'[Macro] "event_gamemode" not found within {EVENT_SCREEN_TIMEOUT:.0f}s -- '
-                       "clicking the configured card point anyway.")
-
-        # (2) The Event gamemode CARD sits at a fixed, user-configurable
-        # point (Settings > Debug > Macro Coordinates), clicked by coordinate
-        # -- clicking the matched crop's center didn't register reliably
-        # (reported), so the card is never image-clicked.
-        egm_x, egm_y = self._cxy("event_gamemode")
-        left, top, _, _ = wm.get_window_rect_screen(hwnd)
-        self._log(f"[Macro] Clicking the Event gamemode card at ({egm_x}, {egm_y}).")
-        self._mouse.click(left + egm_x, top + egm_y)
-        if self._checkpoint(stop_event):
-            return False
-        time.sleep(SETTLE_DELAY)
-
-        # (3) Then the event_gamemode image (the button with the "Event
+        # (2) Then the event_gamemode image (the button with the "Event
         # Gamemode" text) -- the click that actually opens the villain list,
         # found and clicked by image search. Its absence after the card click
         # is the sign the card click failed (spam back + retry from lobby).
