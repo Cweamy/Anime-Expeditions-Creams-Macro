@@ -6,6 +6,15 @@ from . import constants
 from .jsonstore import write_json_atomic
 
 TEMPLATES_DIR = os.path.join(constants.APP_DIR, "Templates")
+# Ready-made routines that ship with the app, for people who have not built
+# one yet -- a blank editor is a hard place to start from when the block
+# semantics are the thing you are still learning.
+#
+# A SUBFOLDER on purpose: list_templates() uses os.listdir, so these never
+# appear in the user's own Load... list and can never be saved over or
+# deleted by accident. Picking one copies it out into Templates/ under a
+# free name, so the original stays pristine and the copy is theirs to edit.
+EXAMPLES_DIR = os.path.join(TEMPLATES_DIR, "examples")
 
 
 def _safe_name(name: str) -> str:
@@ -88,6 +97,52 @@ def list_templates() -> list:
         if fname.endswith(".json"):
             names.append(_stored_name(os.path.join(TEMPLATES_DIR, fname), fname[:-5]))
     return sorted(set(names))
+
+
+def list_examples() -> list:
+    """The bundled example routines, as {name, description, blocks} dicts."""
+    if not os.path.isdir(EXAMPLES_DIR):
+        return []
+    out = []
+    for fname in sorted(os.listdir(EXAMPLES_DIR)):
+        if not fname.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(EXAMPLES_DIR, fname), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue        # a broken example must not break the picker
+        out.append({
+            "name": data.get("name") or fname[:-5],
+            "description": data.get("description") or "",
+            "blocks": data.get("blocks") or {},
+        })
+    return out
+
+
+def copy_example(name: str) -> str:
+    """Copy a bundled example into the user's own templates.
+
+    Returns the display name it landed under, or "" if there is no such
+    example.
+
+    The free name is worked out HERE rather than left to save_template.
+    _free_slug deliberately reuses a name whose stored template already
+    matches it -- that is what makes Save overwrite your own template
+    instead of piling up copies -- so going straight through save_template
+    would silently replace an example the user had already taken and
+    edited. Picking the same example twice should give a second copy, not
+    destroy the first.
+    """
+    for example in list_examples():
+        if example["name"] != name:
+            continue
+        candidate, n = name, 2
+        while template_exists(candidate):
+            candidate = f"{name} ({n})"
+            n += 1
+        return save_template(candidate, example["blocks"])
+    return ""
 
 
 def template_exists(name: str) -> bool:

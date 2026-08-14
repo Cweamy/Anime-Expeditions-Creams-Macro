@@ -6954,6 +6954,95 @@ function newTemplate() {
   markCreationEditorSaved();
 }
 
+// Examples: ready-made routines bundled with the app, for people who have
+// not built one yet. Picking one COPIES it into the user's own templates
+// (Api.use_example_template) and then loads that copy, so the bundled
+// original is never the thing being edited.
+async function openExamples() {
+  const modal = document.getElementById('examples-modal');
+  const list = document.getElementById('examples-list');
+  list.innerHTML = '<div class="wh-hint">Loading...</div>';
+  modal.style.display = 'flex';
+  let examples = [];
+  try {
+    examples = await pywebview.api.list_example_templates();
+  } catch (e) {}
+  if (!examples || !examples.length) {
+    list.innerHTML = '<div class="wh-hint">No examples are bundled with this build.</div>';
+    return;
+  }
+  list.innerHTML = examples.map(ex => {
+    // Summarise what the routine contains -- a name alone does not say
+    // whether it places units before the round or during it. The pinned Walk
+    // Path is excluded to match the editor's own phase badge, which calls it
+    // "furniture, not content" (see renderPhases' blockCount).
+    const phases = Object.keys(PHASE_LABELS)
+      .map(ph => {
+        const blocks = (ex.blocks && ex.blocks[ph]) || [];
+        const pinned = ph === 'prestart'
+          && blocks.filter(b => b.type === 'walk_path').length === 1 ? 1 : 0;
+        return { ph, n: blocks.length - pinned };
+      })
+      .filter(x => x.n > 0)
+      .map(x => `${PHASE_LABELS[x.ph]}: ${x.n}`)
+      .join(' &middot; ');
+    // The name goes in a data- attribute and the handler is bound below,
+    // NOT interpolated into an inline onclick. A template called
+    // "King's Tomb run" breaks an onclick either way round the escaping is
+    // applied: the browser HTML-decodes the attribute before the JS engine
+    // parses it, so &#39; becomes a real apostrophe and closes the string.
+    // A data- attribute is only ever read as text, so there is nothing to
+    // escape our way out of.
+    //
+    // The whole row is the target: .task-card already lifts and recolours on
+    // hover, so leaving it unclickable made it look interactive and do
+    // nothing. Use stays as the visible affordance.
+    return `
+      <div class="task-card js-example" data-example="${escapeHtml(ex.name)}"
+           style="--tqc: var(--lilac); align-items: flex-start;">
+        <div class="tq-text">
+          <div class="tq-title">${escapeHtml(ex.name)}</div>
+          ${ex.description ? `<div class="setting-desc" style="white-space: normal;">${escapeHtml(ex.description)}</div>` : ''}
+          <div class="tq-meta" style="margin-top: 4px;">${phases || 'empty'}</div>
+        </div>
+        <button class="task-toolbar-btn add" style="flex-shrink: 0; align-self: center;">Use</button>
+      </div>`;
+  }).join('');
+  list.querySelectorAll('.js-example').forEach(row => {
+    row.addEventListener('click', () => useExample(row.dataset.example));
+  });
+}
+
+// Opened through the API rather than an <a href>: the UI lives inside the
+// app's own webview, so navigating would replace the macro with a web page.
+async function openCommunity() {
+  try { await pywebview.api.open_community(); } catch (e) {}
+}
+
+function closeExamples() {
+  document.getElementById('examples-modal').style.display = 'none';
+}
+
+async function useExample(name) {
+  let result = null;
+  try {
+    result = await pywebview.api.use_example_template(name);
+  } catch (e) {}
+  if (!result || !result.ok) {
+    addLog(`Couldn't add example "${name}".`);
+    return;
+  }
+  closeExamples();
+  await refreshTemplateList();
+  // Load the COPY, by the name it actually landed under -- save_template
+  // renames on collision, so assuming the example's own name would load the
+  // wrong template when one of that name already exists.
+  const sel = document.getElementById('template-select');
+  sel.value = result.name;
+  await loadSelectedTemplate();
+  addLog(`Added example template "${result.name}".`);
+}
+
 async function deleteSelectedTemplate() {
   const sel = document.getElementById('template-select');
   const name = sel.value || document.getElementById('template-name').value.trim();
