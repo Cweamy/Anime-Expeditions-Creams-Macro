@@ -100,3 +100,77 @@ def test_the_counter_is_per_match(monkeypatch):
     _tick(r)
 
     assert len(r.extract_attempts) == GIVE_UP_AFTER + 1
+
+
+# ---------------------------------------------------------------------------
+# Never leave a live run
+# ---------------------------------------------------------------------------
+
+def _extracting_runner(monkeypatch, *, result_screen):
+    """A runner mid-extract whose confirm dialog closes cleanly. Whether the
+    match actually ENDED is what result_screen decides."""
+    from core.runner_constants import EXP_COLOR_CONFIRM_BAND
+
+    r = MacroRunner(MagicMock(), MagicMock(), MagicMock())
+    r.logs = []
+    r._log = r.logs.append
+    r._checkpoint = lambda _stop: False
+    r._expedition_extract_count = 2
+    r._expedition_extract_accept_at = 2
+
+    # A clock that only moves when something sleeps, so the result-screen
+    # deadline expires instantly instead of costing six real seconds.
+    now = {"t": 1000.0}
+    monkeypatch.setattr(rx.time, "sleep", lambda s: now.__setitem__("t", now["t"] + s))
+    monkeypatch.setattr(rx.time, "time", lambda: now["t"])
+
+    # BAND-aware, not call-count aware: the Extract button and the confirm
+    # dialog are both red, and counting calls made the button lookup eat the
+    # confirm's answer -- the test then failed for the wrong reason.
+    confirm_clicked = {"yes": False}
+
+    def find_color_run(h, band, mask, run):
+        if mask is not rx._exp_red:
+            return None                                   # green: checkpoint band quiet
+        if band == EXP_COLOR_CONFIRM_BAND:
+            return None if confirm_clicked["yes"] else {"cx": 500, "cy": 420}
+        return {"cx": 513, "cy": 588}                     # the Extract button itself
+
+    def click(x, y):
+        if (x, y) == (500, 420):
+            confirm_clicked["yes"] = True
+
+    r._mouse.click = click
+    monkeypatch.setattr(rx.vision, "find_color_run", find_color_run)
+    monkeypatch.setattr(rx.vision, "find_image",
+                        lambda h, n, **k: {"cx": 1, "cy": 1, "score": 1.0} if result_screen else None)
+    return r
+
+
+def test_a_real_extract_is_confirmed_by_the_result_screen(monkeypatch):
+    r = _extracting_runner(monkeypatch, result_screen=True)
+
+    assert r._extract_via_mirrored_button(1, threading.Event(), 0, 0, 576,
+                                          {"cx": 637, "cy": 588}) is True
+
+
+def test_quiet_bands_with_no_result_screen_do_not_end_the_run(monkeypatch):
+    """The regression. A reward card over the bottom band empties it just as
+    well as extracting does -- believing that reported a 29-second Victory
+    and left a live match."""
+    r = _extracting_runner(monkeypatch, result_screen=False)
+
+    assert r._extract_via_mirrored_button(1, threading.Event(), 0, 0, 576,
+                                          {"cx": 637, "cy": 588}) is False
+    assert any("still going" in m for m in r.logs)
+
+
+def test_with_no_result_crops_installed_extraction_is_not_blocked(monkeypatch):
+    """Optional/best-effort, like every other template here: nothing to
+    verify with must not mean never extracting."""
+    r = _extracting_runner(monkeypatch, result_screen=False)
+    monkeypatch.setattr(rx.vision, "find_image",
+                        lambda h, n, **k: (_ for _ in ()).throw(rx.vision.TemplateNotFound(n)))
+
+    assert r._extract_via_mirrored_button(1, threading.Event(), 0, 0, 576,
+                                          {"cx": 637, "cy": 588}) is True

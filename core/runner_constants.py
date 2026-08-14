@@ -162,6 +162,13 @@ EXPEDITION_EXTRACT_CONFIRM_TIMEOUT = 16.0
 # let it end on its own. Losing the early exit is a far smaller cost than
 # stalling every checkpoint from here to the end.
 EXPEDITION_EXTRACT_ATTEMPTS_BEFORE_PLAYING_ON = 3
+# How long to wait for the result screen before believing an extract worked.
+# The checkpoint bands going quiet is only ABSENCE -- a reward card covering
+# the bottom band, or a wave transition landing between the two reads, empties
+# them just as well as extracting does. Declaring a win on that leaves a live
+# run. leave_stage/repeat_stage only exist on the result screen, so finding
+# one is the positive evidence that absence is not.
+EXPEDITION_RESULT_CONFIRM_TIMEOUT = 6.0
 EXTRACT_CONFIRM_SETTLE = 5.0  # settle after clicking "extract" -- reported as a click that can visually land without registering
 EXPEDITION_CONTINUE_COOLDOWN = 5.0  # settle after exp_continue/continue_2 -- a lingering banner right after the
 # How long a checkpoint may stay up, being re-found and re-clicked on every

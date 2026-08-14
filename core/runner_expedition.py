@@ -515,6 +515,34 @@ class ExpeditionOps:
         self._interruptible_sleep(EXP_COLOR_CONTINUE_SETTLE, stop_event)
         return None
 
+    def _expedition_result_screen_is_up(self, hwnd, stop_event: threading.Event) -> bool:
+        """Positive proof the match actually ended.
+
+        leave_stage and repeat_stage render only on the result panel, so one
+        of them is real evidence -- unlike the checkpoint bands going quiet,
+        which any modal or transition can cause. Optional/best-effort: if
+        neither crop is installed there is nothing to check with, and the
+        caller falls back to the band reads it already made rather than
+        refusing to ever extract.
+        """
+        deadline = time.time() + EXPEDITION_RESULT_CONFIRM_TIMEOUT
+        installed = False
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return False
+            for name in ("leave_stage", "repeat_stage"):
+                try:
+                    match = vision.find_image(hwnd, name)
+                except vision.TemplateNotFound:
+                    continue
+                installed = True
+                if match is not None:
+                    return True
+            if not installed:
+                return True     # nothing to verify with -- do not block extraction
+            time.sleep(0.3)
+        return False
+
     def _extract_via_mirrored_button(self, hwnd, stop_event: threading.Event, left: int, top: int,
                                        center_x: int, cont: dict) -> bool:
         """Clicks the Extract button -- found by its own red face in the
@@ -576,8 +604,23 @@ class ExpeditionOps:
                         confirm_back = vision.find_color_run(hwnd, EXP_COLOR_CONFIRM_BAND, _exp_red,
                                                               EXP_COLOR_CONFIRM_MIN_RUN)
                         if checkpoint_up is None and confirm_back is None:
-                            self._log("[Macro] Extracted -- on the reward screen.")
-                            return True
+                            # Both bands quiet is still only ABSENCE. A reward
+                            # card over the bottom band, or a wave transition
+                            # landing between the two reads, empties them just
+                            # as well as extracting does -- and believing it
+                            # ends a live run: reported as a 29-second
+                            # "Victory" that then left the lobby mid-match.
+                            #
+                            # leave_stage/repeat_stage exist only on the
+                            # result screen, so one of them showing up is the
+                            # positive evidence. Without it the run is still
+                            # going, which is the safe reading: keep playing.
+                            if self._expedition_result_screen_is_up(hwnd, stop_event):
+                                self._log("[Macro] Extracted -- on the reward screen.")
+                                return True
+                            self._log("[Macro] The checkpoint cleared but no result screen appeared -- "
+                                      "the run is still going, so it carries on rather than leaving.")
+                            return False
                         self._log("[Macro] Confirm closed but the checkpoint is still up -- "
                                    "the extract didn't register, retrying.")
                     break  # restart from the Extract click
