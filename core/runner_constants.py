@@ -88,6 +88,17 @@ START_GAME_BUTTON_WAIT_TIMEOUT = 5.0  # how long to poll for Start Game right af
 # a step it is used instead (nav_settings / nav_closeui are already shipped),
 # because an image survives a layout shift and a coordinate does not.
 ENCOUNTER_REGION = (414, 58, 41, 45)      # the encounter marker's HUD slot
+# An encounter now offers a Continue of its own -- the same green face the
+# wave checkpoints use, which the colour engine already finds. Clicking it
+# resolves the encounter outright, with no teleport, no route and no
+# dialogue. Tried FIRST for that reason: it costs one pixel scan, works on
+# every map rather than the four with a bundled route, and cannot land the
+# character somewhere a recorded walk did not expect.
+#
+# The walk remains as the fallback, because this is a recent change and the
+# older flow is known to work. How long to look for that Continue before
+# falling back:
+ENCOUNTER_CONTINUE_TIMEOUT = 4.0
 ENCOUNTER_TELEPORT_SPAWN_CLICK = (621, 443)  # "teleport to spawn" inside Settings
 # Dialogue advance clicks, in order. The prompt is opened with E; these step
 # through the exchange that follows.
