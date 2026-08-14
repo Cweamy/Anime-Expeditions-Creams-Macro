@@ -123,6 +123,18 @@ nav_tower.png
   expedition.png and nav_tournament. Crop tightly around the Tower card;
   add variants in nav_tower/ if Image Manager crops differ on your setup.
 
+dialogue_engage.png / dialogue_yes.png
+  The Expedition encounter NPC's dialogue buttons (see
+  core.runner_expedition._run_encounter_dialogue). Crop tightly around the
+  WORD, not the whole pill: the pill recolours between encounters -- green
+  one time, red or pink the next -- while the label does not. The menu is
+  four options wide (Discuss / Barter / Engage / Leave), which is why these
+  are searched for rather than clicked at a fixed spot.
+  Optional: with neither installed the exchange falls back to the older
+  fixed click sequence (ENCOUNTER_DIALOGUE_CLICKS), which only fits the
+  layout it was measured on. Adding your own crop is the fix if the
+  dialogue never advances on your setup.
+
 expedition_flower_forest.png / expedition_rose_kingdom.png
   Expedition's own map cards (core.runner._select_expedition_map,
   EXPEDITION_MAP_IMAGES) -- clicked to pick that map on the Expedition

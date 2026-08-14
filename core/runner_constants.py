@@ -91,7 +91,25 @@ ENCOUNTER_REGION = (414, 58, 41, 45)      # the encounter marker's HUD slot
 ENCOUNTER_TELEPORT_SPAWN_CLICK = (621, 443)  # "teleport to spawn" inside Settings
 # Dialogue advance clicks, in order. The prompt is opened with E; these step
 # through the exchange that follows.
+# Fallback only. The exchange is driven by image search now (see
+# _run_encounter_dialogue) because the option buttons move and recolour --
+# they are green one encounter and red or pink the next, and the menu is
+# four options (Discuss / Barter / Engage / Leave), so a fixed position is a
+# one-in-four guess that fails silently. These are kept for setups with none
+# of the dialogue_* crops installed, so nothing regresses for them.
 ENCOUNTER_DIALOGUE_CLICKS = ((403, 663), (581, 577), (667, 665), (581, 577))
+# The dialogue box itself -- clicked to advance the text, and to answer the
+# "click anywhere" prompts the roll puts up. Measured with the Image
+# Manager's region tool: the box is 391x64 at (392, 559), so this is its
+# centre. A whole panel is a far more forgiving target than a button, which
+# is why this one step stays a coordinate.
+ENCOUNTER_DIALOGUE_ADVANCE_CLICK = (587, 591)
+# How long to wait for each dialogue button to render. The panel animates
+# in, so a one-shot search right after the previous click misses it.
+ENCOUNTER_DIALOGUE_OPTION_TIMEOUT = 5.0
+# The d20 roll animation. Clicking through it early does nothing, and the
+# result banner only accepts a click once it has settled.
+ENCOUNTER_DICE_ROLL_SETTLE = 4.5
 ENCOUNTER_STEP_SETTLE = 0.3        # between UI steps, so each registers
 ENCOUNTER_ARRIVE_SETTLE = 1.5      # after the walk, before looking for the prompt
 ENCOUNTER_SPEAK_TIMEOUT = 4.0      # how long to wait for the interact prompt
