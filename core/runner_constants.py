@@ -668,6 +668,7 @@ PLACE_UNIT_VERIFY_ATTEMPTS = 3  # search-then-click retried up to this many time
 PLACE_CARD_SETTLE = 0.35  # let the hotbar card redraw before reading it -- it drops its price a beat after the unit lands, and reading too early would call a good placement a failure
 UNPLACED_RETRY_INTERVAL = 3.0  # gap between retries of a unit that would not go down -- gold accrues over a match, so "cannot afford it yet" stops being true, but checking every poll would spend the whole match on it
 UNPLACED_RETRY_MAX_ATTEMPTS = 5  # a lit card is not proof the unit is missing -- a multi-copy unit keeps its price after every copy, so an uncapped retry re-places it for the rest of the match
+UNPLACED_RETRY_NUDGE = 48  # px a retry steps off the saved spot, cycling N/S/E/W -- each attempt still runs the 38px box + 24/48/72px ring search from there, so this puts NEW ground in reach rather than re-covering what already came up empty
 # "Keep Placing" block toggle: re-run the WHOLE select->find->click->verify
 # sequence (not just re-click a spot) until unit_exist confirms, capped so a
 # genuinely-impossible placement (no gold, unit on cooldown, no valid tile

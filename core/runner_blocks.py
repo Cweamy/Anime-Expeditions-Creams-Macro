@@ -1170,12 +1170,25 @@ class BlockOps:
     # could work. Keyed by hotbar slot, because that is what identifies the
     # unit and one slot can only be pending once.
 
-    def _remember_unplaced(self, block, index, macro_name, unit_ordinal, name, slot):
+    def _remember_unplaced(self, block, index, macro_name, unit_ordinal, name, slot,
+                             reason="unaffordable"):
+        """Queue a placement to try again. `reason` is what stopped it:
+
+        "unaffordable" -- the card is greyed, so the unit is certainly not
+        down, and the retry waits for the price to go gold.
+        "no_tile"      -- the search found nowhere valid, so no click even
+        happened. Also certain, and the one failure that stays detectable for
+        a multi-copy unit, whose card cannot distinguish placed from not.
+        """
         pending = getattr(self, "_unplaced_units", None)
         if pending is None:
             pending = self._unplaced_units = {}
+        existing = pending.get(slot) or {}
         pending[slot] = {"block": block, "index": index, "macro_name": macro_name,
-                         "unit_ordinal": unit_ordinal, "name": name}
+                         "unit_ordinal": unit_ordinal, "name": name, "reason": reason,
+                         # Keep the count across re-queues so a placement that
+                         # fails a different way each time still hits the cap.
+                         "attempts": existing.get("attempts", 0)}
 
     def _forget_unplaced(self, slot):
         pending = getattr(self, "_unplaced_units", None)
@@ -1222,13 +1235,50 @@ class BlockOps:
                 self._log(f'[Macro] Place Unit "{entry["name"]}": card {slot} is still lit after '
                            f'{UNPLACED_RETRY_MAX_ATTEMPTS} retries -- giving up on it for this match.')
                 return
-            self._log(f'[Macro] Place Unit "{entry["name"]}": retrying -- card {slot} is still in '
-                       f'hand and now affordable (attempt {entry["attempts"]}/'
-                       f'{UNPLACED_RETRY_MAX_ATTEMPTS}).')
+            # Try somewhere slightly different each time rather than hammering
+            # the one coordinate. Each attempt still runs the normal search
+            # from wherever it is aimed -- a 38px box, then 24/48/72px rings --
+            # so nudging by UNPLACED_RETRY_NUDGE puts genuinely new ground in
+            # reach instead of re-covering what already came up empty. Without
+            # this, three Cells saved 16px apart fought over one tile and only
+            # one of them ever landed.
+            block = self._nudged_block(entry["block"], entry["attempts"])
+            params = block.get("params", {})
+            self._log(f'[Macro] Place Unit "{entry["name"]}": retrying at '
+                       f'({params.get("x")}, {params.get("y")}) -- {entry.get("reason")}, card {slot} '
+                       f'still in hand (attempt {entry["attempts"]}/{UNPLACED_RETRY_MAX_ATTEMPTS}).')
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
-            self._run_place_unit_block(hwnd, stop_event, left, top, entry["block"], entry["index"],
+            self._run_place_unit_block(hwnd, stop_event, left, top, block, entry["index"],
                                          entry["macro_name"], entry["unit_ordinal"])
             return
+
+    @staticmethod
+    def _nudged_block(block: dict, attempt: int) -> dict:
+        """A copy of `block` aimed UNPLACED_RETRY_NUDGE px off the saved spot,
+        in a different direction per attempt.
+
+        A copy, never the original: the block belongs to the loaded template
+        and mutating it would move the saved coordinate for the rest of the
+        run -- and for every later repeat of the stage.
+
+        Attempt 1 keeps the saved spot, so the first retry is a straight redo
+        (the usual case is simply that gold arrived). Later attempts step out
+        in the four compass directions.
+        """
+        offsets = ((0, 0), (UNPLACED_RETRY_NUDGE, 0), (-UNPLACED_RETRY_NUDGE, 0),
+                   (0, UNPLACED_RETRY_NUDGE), (0, -UNPLACED_RETRY_NUDGE))
+        dx, dy = offsets[max(0, attempt - 1) % len(offsets)]
+        if (dx, dy) == (0, 0):
+            return block
+        params = dict(block.get("params") or {})
+        try:
+            params["x"] = int(params.get("x") or 0) + dx
+            params["y"] = int(params.get("y") or 0) + dy
+        except (TypeError, ValueError):
+            return block
+        nudged = dict(block)
+        nudged["params"] = params
+        return nudged
 
     @staticmethod
     def _card_slot_for(hotkey):
@@ -1478,8 +1528,20 @@ class BlockOps:
             self._release_quick_place_shift()
             return
         if spot is None:
+            # Queued, not abandoned. No click happened, so this unit is
+            # definitely NOT on the board -- which makes this the one failure
+            # that is unambiguous even for a multi-copy unit, where the card
+            # cannot say. "No free tile" is usually temporary too: the tiles
+            # around the saved spot get taken by units placed moments before,
+            # and the retry nudges to a different spot each attempt. Dropping
+            # the block outright is why three Cells saved 16px apart only ever
+            # landed one of them.
             self._log(f'[Macro] Place Unit "{name}": no valid (white) tile found at ({orig_x}, {orig_y}) '
-                       f'or within {PLACE_SPIRAL_RADII[-1]}px around it -- giving up on this block.')
+                       f'or within {PLACE_SPIRAL_RADII[-1]}px around it -- queued to retry nearby.')
+            no_tile_slot = self._card_slot_for(hotkey)
+            if no_tile_slot is not None:
+                self._remember_unplaced(block, index, macro_name, unit_ordinal, name,
+                                         no_tile_slot, reason="no_tile")
             if not next_is_same_unit:
                 self._release_quick_place_shift()
             return

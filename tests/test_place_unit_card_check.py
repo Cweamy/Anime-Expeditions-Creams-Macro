@@ -441,3 +441,69 @@ def test_the_retry_gives_up_eventually(retrying, monkeypatch):
     assert len(retrying.retried) == CAP, f"retried {len(retrying.retried)} times, cap is {CAP}"
     assert 5 not in retrying._unplaced_units
     assert any("giving up on it" in m for m in retrying.logs)
+
+
+# ---------------------------------------------------------------------------
+# Moving it around instead of giving up
+# ---------------------------------------------------------------------------
+
+def test_no_valid_tile_is_queued_not_abandoned(placing, monkeypatch):
+    """No click happened, so the unit is certainly not down -- and for a
+    multi-copy unit this is the ONLY failure still detectable, since the card
+    cannot tell placed from not. Dropping the block is why three Cells saved
+    16px apart only ever landed one."""
+    monkeypatch.setattr(BlockOps, "_find_valid_place_spot", lambda self, *a, **k: None)
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s: pytest.fail("no click happened; no card to read"))
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    assert placing._unplaced_units[4]["reason"] == "no_tile"
+    assert any("queued to retry nearby" in m for m in placing.logs)
+
+
+def test_the_first_retry_reuses_the_saved_spot():
+    """Usually the only thing that changed is that gold arrived."""
+    block = {"params": {"x": 500, "y": 400}}
+    assert BlockOps._nudged_block(block, 1) is block
+
+
+@pytest.mark.parametrize("attempt", [2, 3, 4, 5])
+def test_later_retries_step_somewhere_new(attempt):
+    from core.runner_constants import UNPLACED_RETRY_NUDGE as N
+    block = {"params": {"x": 500, "y": 400}}
+    p = BlockOps._nudged_block(block, attempt)["params"]
+    assert (abs(p["x"] - 500), abs(p["y"] - 400)) in ((N, 0), (0, N))
+
+
+def test_every_direction_is_tried_before_repeating():
+    block = {"params": {"x": 500, "y": 400}}
+    spots = {(BlockOps._nudged_block(block, a)["params"]["x"],
+              BlockOps._nudged_block(block, a)["params"]["y"]) for a in range(1, 6)}
+    assert len(spots) == 5, "a retry direction is wasted on a duplicate spot"
+
+
+def test_nudging_never_mutates_the_template_block():
+    """The block belongs to the loaded template. Moving its coordinate would
+    shift the saved spot for the rest of the run and every later repeat."""
+    block = {"params": {"x": 500, "y": 400}}
+    BlockOps._nudged_block(block, 3)
+    assert block["params"] == {"x": 500, "y": 400}
+
+
+def test_a_retry_actually_aims_at_the_nudged_spot(retrying, monkeypatch):
+    from core.runner_constants import UNPLACED_RETRY_NUDGE as N
+    _cards(monkeypatch, {5: IN_HAND_RICH, 6: IN_HAND_RICH})
+    del retrying._unplaced_units[6]
+    aimed = []
+    retrying._run_place_unit_block = (
+        lambda h, s, l, t, b, i, m, o, **k: aimed.append((b["params"]["x"], b["params"]["y"])))
+
+    for _ in range(3):
+        retrying._unplaced_next_retry_at = 0.0
+        retrying._retry_unplaced_units(1, threading.Event())
+
+    assert aimed[0] == (1, 1), "first retry should redo the saved spot"
+    assert len(set(aimed)) == 3, f"retries did not move: {aimed}"
+    assert any(abs(x - 1) == N or abs(y - 1) == N for x, y in aimed[1:])
