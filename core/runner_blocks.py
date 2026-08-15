@@ -668,7 +668,23 @@ class BlockOps:
             # visibly started. Story/Raid keep waiting for a real number:
             # their badge always exists, so an unreadable one there is a
             # detection problem worth surfacing rather than working around.
+            # How long this block has been unable to read the counter at all.
+            # Kept in the block's own state so it clears when the block
+            # completes or the phase is replayed, rather than leaking across.
+            state.setdefault("unreadable_since", time.time())
+            unreadable_for = time.time() - state["unreadable_since"]
+
             quiet_for = time.time() - self._last_board_disruption_at
+            if (self._is_expedition_match
+                    and unreadable_for >= WAIT_WAVE_UNREADABLE_CEILING):
+                # The card gate never armed -- no kills, so no card. Waiting
+                # any longer strands the blocks behind this one, and on
+                # Expedition those are the placements that would have earned
+                # the kills in the first place.
+                self._log(f"{label}: no wave counter readable for "
+                          f"{unreadable_for:.0f}s -- releasing anyway so the blocks behind "
+                          f"this one still run.")
+                return True
             if (self._is_expedition_match and self._last_reward_card_at
                     and quiet_for >= WAIT_WAVE_NO_COUNTER_SETTLE):
                 self._log(f"{label}: no wave counter on this gamemode, but the battle is "
@@ -678,6 +694,10 @@ class BlockOps:
             self._log(f"{label}: couldn't read the wave counter -- retrying in {WAIT_WAVE_POLL_INTERVAL:.0f}s.")
             state["next_check"] = time.time() + WAIT_WAVE_POLL_INTERVAL
             return False
+
+        # A real read: the counter is legible again, so the ceiling clock
+        # starts over rather than counting failures from earlier in the match.
+        state.pop("unreadable_since", None)
 
         wave_text = (
             f"{current}/{maximum}"

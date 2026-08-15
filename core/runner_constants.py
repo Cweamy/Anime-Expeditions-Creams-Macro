@@ -796,6 +796,21 @@ EXPEDITION_WAVE_REGION = (417, 16, 110, 33)
 # together than this, the wait never releases and the deferred placements
 # never happen. MATCH_RESULT_TIMEOUT is the only backstop.
 WAIT_WAVE_NO_COUNTER_SETTLE = 20.0
+# A hard ceiling on the whole wait, and the reason it exists is worth
+# writing down: the quiet-period release above is gated on a reward card
+# having been seen, because a card is proof the fighting started. Cards drop
+# for KILLS -- so a run that is going badly produces none, the gate never
+# arms, and the blocks behind this one never run.
+#
+# On Expedition those blocks are the deferred unit placements, which makes it
+# circular: the team is short the units that would earn the kills that would
+# produce the card that would release the units. Observed live as a pair of
+# runs that sat on "couldn't read the wave counter" for forty seconds, placed
+# three of six units, and lost in about a minute -- against ten-minute wins
+# on every run where the counter did read.
+#
+# So past this, release regardless of cards. Placing late beats never.
+WAIT_WAVE_UNREADABLE_CEILING = 30.0
 # A mid-run "Start Game?" stages a new sub-round, and the units already
 # placed run off the board entirely -- their tiles free up, so the Battle
 # phase is replayed from the top to put them back.

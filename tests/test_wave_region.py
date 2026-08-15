@@ -249,3 +249,72 @@ def test_each_match_gets_its_own_replay(monkeypatch):
     runner._replay_battle_after_restage()
 
     assert runner._battle_block_index == 0
+
+
+# ---------------------------------------------------------------------------
+# The hard ceiling: never hold forever
+# ---------------------------------------------------------------------------
+
+def test_an_unreadable_counter_releases_after_the_ceiling_even_with_no_card(monkeypatch):
+    """The regression, and the reason the ceiling exists.
+
+    The quiet-period release is gated on a reward card having been seen,
+    because a card proves the fighting started. Cards drop for KILLS -- so a
+    run going badly produces none, the gate never arms, and the deferred
+    placements never run. That is circular on Expedition: the team is short
+    the units that would earn the kills that would produce the card.
+
+    Observed live as two runs that sat on "couldn't read the wave counter"
+    for forty seconds, placed three of six units, and lost in about a
+    minute, against ten-minute wins whenever the counter did read.
+    """
+    from core.runner_constants import WAIT_WAVE_UNREADABLE_CEILING
+    runner = _runner()
+    _unreadable_wave(runner, monkeypatch)
+    runner._is_expedition_match = True
+    runner._last_reward_card_at = 0.0          # no card has EVER been seen
+    runner._last_board_disruption_at = 0.0
+    runner._battle_block_state = {"unreadable_since": time.time() - (WAIT_WAVE_UNREADABLE_CEILING + 1)}
+
+    assert runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1) is True
+
+
+def test_it_does_not_release_before_the_ceiling(monkeypatch):
+    from core.runner_constants import WAIT_WAVE_UNREADABLE_CEILING
+    runner = _runner()
+    _unreadable_wave(runner, monkeypatch)
+    runner._is_expedition_match = True
+    runner._last_reward_card_at = 0.0
+    runner._last_board_disruption_at = 0.0
+    runner._battle_block_state = {"unreadable_since": time.time() - (WAIT_WAVE_UNREADABLE_CEILING - 5)}
+
+    assert runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1) is False
+
+
+def test_story_is_not_released_by_the_ceiling(monkeypatch):
+    """Story/Raid always have a badge, so an unreadable one there is a
+    detection problem worth surfacing rather than working around."""
+    from core.runner_constants import WAIT_WAVE_UNREADABLE_CEILING
+    runner = _runner()
+    _unreadable_wave(runner, monkeypatch)
+    runner._is_expedition_match = False
+    runner._battle_block_state = {"unreadable_since": time.time() - (WAIT_WAVE_UNREADABLE_CEILING * 3)}
+
+    assert runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1) is False
+
+
+def test_a_successful_read_restarts_the_ceiling_clock(monkeypatch):
+    """A counter that reads, then goes unreadable later, must get its own
+    full allowance rather than inheriting failures from earlier in the run."""
+    runner = _runner()
+    runner._checkpoint = lambda _stop: False
+    runner._is_expedition_match = True
+    runner._battle_block_state = {"unreadable_since": 1.0}
+    frame = np.zeros((33, 110, 3), dtype=np.uint8)
+    monkeypatch.setattr(runner_blocks.vision, "capture_window_region_bgr",
+                        lambda _hwnd, _region: frame)
+    monkeypatch.setattr(wave_module, "read_wave", lambda _img: (1, 5))
+
+    runner._run_wait_wave_tick(123, {"params": {"wave": 4}}, 1)
+
+    assert "unreadable_since" not in runner._battle_block_state
