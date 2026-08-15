@@ -1211,8 +1211,20 @@ class BlockOps:
             if card.get("affordable") is False:
                 continue          # still too expensive; leave it pending
             entry = pending[slot]
+            # Bounded, because "the card is lit" is not proof the unit is
+            # missing -- a multi-copy unit keeps its price after every copy.
+            # Without a cap a card that never clears is re-placed for the rest
+            # of the match; live, that ran until the game refused with "Max
+            # placement limit reached!".
+            entry["attempts"] = entry.get("attempts", 0) + 1
+            if entry["attempts"] > UNPLACED_RETRY_MAX_ATTEMPTS:
+                pending.pop(slot)
+                self._log(f'[Macro] Place Unit "{entry["name"]}": card {slot} is still lit after '
+                           f'{UNPLACED_RETRY_MAX_ATTEMPTS} retries -- giving up on it for this match.')
+                return
             self._log(f'[Macro] Place Unit "{entry["name"]}": retrying -- card {slot} is still in '
-                       f'hand and now affordable.')
+                       f'hand and now affordable (attempt {entry["attempts"]}/'
+                       f'{UNPLACED_RETRY_MAX_ATTEMPTS}).')
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
             self._run_place_unit_block(hwnd, stop_event, left, top, entry["block"], entry["index"],
                                          entry["macro_name"], entry["unit_ordinal"])
@@ -1543,36 +1555,40 @@ class BlockOps:
         if clicked_to_verify:
             self._reset_unit_info_panel(hwnd)
 
-        if card is not None and card["in_hand"]:
-            why = ('cannot afford it yet' if card.get("affordable") is False
-                   else 'the game would not take the tile')
-            # `not verify` means Pre Start specifically. NOT skip_verify --
-            # that is also true for a quick-place chain, which runs in Battle
-            # and is not staging anything, so keying on it printed the Pre
-            # Start explanation for mid-battle placements.
-            if not verify:
-                # Pre Start STAGES a unit rather than deploying it. Observed
-                # live: all three Pre Start cards kept their price for the
-                # whole phase and only cleared once the round started, even
-                # though those units did end up on the board. A lit card here
-                # is therefore not evidence of failure and must not be
-                # reported as one. It is still queued -- the retry pass
-                # re-reads the card once the round is running and drops it
-                # without a click if it cleared by itself.
-                self._log(f'[Macro] Place Unit "{name}": staged at ({cur_x}, {cur_y}) -- card '
-                           f'{slot} still shows its price ({why}); will confirm once the '
-                           f'round starts.')
-            else:
-                self._log(f'[Macro] Place Unit "{name}": did NOT place at ({cur_x}, {cur_y}) -- '
-                           f'card {slot} still in hand ({why}).')
+        # A lit card means "this unit still has a copy you could place" -- NOT
+        # "this placement failed". A unit the game lets you field several of
+        # keeps its price after each copy goes down, so reading lit as failure
+        # called every multi-copy placement a failure and left the retry pass
+        # placing more copies forever. Observed on East Town: Salmon Sorcerer 3
+        # retried indefinitely while already on the board, until the game put
+        # up "Max placement limit reached!".
+        #
+        # An UNAFFORDABLE card is the one state that does prove a placement did
+        # not happen -- the game cannot have taken money it would not let you
+        # spend. A lit but affordable card is ambiguous between "more copies
+        # left" and "the tile was refused", so it is trusted as placed, exactly
+        # as the code did before this check existed.
+        definitely_failed = (card is not None and card["in_hand"]
+                             and card.get("affordable") is False)
+
+        # Record the position unless the unit demonstrably is not there.
+        # Skipping this for every lit card meant a Pre Start unit never got a
+        # position, so _placed_unit_click_point could not find it and every
+        # Auto Upgrade Unit block aimed at it silently skipped -- live, the
+        # three Senku placed in Pre Start went unupgraded while Kenpachi and
+        # Megumi, placed in Battle, upgraded fine.
+        if unit_ordinal is not None and not definitely_failed:
+            self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+
+        if definitely_failed:
+            where = 'staged at' if not verify else 'did NOT place at'
+            self._log(f'[Macro] Place Unit "{name}": {where} ({cur_x}, {cur_y}) -- card {slot} '
+                       f'is greyed out, so it cannot afford it yet; queued to retry.')
             self._remember_unplaced(block, index, macro_name, unit_ordinal, name, slot)
             return
         self._forget_unplaced(slot)
 
-        self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) '
-                   f'(card {slot} cleared).')
-        if unit_ordinal is not None:
-            self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+        self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}).')
 
     def _place_unit_retrying(self, hwnd, stop_event: threading.Event, left: int, top: int,
                                name: str, hotkey, orig_x: int, orig_y: int, block: dict,

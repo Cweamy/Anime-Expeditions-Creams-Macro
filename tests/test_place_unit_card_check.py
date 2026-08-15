@@ -180,18 +180,25 @@ def test_a_cleared_card_counts_as_placed(placing, monkeypatch):
     _place(placing)
 
     assert placing._placed_unit_positions[7] == (500, 400)
-    assert any("card 4 cleared" in m for m in placing.logs)
+    assert any("placed at" in m for m in placing.logs)
 
 
-def test_a_card_still_in_hand_is_reported_as_a_failure(placing, monkeypatch):
-    """The regression. This is what used to log "verified placed (score 1.00)"."""
+def test_a_lit_but_affordable_card_is_trusted_as_placed(placing, monkeypatch):
+    """A lit card means "this unit still has a copy you could place", NOT
+    "this placement failed" -- a multi-copy unit keeps its price after every
+    copy goes down. Live on East Town: Salmon Sorcerer 3 was called a failure
+    while already on the board, and the retry pass kept placing more until the
+    game refused with "Max placement limit reached!". Only an unaffordable
+    card proves nothing was placed."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
                         lambda h, s: {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45})
+    placing._unplaced_units = {}
 
     _place(placing)
 
-    assert 7 not in placing._placed_unit_positions, "recorded a position for a unit never placed"
-    assert any("did NOT place" in m for m in placing.logs)
+    assert placing._placed_unit_positions[7] == (500, 400)
+    assert not placing._unplaced_units, "queued a retry on an ambiguous card"
+    assert not any("did NOT place" in m for m in placing.logs)
 
 
 def test_being_unable_to_afford_it_says_so(placing, monkeypatch):
@@ -214,22 +221,21 @@ def test_a_pre_start_placement_is_checked_too(placing, monkeypatch):
     _place(placing, verify=False)
 
     assert 7 not in placing._placed_unit_positions
-    assert 4 in placing._unplaced_units, "a staged unit still has to be followed up"
+    assert 4 in placing._unplaced_units, "an unaffordable unit still has to be followed up"
 
 
-def test_pre_start_does_not_cry_wolf(placing, monkeypatch):
-    """Pre Start stages rather than deploys: every card keeps its price for
-    the whole phase and clears when the round starts, even for units that do
-    go down. Calling that a failure made all three Pre Start placements
-    report one on every single live run."""
+def test_a_pre_start_unit_still_gets_a_recorded_position(placing, monkeypatch):
+    """Auto Upgrade Unit finds its target through _placed_unit_positions. When
+    a lit card suppressed the recording, every Pre Start unit became invisible
+    to it -- live, the three Senku placed in Pre Start went unupgraded while
+    Kenpachi and Megumi, placed in Battle, upgraded fine."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
                         lambda h, s: {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45})
     placing._unplaced_units = {}
 
     _place(placing, verify=False)
 
-    assert not any("did NOT place" in m for m in placing.logs)
-    assert any("staged" in m for m in placing.logs)
+    assert placing._placed_unit_positions[7] == (500, 400),         "no position recorded -- its Auto Upgrade block would silently skip"
 
 
 def test_the_retry_clicks_are_kept(placing, monkeypatch):
@@ -408,7 +414,7 @@ def test_a_quick_place_in_battle_is_not_called_staged(placing, monkeypatch):
     so consecutive same-hotkey placements in BATTLE reported themselves as
     staged. Seen live on East Town for Salmon Sorcerer 2 and 3."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45})
+                        lambda h, s: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
     placing._unplaced_units = {}
     block = {"type": "place_unit", "hotkey": "2", "params": {"name": "Salmon Sorcerer 2", "x": 500, "y": 400}}
 
@@ -417,4 +423,21 @@ def test_a_quick_place_in_battle_is_not_called_staged(placing, monkeypatch):
                                    unit_ordinal=5, next_is_same_unit=True, verify=True)
 
     assert not any("staged" in m for m in placing.logs), "Battle placement called itself staged"
-    assert any("did NOT place" in m for m in placing.logs)
+
+
+def test_the_retry_gives_up_eventually(retrying, monkeypatch):
+    """A lit card is not proof the unit is missing, so the retry has to be
+    bounded. Uncapped, a multi-copy card that never clears was re-placed for
+    the rest of the match -- live that ran until "Max placement limit
+    reached!"."""
+    from core.runner_constants import UNPLACED_RETRY_MAX_ATTEMPTS as CAP
+    _cards(monkeypatch, {5: IN_HAND_RICH, 6: IN_HAND_RICH})
+    del retrying._unplaced_units[6]                 # one slot, to keep the count clean
+
+    for _ in range(CAP + 3):
+        retrying._unplaced_next_retry_at = 0.0
+        retrying._retry_unplaced_units(1, threading.Event())
+
+    assert len(retrying.retried) == CAP, f"retried {len(retrying.retried)} times, cap is {CAP}"
+    assert 5 not in retrying._unplaced_units
+    assert any("giving up on it" in m for m in retrying.logs)
