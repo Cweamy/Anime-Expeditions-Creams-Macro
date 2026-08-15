@@ -527,10 +527,6 @@ class ExpeditionOps:
         self._battle_replayed = True
         self._battle_block_index = 0
         self._battle_block_state = {}
-        # The units ran off the board with the re-stage, so the tiles they
-        # held are free again -- keeping them in the occupied list would make
-        # the placements about to re-run refuse their own previous spots.
-        self._placed_points_this_match = []
         self._last_board_disruption_at = time.time()
         self._log("[Macro] The round is re-staging, so the units have left the board -- "
                   "replaying the Battle phase once to put them back.")
