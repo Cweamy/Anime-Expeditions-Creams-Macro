@@ -400,3 +400,21 @@ def test_the_battle_tick_goes_back_for_them_once_the_list_is_done(monkeypatch):
     runner._run_battle_blocks_tick(1, threading.Event(), [{"type": "wait_ms"}], False)
 
     assert called, "the exhausted Battle list never triggered a retry"
+
+
+def test_a_quick_place_in_battle_is_not_called_staged(placing, monkeypatch):
+    """"staged ... will confirm once the round starts" is Pre Start wording.
+    It was keyed on skip_verify, which is ALSO true for a quick-place chain --
+    so consecutive same-hotkey placements in BATTLE reported themselves as
+    staged. Seen live on East Town for Salmon Sorcerer 2 and 3."""
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s: {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45})
+    placing._unplaced_units = {}
+    block = {"type": "place_unit", "hotkey": "2", "params": {"name": "Salmon Sorcerer 2", "x": 500, "y": 400}}
+
+    # next_is_same_unit=True is what starts a quick-place chain.
+    placing._run_place_unit_block(1, threading.Event(), 0, 0, block, 1, "m",
+                                   unit_ordinal=5, next_is_same_unit=True, verify=True)
+
+    assert not any("staged" in m for m in placing.logs), "Battle placement called itself staged"
+    assert any("did NOT place" in m for m in placing.logs)

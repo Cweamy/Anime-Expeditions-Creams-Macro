@@ -1546,7 +1546,11 @@ class BlockOps:
         if card is not None and card["in_hand"]:
             why = ('cannot afford it yet' if card.get("affordable") is False
                    else 'the game would not take the tile')
-            if skip_verify:
+            # `not verify` means Pre Start specifically. NOT skip_verify --
+            # that is also true for a quick-place chain, which runs in Battle
+            # and is not staging anything, so keying on it printed the Pre
+            # Start explanation for mid-battle placements.
+            if not verify:
                 # Pre Start STAGES a unit rather than deploying it. Observed
                 # live: all three Pre Start cards kept their price for the
                 # whole phase and only cleared once the round started, even
