@@ -628,3 +628,71 @@ def test_no_upgrade_block_for_that_unit_is_fine(deferring, monkeypatch):
 
     assert deferring.upgraded == []
     assert deferring.retried == ["cell"]
+
+
+# ---------------------------------------------------------------------------
+# Circling before the round starts
+# ---------------------------------------------------------------------------
+# The sweep used to run only from _run_battle_blocks_tick, so a unit Pre Start
+# could not place sat queued until the match was already underway. Reported
+# live as "the circling logic didn't trigger" -- every failure in that log was
+# a Pre Start one.
+
+def _sweeper(monkeypatch, cards):
+    # Fake clock: sleep advances it, so PRESTART_SWEEP_TIMEOUT expires
+    # instantly instead of spinning for twelve real seconds.
+    now = {"t": 1000.0}
+    monkeypatch.setattr(runner_blocks.time, "sleep",
+                        lambda s: now.__setitem__("t", now["t"] + max(s, 0.1)))
+    monkeypatch.setattr(runner_blocks.time, "time", lambda: now["t"])
+    monkeypatch.setattr(runner_blocks.wm, "get_window_rect_screen", lambda h: (0, 0, 1152, 756))
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card", lambda h, s, n=None: cards[s])
+    r = _RetryRunner()
+    r._remember_unplaced({"type": "place_unit", "hotkey": "5",
+                          "params": {"name": "cell", "x": 500, "y": 400}},
+                         5, "m", 5, "cell", 5, reason="no_tile")
+    return r
+
+
+def test_pre_start_circles_a_unit_it_could_not_place(monkeypatch):
+    aimed = []
+    r = _sweeper(monkeypatch, {5: IN_HAND_RICH})
+    r._run_place_unit_block = lambda h, s, l, t, b, i, m, o, **k: aimed.append(
+        (b["params"]["x"], b["params"]["y"]))
+
+    r._sweep_unplaced_before_start(1, threading.Event())
+
+    assert len(aimed) > 1, "only tried once -- it did not circle"
+    assert len(set(aimed)) > 1, f"re-aimed at the same spot every pass: {aimed}"
+    assert any("circling for a spot" in m for m in r.logs)
+
+
+def test_pre_start_stops_once_the_unit_goes_down(monkeypatch):
+    r = _sweeper(monkeypatch, {5: IN_HAND_RICH})
+    def place(h, s, l, t, b, i, m, o, **k):
+        r._unplaced_units.pop(5, None)        # this attempt worked
+    r._run_place_unit_block = place
+
+    r._sweep_unplaced_before_start(1, threading.Event())
+
+    assert r._unplaced_units == {}
+
+
+def test_pre_start_does_not_stall_the_round_on_an_unaffordable_unit(monkeypatch):
+    """Gold only accrues once the match is running, so circling cannot help --
+    it is handed to the Battle sweep instead of holding up Start Game."""
+    r = _sweeper(monkeypatch, {5: IN_HAND_BROKE})
+    r._run_place_unit_block = lambda *a, **k: pytest.fail("clicked for a unit it cannot afford")
+
+    r._sweep_unplaced_before_start(1, threading.Event())
+
+    assert 5 in r._unplaced_units
+    assert any("leaving them queued" in m for m in r.logs)
+
+
+def test_nothing_queued_means_no_sweep(monkeypatch):
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: pytest.fail("swept with nothing pending"))
+    r = _RetryRunner()
+    r._sweep_unplaced_before_start(1, threading.Event())
+    assert r.logs == []

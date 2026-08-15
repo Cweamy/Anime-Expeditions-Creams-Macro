@@ -1028,6 +1028,47 @@ class BlockOps:
             # it. Whatever else happens, Shift never leaves this function
             # still held.
             self._release_quick_place_shift()
+        self._sweep_unplaced_before_start(hwnd, stop_event)
+
+    def _sweep_unplaced_before_start(self, hwnd, stop_event: threading.Event) -> None:
+        """Keep circling anything Pre Start could not place, before the round
+        starts.
+
+        The retry sweep used to run only from _run_battle_blocks_tick, so a
+        unit that failed here sat queued until the match was already underway
+        -- reported live as "the circling logic didn't trigger", because every
+        failure in the log was a Pre Start one.
+
+        A saved coordinate that no longer lands on a free tile is exactly what
+        the circle is for: each pass re-aims UNPLACED_RETRY_NUDGE around the
+        spot and runs the full tile search from there, so a coordinate that
+        has drifted gets corrected instead of costing the unit.
+
+        Bounded by PRESTART_SWEEP_TIMEOUT, because Start Game is waiting on
+        this and a unit that simply cannot be afforded yet will never come
+        good before the round begins -- that one is left for the Battle sweep,
+        where gold actually accrues.
+        """
+        if not getattr(self, "_unplaced_units", None):
+            return
+        deadline = time.time() + PRESTART_SWEEP_TIMEOUT
+        self._log(f"[Macro] Pre Start: {len(self._unplaced_units)} unit(s) did not go down -- "
+                   f"circling for a spot before starting the round.")
+        while self._unplaced_units and time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return
+            before = len(self._unplaced_units)
+            self._unplaced_next_retry_at = 0.0      # no rate limit here; the round is waiting
+            self._retry_unplaced_units(hwnd, stop_event)
+            if len(self._unplaced_units) == before and all(
+                    e.get("attempts", 0) >= UNPLACED_RETRY_MAX_ATTEMPTS
+                    for e in self._unplaced_units.values()):
+                break                               # every pending unit is out of tries
+            time.sleep(PRESTART_SWEEP_INTERVAL)
+        still = len(getattr(self, "_unplaced_units", {}) or {})
+        if still:
+            self._log(f"[Macro] Pre Start: {still} unit(s) still not placed -- leaving them queued "
+                       f"for the Battle sweep, where gold keeps coming in.")
 
     def _run_prestart_single_block(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
                                      block: dict, i: int, macro_name: str, first_repeat: bool, next_block: dict) -> None:

@@ -669,6 +669,8 @@ PLACE_CARD_SETTLE = 0.35  # let the hotbar card redraw before reading it -- it d
 UNPLACED_RETRY_INTERVAL = 3.0  # gap between retries of a unit that would not go down -- gold accrues over a match, so "cannot afford it yet" stops being true, but checking every poll would spend the whole match on it
 UNPLACED_RETRY_MAX_ATTEMPTS = 9  # tries per unit per match: the saved spot, then a full circle of eight points around it. Fewer than nine and the circle is never finished -- at 3 it only ever tried two directions and gave up with most of the area around the spot untested. Still bounded, because a lit card is not proof the unit is missing and an uncapped retry filled the board with duplicates
 UNPLACED_RETRY_NUDGE = 24  # px a retry steps off the saved spot, circling around it. Deliberately SHORT: each attempt runs its own 38px box plus 24/48/72px ring search from wherever it is aimed, so a small step re-centres that search nearby rather than throwing the unit across the board
+PRESTART_SWEEP_TIMEOUT = 12.0  # how long Pre Start keeps circling for a spot before starting the round anyway -- Start Game is waiting on this, and a unit that is merely unaffordable will not come good until gold accrues in Battle
+PRESTART_SWEEP_INTERVAL = 0.4  # gap between circling passes during Pre Start
 # "Keep Placing" block toggle: re-run the WHOLE select->find->click->verify
 # sequence (not just re-click a spot) until unit_exist confirms, capped so a
 # genuinely-impossible placement (no gold, unit on cooldown, no valid tile
