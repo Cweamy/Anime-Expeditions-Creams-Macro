@@ -552,15 +552,32 @@ class ExpeditionOps:
             refound = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green, EXP_COLOR_CONTINUE_MIN_RUN)
             if refound is not None:
                 cont = refound
-            if self._expedition_extract_count >= self._expedition_extract_accept_at:
+            playing_on = self._exp_failed_extracts >= EXPEDITION_EXTRACT_ATTEMPTS_BEFORE_PLAYING_ON
+            if playing_on:
+                # Extraction has been tried and did not take, repeatedly. It
+                # is not entirely ours to decide -- in a matchmaking lobby the
+                # run carries on while other players keep going. Stop asking
+                # and play it out rather than spending the whole extract chain
+                # at every remaining checkpoint on something that is not
+                # going to happen.
+                self._log("[Macro] Extraction isn't taking -- the others are still going, so "
+                          "the run plays on and this checkpoint is just continued.")
+            elif self._expedition_extract_count >= self._expedition_extract_accept_at:
                 if self._extract_via_mirrored_button(hwnd, stop_event, left, top, center_x, cont):
                     return "win"
                 if stop_event is not None and stop_event.is_set():
                     return None
+                self._exp_failed_extracts += 1
+                remaining = EXPEDITION_EXTRACT_ATTEMPTS_BEFORE_PLAYING_ON - self._exp_failed_extracts
                 # Never stall on a failed extract: continuing costs one more
-                # wave and another (immediate -- count already past
-                # accept-at) extract chance at the next checkpoint.
-                self._log("[Macro] Extract confirm never registered -- continuing this checkpoint instead.")
+                # wave and another extract chance at the next checkpoint --
+                # but only while there are attempts left to spend.
+                self._log(f"[Macro] Extract confirm never registered -- continuing this checkpoint "
+                          f"instead ({remaining} more {'try' if remaining == 1 else 'tries'} before "
+                          f"the run just plays on)."
+                          if remaining > 0 else
+                          "[Macro] Extract confirm never registered -- that was the last try, so "
+                          "the run plays itself out from here.")
             else:
                 self._log('[Macro] Not the configured sighting yet -- declining (continuing).')
         else:
@@ -593,6 +610,34 @@ class ExpeditionOps:
             time.sleep(0.25)
         self._interruptible_sleep(EXP_COLOR_CONTINUE_SETTLE, stop_event)
         return None
+
+    def _expedition_result_screen_is_up(self, hwnd, stop_event: threading.Event) -> bool:
+        """Positive proof the match actually ended.
+
+        leave_stage and repeat_stage render only on the result panel, so one
+        of them is real evidence -- unlike the checkpoint bands going quiet,
+        which any modal or transition can cause. Optional/best-effort: if
+        neither crop is installed there is nothing to check with, and the
+        caller falls back to the band reads it already made rather than
+        refusing to ever extract.
+        """
+        deadline = time.time() + EXPEDITION_RESULT_CONFIRM_TIMEOUT
+        installed = False
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return False
+            for name in ("leave_stage", "repeat_stage"):
+                try:
+                    match = vision.find_image(hwnd, name)
+                except vision.TemplateNotFound:
+                    continue
+                installed = True
+                if match is not None:
+                    return True
+            if not installed:
+                return True     # nothing to verify with -- do not block extraction
+            time.sleep(0.3)
+        return False
 
     def _extract_via_mirrored_button(self, hwnd, stop_event: threading.Event, left: int, top: int,
                                        center_x: int, cont: dict) -> bool:
@@ -655,8 +700,23 @@ class ExpeditionOps:
                         confirm_back = vision.find_color_run(hwnd, EXP_COLOR_CONFIRM_BAND, _exp_red,
                                                               EXP_COLOR_CONFIRM_MIN_RUN)
                         if checkpoint_up is None and confirm_back is None:
-                            self._log("[Macro] Extracted -- on the reward screen.")
-                            return True
+                            # Both bands quiet is still only ABSENCE. A reward
+                            # card over the bottom band, or a wave transition
+                            # landing between the two reads, empties them just
+                            # as well as extracting does -- and believing it
+                            # ends a live run: reported as a 29-second
+                            # "Victory" that then left the lobby mid-match.
+                            #
+                            # leave_stage/repeat_stage exist only on the
+                            # result screen, so one of them showing up is the
+                            # positive evidence. Without it the run is still
+                            # going, which is the safe reading: keep playing.
+                            if self._expedition_result_screen_is_up(hwnd, stop_event):
+                                self._log("[Macro] Extracted -- on the reward screen.")
+                                return True
+                            self._log("[Macro] The checkpoint cleared but no result screen appeared -- "
+                                      "the run is still going, so it carries on rather than leaving.")
+                            return False
                         self._log("[Macro] Confirm closed but the checkpoint is still up -- "
                                    "the extract didn't register, retrying.")
                     break  # restart from the Extract click

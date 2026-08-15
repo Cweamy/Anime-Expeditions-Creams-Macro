@@ -172,6 +172,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # Expedition camera's O-zoom hold (Settings > Debug).
         self._expedition_color_buttons = True
         self._exp_last_sighting_at = 0.0
+        self._exp_failed_extracts = 0
         # Consecutive polls that found a checkpoint Continue, and when that
         # run of them started. See EXPEDITION_STALL_TIMEOUT -- a checkpoint
         # that never clears would otherwise be re-clicked all the way to
@@ -1770,6 +1771,10 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # "exp_extract_continue" choice on this same screen) every sighting
         # up to extract_after, only accept the one right after that.
         self._expedition_extract_count = 0
+        # Checkpoints where extraction was attempted and did not take. Past
+        # EXPEDITION_EXTRACT_ATTEMPTS_BEFORE_PLAYING_ON the run stops asking
+        # and plays itself out -- the host may simply not be extracting.
+        self._exp_failed_extracts = 0
         self._expedition_extract_accept_at = _parse_extract_after(
             task.get("extract_after")) + 1
         self._exp_last_sighting_at = 0.0  # fresh match, fresh sighting-debounce clock (see EXP_COLOR_SIGHTING_DEBOUNCE)
