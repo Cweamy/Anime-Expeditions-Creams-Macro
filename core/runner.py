@@ -930,6 +930,27 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     self._set_status(action="Idle")
                     return
 
+                # Auto Challenge after each finished task (we're back at the
+                # lobby here). This is what catches the cases the between-
+                # repeats hook inside _run_task can't: a single-repeat task,
+                # or the LAST repeat of any task (the in-task hook is gated
+                # by `not is_last_repeat`). Without this, a slot that became
+                # ready at the last :00/:30 boundary just sat unplayed until
+                # the next Start press -- the "challenges are ready but it
+                # keeps doing the tasks normally" report. Runs before the
+                # other diversions because Challenge has priority when
+                # several come due at once (same ordering as the start of
+                # _run and the between-repeats hook).
+                if self._challenge_has_ready_stage():
+                    self._run_guarded_phase(
+                        "Challenge", hwnd, stop_event,
+                        lambda: self._run_challenges(
+                            hwnd, stop_event, coords, default_walk_paths, webhook))
+                if self._current_hwnd and wm.is_window(self._current_hwnd):
+                    hwnd = self._current_hwnd
+                if self._checkpoint(stop_event):
+                    return
+
                 # Auto Crafting after each finished task (we're back at the
                 # lobby here). This is what catches the cases the between-
                 # repeats hook inside _run_task can't: a single-repeat task, or
