@@ -175,7 +175,7 @@ def _place(runner, verify=True):
 
 def test_a_cleared_card_counts_as_placed(placing, monkeypatch):
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: {"in_hand": False, "affordable": None, "price_px": 6, "hue": -1})
+                        lambda h, s, n=None: {"in_hand": False, "affordable": None, "price_px": 6, "hue": -1})
 
     _place(placing)
 
@@ -191,7 +191,7 @@ def test_a_lit_but_affordable_card_is_trusted_as_placed(placing, monkeypatch):
     game refused with "Max placement limit reached!". Only an unaffordable
     card proves nothing was placed."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45})
+                        lambda h, s, n=None: {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45})
     placing._unplaced_units = {}
 
     _place(placing)
@@ -203,7 +203,7 @@ def test_a_lit_but_affordable_card_is_trusted_as_placed(placing, monkeypatch):
 
 def test_being_unable_to_afford_it_says_so(placing, monkeypatch):
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
+                        lambda h, s, n=None: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
 
     _place(placing)
 
@@ -215,7 +215,7 @@ def test_a_pre_start_placement_is_checked_too(placing, monkeypatch):
     success on no evidence -- that is how the unaffordable unit in the live
     run was reported placed. The card read is cheap enough to always do."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
+                        lambda h, s, n=None: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
     placing._unplaced_units = {}
 
     _place(placing, verify=False)
@@ -230,7 +230,7 @@ def test_a_pre_start_unit_still_gets_a_recorded_position(placing, monkeypatch):
     to it -- live, the three Senku placed in Pre Start went unupgraded while
     Kenpachi and Megumi, placed in Battle, upgraded fine."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45})
+                        lambda h, s, n=None: {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45})
     placing._unplaced_units = {}
 
     _place(placing, verify=False)
@@ -246,7 +246,7 @@ def test_the_retry_clicks_are_kept(placing, monkeypatch):
         {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45},
         {"in_hand": False, "affordable": None, "price_px": 5, "hue": -1},
     ])
-    monkeypatch.setattr(runner_blocks.vision, "read_unit_card", lambda h, s: next(reads))
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card", lambda h, s, n=None: next(reads))
 
     _place(placing)
 
@@ -258,7 +258,7 @@ def test_unit_exist_is_no_longer_consulted(placing, monkeypatch):
     """Belt and braces: the old signal must be gone, not merely outvoted. A
     leftover info panel satisfying it is what caused the false successes."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: {"in_hand": False, "affordable": None, "price_px": 5, "hue": -1})
+                        lambda h, s, n=None: {"in_hand": False, "affordable": None, "price_px": 5, "hue": -1})
     monkeypatch.setattr(runner_blocks.vision, "wait_for_image",
                         lambda *a, **k: pytest.fail("unit_exist was searched for again"))
 
@@ -269,7 +269,7 @@ def test_a_non_numeric_hotkey_falls_back_instead_of_inventing_a_failure(placing,
     """No numeric hotkey means no card to read. That is not evidence the
     placement failed, so the old trust-the-white-tile behaviour stands."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: pytest.fail("there is no slot to read"))
+                        lambda h, s, n=None: pytest.fail("there is no slot to read"))
     block = {"type": "place_unit", "hotkey": "q", "params": {"name": "cell", "x": 500, "y": 400}}
 
     placing._run_place_unit_block(1, threading.Event(), 0, 0, block, 1, "m", unit_ordinal=7)
@@ -308,7 +308,7 @@ def retrying(monkeypatch):
 
 
 def _cards(monkeypatch, mapping):
-    monkeypatch.setattr(runner_blocks.vision, "read_unit_card", lambda h, s: mapping[s])
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card", lambda h, s, n=None: mapping[s])
 
 
 IN_HAND_RICH = {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45}
@@ -376,7 +376,7 @@ def test_the_interval_does_expire(retrying, monkeypatch):
 
 def test_nothing_pending_costs_nothing(monkeypatch):
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: pytest.fail("read a card with nothing pending"))
+                        lambda h, s, n=None: pytest.fail("read a card with nothing pending"))
     _RetryRunner()._unplaced_units = {}
     _RetryRunner()._retry_unplaced_units(1, threading.Event())
 
@@ -384,7 +384,7 @@ def test_nothing_pending_costs_nothing(monkeypatch):
 def test_a_successful_placement_clears_any_pending_entry(placing, monkeypatch):
     """Otherwise a unit that failed once, then landed on the block's own
     retry, stays on the list and gets placed a second time."""
-    monkeypatch.setattr(runner_blocks.vision, "read_unit_card", lambda h, s: CLEARED)
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card", lambda h, s, n=None: CLEARED)
     placing._unplaced_units = {4: {"name": "megumi"}}
 
     _place(placing)
@@ -414,7 +414,7 @@ def test_a_quick_place_in_battle_is_not_called_staged(placing, monkeypatch):
     so consecutive same-hotkey placements in BATTLE reported themselves as
     staged. Seen live on East Town for Salmon Sorcerer 2 and 3."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
+                        lambda h, s, n=None: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
     placing._unplaced_units = {}
     block = {"type": "place_unit", "hotkey": "2", "params": {"name": "Salmon Sorcerer 2", "x": 500, "y": 400}}
 
@@ -454,7 +454,7 @@ def test_no_valid_tile_is_queued_not_abandoned(placing, monkeypatch):
     16px apart only ever landed one."""
     monkeypatch.setattr(BlockOps, "_find_valid_place_spot", lambda self, *a, **k: None)
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s: pytest.fail("no click happened; no card to read"))
+                        lambda h, s, n=None: pytest.fail("no click happened; no card to read"))
     placing._unplaced_units = {}
 
     _place(placing)
@@ -507,3 +507,59 @@ def test_a_retry_actually_aims_at_the_nudged_spot(retrying, monkeypatch):
     assert aimed[0] == (1, 1), "first retry should redo the saved spot"
     assert len(set(aimed)) == 3, f"retries did not move: {aimed}"
     assert any(abs(x - 1) == N or abs(y - 1) == N for x, y in aimed[1:])
+
+
+# ---------------------------------------------------------------------------
+# Where the hotbar actually is
+# ---------------------------------------------------------------------------
+# The bar is CENTRED, and the slot count varies by mode -- an Expedition frame
+# showed ten slots, a Story frame six. Assuming ten on a six-slot bar puts
+# every read two slots left, and slots 1-2 land on bare map: on a real Story
+# capture at Y600 it called Senku (Y550) unaffordable and reported two cards
+# that were not there.
+
+@pytest.mark.parametrize("slot,count,centre", [
+    (6, 10, 611),   # measured: x 580-642
+    (1, 6, 401),    # measured: x 362-439
+    (6, 6, 751),    # measured: x 715-790
+])
+def test_card_geometry_matches_real_captures(slot, count, centre):
+    got = vision.card_left_edge(slot, count) + vision.CARD_W / 2
+    assert abs(got - centre) <= 2, f"slot {slot} of {count}: model {got}, measured {centre}"
+
+
+def test_a_six_slot_bar_is_not_read_as_a_ten_slot_one():
+    assert vision.card_left_edge(1, 6) != vision.card_left_edge(1, 10)
+
+
+def test_a_slot_past_the_end_of_the_bar_reads_as_nothing(monkeypatch):
+    monkeypatch.setattr(vision, "capture_game_bgr",
+                        lambda h, region=None: pytest.fail("no such slot to capture"))
+    assert vision.read_unit_card(0, 7, slot_count=6)["in_hand"] is False
+
+
+def test_expedition_keeps_the_ten_slot_bar():
+    r = _Runner()
+    r._is_expedition_match = True
+    assert r._hotbar_slot_count("anything") == vision.CARD_DEFAULT_SLOTS
+
+
+def test_story_uses_the_loadouts_highest_hotkey(monkeypatch):
+    from core import templates
+    r = _Runner()
+    r._is_expedition_match = False
+    monkeypatch.setattr(templates, "load_template", lambda n: {"blocks": {"prestart": [
+        {"type": "place_unit", "hotkey": "1"}, {"type": "place_unit", "hotkey": "6"},
+        {"type": "place_unit", "hotkey": "3"}, {"type": "wait_ms"}]}})
+
+    assert r._hotbar_slot_count("t") == 6
+
+
+def test_an_unreadable_template_falls_back_to_the_widest_bar(monkeypatch):
+    from core import templates
+    r = _Runner()
+    r._is_expedition_match = False
+    monkeypatch.setattr(templates, "load_template",
+                        lambda n: (_ for _ in ()).throw(OSError("gone")))
+
+    assert r._hotbar_slot_count("t") == vision.CARD_DEFAULT_SLOTS

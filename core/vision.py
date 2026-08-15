@@ -1129,7 +1129,18 @@ def find_upgrade_state(hwnd: int):
 # it is still in hand, which is the whole failure being fixed. But a greyed
 # card still DRAWS its price, so the pixel count stays an order of magnitude
 # clear of a placed slot. The hue then says whether it can be afforded.
-CARD_X0, CARD_STEP, CARD_W = 230, 70, 62   # slot N face at x = X0 + (N-1)*STEP
+# The hotbar is CENTRED on the window, and how many slots it holds varies --
+# an Expedition frame showed 10, a Story frame showed 6. So a card's position
+# cannot be a fixed x: slot i sits at CARD_MID + (i - (n+1)/2) * CARD_STEP.
+# Confirmed against three real measurements:
+#   n=10, slot 6  -> model 611, measured 580-642 (centre 611)
+#   n=6,  slot 1  -> model 401, measured 362-439 (centre 400)
+#   n=6,  slot 6  -> model 751, measured 715-790 (centre 752)
+# Hardcoding the 10-slot layout is what made every card read on a 6-slot
+# Story bar land two slots to the left -- slots 1 and 2 sampled bare map, and
+# every in-hand/affordable answer in those runs was decided from scenery.
+CARD_MID, CARD_STEP, CARD_W = 576, 70, 62
+CARD_DEFAULT_SLOTS = 10        # the widest bar seen; used when the count is unknown
 CARD_Y0, CARD_H = 663, 63
 CARD_PRICE_STRIP_H = 16           # bottom of the card, where the price is drawn
 CARD_PRICE_SAT_MIN = 40           # deliberately loose -- a greyed price is washed out
@@ -1152,7 +1163,12 @@ CARD_UNAFFORDABLE_MAX_GOLD = 0.10
 CARD_UNAFFORDABLE_MIN_RED = 0.20
 
 
-def read_unit_card(hwnd: int, slot: int) -> dict:
+def card_left_edge(slot: int, slot_count: int = CARD_DEFAULT_SLOTS) -> int:
+    """Window-x of slot `slot`'s left edge on a bar holding `slot_count`."""
+    return int(round(CARD_MID + (slot - (slot_count + 1) / 2) * CARD_STEP - CARD_W / 2))
+
+
+def read_unit_card(hwnd: int, slot: int, slot_count: int = CARD_DEFAULT_SLOTS) -> dict:
     """What hotbar slot `slot` (1-10) is showing right now.
 
     Returns {"in_hand", "affordable", "price_px", "hue"}. in_hand False means
@@ -1168,9 +1184,9 @@ def read_unit_card(hwnd: int, slot: int) -> dict:
     """
     import numpy as np
     blank = {"in_hand": False, "affordable": None, "price_px": 0, "hue": -1}
-    if not 1 <= slot <= 10:
+    if not 1 <= slot <= slot_count:
         return blank
-    x0 = CARD_X0 + (slot - 1) * CARD_STEP
+    x0 = card_left_edge(slot, slot_count)
     strip = capture_game_bgr(hwnd, (x0, CARD_Y0 + CARD_H - CARD_PRICE_STRIP_H,
                                      CARD_W, CARD_PRICE_STRIP_H))
     if strip is None or strip.size == 0:

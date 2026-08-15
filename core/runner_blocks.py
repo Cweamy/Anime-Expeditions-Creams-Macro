@@ -1215,7 +1215,8 @@ class BlockOps:
         self._unplaced_next_retry_at = now + UNPLACED_RETRY_INTERVAL
 
         for slot in sorted(pending):
-            card = vision.read_unit_card(hwnd, slot)
+            card = vision.read_unit_card(hwnd, slot,
+                                          self._hotbar_slot_count(pending[slot]["macro_name"]))
             if not card["in_hand"]:
                 entry = pending.pop(slot)
                 self._log(f'[Macro] Place Unit "{entry["name"]}": card {slot} has cleared on its '
@@ -1265,8 +1266,11 @@ class BlockOps:
         (the usual case is simply that gold arrived). Later attempts step out
         in the four compass directions.
         """
-        offsets = ((0, 0), (UNPLACED_RETRY_NUDGE, 0), (-UNPLACED_RETRY_NUDGE, 0),
-                   (0, UNPLACED_RETRY_NUDGE), (0, -UNPLACED_RETRY_NUDGE))
+        n = UNPLACED_RETRY_NUDGE
+        d = int(round(n * 0.7071))          # same distance, on the diagonals
+        offsets = ((0, 0),
+                   (n, 0), (0, n), (-n, 0), (0, -n),
+                   (d, d), (-d, d), (d, -d), (-d, -d))
         dx, dy = offsets[max(0, attempt - 1) % len(offsets)]
         if (dx, dy) == (0, 0):
             return block
@@ -1279,6 +1283,46 @@ class BlockOps:
         nudged = dict(block)
         nudged["params"] = params
         return nudged
+
+    def _hotbar_slot_count(self, macro_name) -> int:
+        """How many slots the unit hotbar is showing, which decides where each
+        card sits -- the bar is CENTRED, so slot 1 moves as the count changes.
+
+        Expedition draws a fixed ten-slot bar (measured: slot 6 at x 580-642,
+        which only fits n=10). Story draws one slot per unit in the loadout
+        (measured: six cards, slot 1 at x 362-439, which only fits n=6), so
+        the loadout's distinct hotkeys are the count there.
+
+        Getting this wrong is not a small error: with n=10 assumed on a
+        six-slot bar every read lands two slots left, and slots 1-2 sample
+        bare map. Cached per macro -- it cannot change mid-match.
+        """
+        if getattr(self, "_is_expedition_match", False):
+            return vision.CARD_DEFAULT_SLOTS
+        cache = getattr(self, "_hotbar_slots_cache", None)
+        if cache is None:
+            cache = self._hotbar_slots_cache = {}
+        if macro_name in cache:
+            return cache[macro_name]
+        count = vision.CARD_DEFAULT_SLOTS
+        try:
+            from . import templates as _templates
+            blocks = (_templates.load_template(macro_name) or {}).get("blocks") or {}
+            seen = set()
+            for phase in ("prestart", "battle", "loop_a", "loop_b"):
+                for blk in blocks.get(phase) or []:
+                    if blk.get("type") == "place_unit":
+                        n = self._card_slot_for(blk.get("hotkey"))
+                        if n is not None:
+                            seen.add(n)
+            if seen:
+                # The bar is as wide as the highest slot in use -- a loadout
+                # that skips hotkey 2 still leaves a gap where 2 would be.
+                count = max(seen)
+        except Exception:
+            pass
+        cache[macro_name] = count
+        return count
 
     @staticmethod
     def _card_slot_for(hotkey):
@@ -1607,7 +1651,7 @@ class BlockOps:
                 time.sleep(PLACE_CARD_SETTLE)
             else:
                 time.sleep(PLACE_CARD_SETTLE)  # let the card redraw before reading it
-            card = vision.read_unit_card(hwnd, slot)
+            card = vision.read_unit_card(hwnd, slot, self._hotbar_slot_count(macro_name))
             if not card["in_hand"]:
                 break
             if attempt < attempts:
