@@ -936,9 +936,14 @@ class ExpeditionOps:
 
         path_name = walk_paths.load_shipped_encounter_walk_paths().get(map_name or "")
         if not path_name:
-            self._log(f'[Macro] Expedition encounter on "{map_name}", but no encounter walk is '
-                       f"mapped for it -- leaving it alone. (Record one and add it to "
-                       f"Assets/default_encounter_walk_paths.json.)")
+            # No recorded route for this map. The Continue look above already
+            # covered it -- that is the whole point of trying Continue FIRST:
+            # it needs nothing map-specific, so it works where the walk
+            # cannot. With neither a Continue nor a route there is genuinely
+            # nothing to do.
+            self._log(f'[Macro] Expedition encounter on "{map_name}", no Continue offered and no '
+                       f"encounter walk mapped for it -- leaving it alone. (Record one and add it "
+                       f"to Assets/default_encounter_walk_paths.json.)")
             return self._encounter_done(state)
 
         self._log(f'[Macro] Expedition encounter (score {marker["score"]:.2f}) on "{map_name}" -- '

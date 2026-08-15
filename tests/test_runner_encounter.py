@@ -165,15 +165,22 @@ def test_no_marker_means_no_action(monkeypatch):
 
 
 def test_unmapped_map_is_left_alone(monkeypatch):
-    """Adding maps stays additive -- an unmapped one must not walk blindly."""
+    """Adding maps stays additive -- an unmapped one must not walk blindly.
+
+    An unmapped map now gets one look at the encounter's own Continue first,
+    so the Continue is explicitly absent here; the invariant under test is
+    that with nothing to click and nothing to walk, nothing is clicked.
+    """
+    from core import runner_expedition as rx
     replayed = _wire(monkeypatch, mapping={"Rose Kingdom": "RK route"})
+    monkeypatch.setattr(rx.vision, "find_color_run", lambda *_a, **_k: None)
     r = _Runner(task={"map": "Some New Map"})
 
     r._handle_expedition_encounter(1, threading.Event(), _settled())
 
     assert replayed == []
     r._mouse.click.assert_not_called()
-    assert any("no encounter walk is mapped" in m for m in r.logs)
+    assert any("leaving it alone" in m for m in r.logs)
 
 
 def test_a_walk_that_lands_wrong_does_not_click_blindly(monkeypatch):
@@ -513,3 +520,37 @@ def test_without_a_continue_it_still_walks_the_route(monkeypatch):
 
     assert replayed == [True]
     assert r.clicked_images == ["nav_settings"]
+
+
+# ---------------------------------------------------------------------------
+# Maps with no bundled route
+# ---------------------------------------------------------------------------
+
+def test_an_unmapped_map_is_handled_by_its_continue(monkeypatch):
+    """Only four maps have a bundled route; everywhere else the encounter
+    used to be logged and abandoned. The Continue needs nothing recorded, so
+    it works where the walk cannot."""
+    replayed = _wire(monkeypatch, mapping={})          # nothing mapped at all
+    _with_continue(monkeypatch, True)
+    r = _Runner(task={"map": "Somewhere Unmapped"})
+
+    out = r._handle_expedition_encounter(1, threading.Event(), _settled())
+
+    assert replayed == [], "there is no route to walk"
+    assert out["handled_at"] > 0.0, "the encounter must be marked handled"
+    assert any("no walk needed" in m for m in r.logs)
+    assert not any("leaving it alone" in m for m in r.logs)
+
+
+def test_an_unmapped_map_with_no_continue_is_still_left_alone(monkeypatch):
+    """Nothing to walk and nothing to click means there is genuinely nothing
+    to do -- and it must say so rather than clicking at the world."""
+    replayed = _wire(monkeypatch, mapping={})
+    _with_continue(monkeypatch, False)
+    r = _Runner(task={"map": "Somewhere Unmapped"})
+
+    out = r._handle_expedition_encounter(1, threading.Event(), _settled())
+
+    assert replayed == []
+    assert out["handled_at"] > 0.0, "still marked handled so it is not retried forever"
+    assert any("leaving it alone" in m for m in r.logs)
