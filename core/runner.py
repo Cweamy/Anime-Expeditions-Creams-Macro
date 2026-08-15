@@ -3230,7 +3230,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         Region allows us to isolate part of the 1152x756 screen resolution
         This was made for the Tower game mode where each element is similar
         to one another.
-        
+
         Returns the match dict (truthy) on success or None (falsy) on
         failure -- existing `if not self._click_found_image(...)` call sites
         work unchanged either way, but callers that need the click position

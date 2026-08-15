@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.runner_expedition import ExpeditionOps
-from core.runner_constants import (ENCOUNTER_COOLDOWN, ENCOUNTER_DIALOGUE_CLICKS,
+from core.runner_constants import (ENCOUNTER_COOLDOWN, ENCOUNTER_DIALOGUE_ADVANCE_CLICK,
+                                   ENCOUNTER_DIALOGUE_CLICKS,
                                    ENCOUNTER_TELEPORT_SPAWN_CLICK)
 
 
@@ -52,7 +53,7 @@ def _settled():
 
 def _wire(monkeypatch, *, marker=True, prompt=True, events=(("w", "down", 0.0),), mapping=None,
           settings_stuck=False, blocking_modals=0, runner=None,
-          closes_after=1, speak_rounds=1):
+          closes_after=1, speak_rounds=1, dialogue_buttons=True, buttons_clicked=None):
     """runner: pass one to make modal serving PHASE-AWARE -- the handler clears
     modals both before opening Settings and again before the blind teleport
     click, and a double that empties on the first wait cannot show the second
@@ -97,8 +98,22 @@ def _wire(monkeypatch, *, marker=True, prompt=True, events=(("w", "down", 0.0),)
     monkeypatch.setattr(rx.vision, "find_image", find_image)
     monkeypatch.setattr(rx.vision, "click_match", lambda m, h, match, **k: r_clicks.append(match))
     r_clicks = []
-    monkeypatch.setattr(rx.vision, "wait_for_image",
-                        lambda h, n, **k: {"cx": 600, "cy": 400, "score": 0.98} if prompt else None)
+
+    def wait_for_image(h, n, **k):
+        # Name-aware for the same reason find_image is: the dialogue asks
+        # about several different buttons, and a double that answers "found"
+        # to every one of them cannot show which was actually clicked.
+        if n == "expedition_speak":
+            return {"cx": 600, "cy": 400, "score": 0.98} if prompt else None
+        if n in ("dialogue_engage", "dialogue_yes", "click_anywhere_to_close"):
+            if not dialogue_buttons:
+                return None
+            if buttons_clicked is not None:
+                buttons_clicked.append(n)
+            return {"cx": 500, "cy": 640, "score": 0.97}
+        return None
+
+    monkeypatch.setattr(rx.vision, "wait_for_image", wait_for_image)
     monkeypatch.setattr(rx.walk_paths, "load_shipped_encounter_walk_paths",
                         lambda: mapping if mapping is not None else {"Rose Kingdom": "RK route"})
     monkeypatch.setattr(rx.walk_paths, "load_path", lambda n: {"events": list(events)})
@@ -122,7 +137,12 @@ def test_encounter_is_walked_and_talked_to(monkeypatch):
     assert r._keyboard.tap.called, "E opens the dialogue"
     clicks = [c.args for c in r._mouse.click.call_args_list]
     assert clicks[0] == (10 + ENCOUNTER_TELEPORT_SPAWN_CLICK[0], 20 + ENCOUNTER_TELEPORT_SPAWN_CLICK[1])
-    assert clicks[1:] == [(10 + x, 20 + y) for x, y in ENCOUNTER_DIALOGUE_CLICKS]
+    # Everything after the teleport is the dialogue panel: the buttons are
+    # clicked through vision.click_match at wherever they were found, so the
+    # only raw coordinate left in the exchange is the panel itself.
+    advance = (10 + ENCOUNTER_DIALOGUE_ADVANCE_CLICK[0], 20 + ENCOUNTER_DIALOGUE_ADVANCE_CLICK[1])
+    assert clicks[1:] == [advance] * len(clicks[1:])
+    assert len(clicks[1:]) >= 3, "the text, the roll and the closing line all need advancing"
     assert out["handled_at"] > 0.0
 
 
@@ -400,3 +420,46 @@ def test_a_dialogue_that_never_clears_stops_instead_of_clicking_on(monkeypatch):
     assert not any("Encounter handled" in m for m in r.logs)
 
 
+
+
+# ---------------------------------------------------------------------------
+# The dialogue exchange
+# ---------------------------------------------------------------------------
+
+def test_the_exchange_runs_engage_then_the_roll_then_yes(monkeypatch):
+    """The observed shape: Engage, advance, a d20 roll, click the result
+    away, Yes, one closing line. The buttons are found by image because the
+    menu is four options wide and they recolour between encounters -- a
+    fixed position is a one-in-four guess that fails silently."""
+    pressed = []
+    _wire(monkeypatch, buttons_clicked=pressed)
+    r = _Runner(task={"map": "Rose Kingdom"})
+
+    r._handle_expedition_encounter(1, threading.Event(), _settled())
+
+    assert pressed == ["dialogue_engage", "click_anywhere_to_close", "dialogue_yes"]
+
+
+def test_the_roll_is_waited_out_rather_than_clicked_through(monkeypatch):
+    """The d20 spins for a few seconds and clicks during it do nothing, so
+    the settle has to actually be requested."""
+    from core.runner_constants import ENCOUNTER_DICE_ROLL_SETTLE
+    _wire(monkeypatch)
+    r = _Runner(task={"map": "Rose Kingdom"})
+
+    r._handle_expedition_encounter(1, threading.Event(), _settled())
+
+    assert ENCOUNTER_DICE_ROLL_SETTLE in r.slept
+
+
+def test_without_the_crops_it_falls_back_to_the_old_fixed_clicks(monkeypatch):
+    """Nobody who has no dialogue_* images installed should be worse off
+    than before -- they get exactly the sequence they had."""
+    _wire(monkeypatch, dialogue_buttons=False)
+    r = _Runner(task={"map": "Rose Kingdom"})
+
+    r._handle_expedition_encounter(1, threading.Event(), _settled())
+
+    clicks = [c.args for c in r._mouse.click.call_args_list]
+    assert clicks[1:] == [(10 + x, 20 + y) for x, y in ENCOUNTER_DIALOGUE_CLICKS]
+    assert any("falling back" in m for m in r.logs)

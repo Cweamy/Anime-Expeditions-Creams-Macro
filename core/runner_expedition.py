@@ -380,6 +380,102 @@ class ExpeditionOps:
         return bool(self._exp_intercept_since
                     and time.time() - self._exp_intercept_since >= EXPEDITION_INTERCEPT_TIMEOUT)
 
+    def _click_dialogue_button(self, hwnd, stop_event: threading.Event, name: str,
+                                 timeout: float = None) -> bool:
+        """Wait briefly for a dialogue button, then click where it actually is.
+
+        Waits rather than one-shots because the panel animates in, so a
+        search fired straight after the previous click lands before the
+        button exists. Returns False when the image is not installed or
+        never showed up -- callers decide what that means, the same
+        best-effort contract every optional template here uses.
+        """
+        timeout = ENCOUNTER_DIALOGUE_OPTION_TIMEOUT if timeout is None else timeout
+        try:
+            match = vision.wait_for_image(hwnd, name, timeout=timeout, stop_event=stop_event)
+        except vision.TemplateNotFound:
+            return False
+        if match is None:
+            return False
+        self._log(f'[Macro] Encounter dialogue: clicking "{name}" (score {match["score"]:.2f}).')
+        vision.click_match(self._mouse, hwnd, match)
+        return True
+
+    def _advance_encounter_dialogue(self, left: int, top: int) -> None:
+        """Click the dialogue panel itself.
+
+        Advances the text, and answers the "click anywhere" prompts the roll
+        puts up. This step stays a coordinate on purpose: the panel carries
+        the NPC's name, which differs per character, so there is nothing
+        stable to match on -- and a whole panel is a far more forgiving
+        target than a button.
+        """
+        x, y = ENCOUNTER_DIALOGUE_ADVANCE_CLICK
+        self._mouse.click(left + x, top + y)
+
+    def _run_encounter_dialogue(self, hwnd, stop_event: threading.Event,
+                                  left: int, top: int) -> None:
+        """One pass through the NPC exchange.
+
+        The shape of it, as observed live:
+
+            Engage -> advance the text -> a d20 roll plays -> click through
+            it -> SUCCESS/FAILURE says "click anywhere to close" -> Yes ->
+            one closing line -> done.
+
+        The two option buttons are found by image because a fixed position
+        cannot work for them: the menu is four options wide (Discuss /
+        Barter / Engage / Leave) and they recolour between encounters, green
+        one time and red or pink the next. Everything else is a click on the
+        panel, which is stable regardless of which NPC is talking.
+
+        Best-effort throughout -- a missing crop skips its step rather than
+        failing the encounter, and the caller re-runs this whole pass until
+        the interact prompt is gone.
+        """
+        if not self._click_dialogue_button(hwnd, stop_event, "dialogue_engage"):
+            # No crop for it, or the menu never appeared. Fall back to the
+            # old fixed sequence so setups without the dialogue_* images
+            # behave exactly as they did before.
+            self._log('[Macro] Encounter dialogue: no "dialogue_engage" match -- '
+                      'falling back to the fixed click sequence.')
+            for x, y in ENCOUNTER_DIALOGUE_CLICKS:
+                time.sleep(ENCOUNTER_DIALOGUE_CLICK_GAP)
+                if self._checkpoint(stop_event):
+                    return
+                self._mouse.click(left + x, top + y)
+            return
+
+        # The line that follows Engage, then into the roll.
+        time.sleep(ENCOUNTER_DIALOGUE_CLICK_GAP)
+        self._advance_encounter_dialogue(left, top)
+        if self._checkpoint(stop_event):
+            return
+        time.sleep(ENCOUNTER_DIALOGUE_CLICK_GAP)
+        self._advance_encounter_dialogue(left, top)
+
+        # The d20 spins for a few seconds; clicks during it do nothing.
+        self._interruptible_sleep(ENCOUNTER_DICE_ROLL_SETTLE, stop_event)
+        if self._checkpoint(stop_event):
+            return
+        self._advance_encounter_dialogue(left, top)
+
+        # SUCCESS/FAILURE, which asks to be clicked away. The shipped
+        # click_anywhere_to_close crop is tried first so the click lands on
+        # the banner itself; the panel click is the fallback, and "anywhere"
+        # is what the prompt asks for either way.
+        time.sleep(ENCOUNTER_DIALOGUE_CLICK_GAP)
+        if not self._click_dialogue_button(hwnd, stop_event, "click_anywhere_to_close",
+                                             timeout=ENCOUNTER_STEP_SETTLE):
+            self._advance_encounter_dialogue(left, top)
+        if self._checkpoint(stop_event):
+            return
+
+        # Then the confirm, and the one line that closes the exchange.
+        self._click_dialogue_button(hwnd, stop_event, "dialogue_yes")
+        time.sleep(ENCOUNTER_DIALOGUE_CLICK_GAP)
+        self._advance_encounter_dialogue(left, top)
+
     def _replay_battle_after_restage(self) -> None:
         """A mid-run "Start Game?" stages a new sub-round, and the units
         already on the board run off it entirely -- reported live, and the
@@ -827,11 +923,9 @@ class ExpeditionOps:
         # worked" the arrival check does, rather than trusting a fixed number
         # of clicks to match however long the conversation happens to be.
         for round_no in range(1, ENCOUNTER_DIALOGUE_ROUNDS + 1):
-            for x, y in ENCOUNTER_DIALOGUE_CLICKS:
-                time.sleep(ENCOUNTER_DIALOGUE_CLICK_GAP)
-                if self._checkpoint(stop_event):
-                    return time.time()
-                self._mouse.click(left + x, top + y)
+            if self._checkpoint(stop_event):
+                return time.time()
+            self._run_encounter_dialogue(hwnd, stop_event, left, top)
             time.sleep(ENCOUNTER_STEP_SETTLE)
             try:
                 still_talking = vision.find_image(hwnd, "expedition_speak")
