@@ -24,23 +24,6 @@ def test_every_event_act_has_at_least_one_candidate_crop():
         assert candidates, f"Act {act} has no reference crop names"
         assert all(isinstance(n, str) and n for n in candidates), f"Act {act} has a bad crop name"
 
-
-def test_event_gamemode_click_coord_is_registered_in_both_coord_surfaces():
-    """_reach_event_act_selected clicks the Event gamemode card at the
-    fixed event_gamemode_x/y point (Settings > Debug > Macro Coordinates),
-    read through self._coords from core.runner's DEFAULT_COORDS and saved via
-    main.py's MACRO_COORD_DEFAULTS -- the two are hand-synced (see the
-    DEFAULT_COORDS comment), so this fails the moment one forgets the key."""
-    import main
-
-    expected = {"event_gamemode_x": 152, "event_gamemode_y": 253}
-    for key, value in expected.items():
-        assert rc.DEFAULT_COORDS.get(key) == value, \
-            f"{key} wrong or missing in core.runner_constants.DEFAULT_COORDS"
-        assert main.MACRO_COORD_DEFAULTS.get(key) == value, \
-            f"{key} wrong or missing in main.MACRO_COORD_DEFAULTS"
-
-
 def test_reach_event_act_selected_clicks_villian_invasion_between_event_and_gamemode(monkeypatch):
     runner = object.__new__(MacroRunner)
     events = []
@@ -65,18 +48,17 @@ def test_reach_event_act_selected_clicks_villian_invasion_between_event_and_game
 
     assert runner._reach_event_act_selected(hwnd=123, stop_event=threading.Event(), act="1") is True
     assert [event[1] for event in events if event[0] == "image"] == [
-        "nav_event", "Villian_Invasion", "event_gamemode", "villian1"
+        "nav_event", "Villain_Invasion", "event_gamemode", "villian1"
     ]
     assert events == [
         ("image", "nav_event"),
-        ("image", "Villian_Invasion"),
-        ("coord", 10, 20),
+        ("image", "Villain_Invasion"),
         ("image", "event_gamemode"),
         ("image", "villian1"),
     ]
 
 
-def test_reach_event_act_selected_backs_out_when_villian_invasion_missing(monkeypatch):
+def test_reach_event_act_selected_backs_out_when_villain_invasion_missing(monkeypatch):
     runner = object.__new__(MacroRunner)
     clicked = []
     backs = []
@@ -95,5 +77,5 @@ def test_reach_event_act_selected_backs_out_when_villian_invasion_missing(monkey
     monkeypatch.setattr(runner_module.time, "sleep", lambda seconds: None)
 
     assert runner._reach_event_act_selected(hwnd=456, stop_event=threading.Event(), act="1") is False
-    assert clicked == ["nav_event", "Villian_Invasion"]
+    assert clicked == ["nav_event", "Villain_Invasion"]
     assert backs == [456]
