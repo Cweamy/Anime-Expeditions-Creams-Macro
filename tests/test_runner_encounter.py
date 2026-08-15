@@ -96,6 +96,11 @@ def _wire(monkeypatch, *, marker=True, prompt=True, events=(("w", "down", 0.0),)
         return None
 
     monkeypatch.setattr(rx.vision, "find_image", find_image)
+    # No encounter Continue unless a test asks for one. Without this the
+    # handler calls the REAL find_color_run, which captures the live screen:
+    # slow (a four-second deadline of real captures per test) and genuinely
+    # nondeterministic, since whatever is actually on screen can satisfy it.
+    monkeypatch.setattr(rx.vision, "find_color_run", lambda *_a, **_k: None)
     monkeypatch.setattr(rx.vision, "click_match", lambda m, h, match, **k: r_clicks.append(match))
     r_clicks = []
 
@@ -119,7 +124,12 @@ def _wire(monkeypatch, *, marker=True, prompt=True, events=(("w", "down", 0.0),)
     monkeypatch.setattr(rx.walk_paths, "load_path", lambda n: {"events": list(events)})
     monkeypatch.setattr(rx.walk_paths, "replay_events",
                         lambda e, kb, stop, sprint=False: replayed.append(True))
-    monkeypatch.setattr(rx.time, "sleep", lambda s: None)
+    # A clock that only moves when something sleeps. Without this, any
+    # deadline loop in the handler busy-spins for its full real duration,
+    # because sleep is a no-op here.
+    now = {"t": 1000.0}
+    monkeypatch.setattr(rx.time, "sleep", lambda s: now.__setitem__("t", now["t"] + max(s, 0.05)))
+    monkeypatch.setattr(rx.time, "time", lambda: now["t"])
     return replayed
 
 
@@ -463,3 +473,43 @@ def test_without_the_crops_it_falls_back_to_the_old_fixed_clicks(monkeypatch):
     clicks = [c.args for c in r._mouse.click.call_args_list]
     assert clicks[1:] == [(10 + x, 20 + y) for x, y in ENCOUNTER_DIALOGUE_CLICKS]
     assert any("falling back" in m for m in r.logs)
+
+
+# ---------------------------------------------------------------------------
+# The encounter's own Continue button
+# ---------------------------------------------------------------------------
+
+def _with_continue(monkeypatch, present):
+    """Make the colour engine report an encounter Continue, or not."""
+    from core import runner_expedition as rx
+    monkeypatch.setattr(rx.vision, "find_color_run",
+                        lambda h, band, mask, run: {"cx": 575, "cy": 588} if present else None)
+
+
+def test_a_continue_ends_the_encounter_without_walking(monkeypatch):
+    """Strictly better than the walk when it is there: milliseconds, works on
+    any map rather than the four with a bundled route, and cannot strand the
+    character somewhere a recording did not expect."""
+    replayed = _wire(monkeypatch)
+    _with_continue(monkeypatch, True)
+    r = _Runner(task={"map": "Rose Kingdom"})
+
+    out = r._handle_expedition_encounter(1, threading.Event(), _settled())
+
+    assert replayed == [], "walked even though Continue was available"
+    assert r.clicked_images == [], "opened Settings even though Continue was available"
+    assert out["handled_at"] > 0.0, "the encounter must still be marked handled"
+    assert any("no walk needed" in m for m in r.logs)
+
+
+def test_without_a_continue_it_still_walks_the_route(monkeypatch):
+    """The walk stays as the fallback -- the Continue is a recent addition
+    and the older flow is the one known to work."""
+    replayed = _wire(monkeypatch)
+    _with_continue(monkeypatch, False)
+    r = _Runner(task={"map": "Rose Kingdom"})
+
+    r._handle_expedition_encounter(1, threading.Event(), _settled())
+
+    assert replayed == [True]
+    assert r.clicked_images == ["nav_settings"]

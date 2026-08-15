@@ -813,6 +813,37 @@ class ExpeditionOps:
         return True
 
 
+    def _encounter_cleared_by_continue(self, hwnd, stop_event: threading.Event) -> bool:
+        """Try to end the encounter with its own Continue button.
+
+        The encounter offers the same green Continue the wave checkpoints do,
+        so the colour engine finds it with one pixel scan -- no reference
+        image, nothing map-specific. Clicking it resolves the encounter
+        outright.
+
+        Tried before the teleport-and-walk because it is strictly better when
+        it works: it costs milliseconds, it applies on every map rather than
+        the four with a bundled route, and it cannot strand the character
+        somewhere a recorded walk did not expect. Returns False if no
+        Continue shows up, and the caller falls back to the older flow --
+        this is a recent change to the game and the walk is known to work.
+        """
+        deadline = time.time() + ENCOUNTER_CONTINUE_TIMEOUT
+        while time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return False
+            cont = vision.find_color_run(hwnd, EXP_COLOR_CONTINUE_BAND, _exp_green,
+                                          EXP_COLOR_CONTINUE_MIN_RUN)
+            if cont is not None:
+                left, top, _, _ = wm.get_window_rect_screen(hwnd)
+                self._log(f'[Macro] Encounter offers Continue (x={cont["cx"]}) -- clicking it, '
+                          f'no walk needed.')
+                self._mouse.click(left + cont["cx"], top + cont["cy"])
+                self._interruptible_sleep(ENCOUNTER_STEP_SETTLE, stop_event)
+                return True
+            time.sleep(ENCOUNTER_MODAL_POLL)
+        return False
+
     def _wait_for_clear_screen(self, hwnd, stop_event: threading.Event, before_what: str) -> int:
         """Dismiss level-up "Select an upgrade!" modals until none is left.
 
@@ -895,6 +926,14 @@ class ExpeditionOps:
             return state
 
         map_name = (getattr(self, "_current_task", None) or {}).get("map")
+        # An encounter now puts up its own Continue, and the colour engine
+        # already knows that face. If it is there, clicking it ends the
+        # encounter outright -- no teleport, no route, no dialogue -- so it
+        # is tried before any of that work. It also works on maps with no
+        # bundled route, which the walk cannot.
+        if self._encounter_cleared_by_continue(hwnd, stop_event):
+            return self._encounter_done(state)
+
         path_name = walk_paths.load_shipped_encounter_walk_paths().get(map_name or "")
         if not path_name:
             self._log(f'[Macro] Expedition encounter on "{map_name}", but no encounter walk is '
