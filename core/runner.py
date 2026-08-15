@@ -282,6 +282,11 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # the start of each match in _play_one_match.
         self._battle_block_index = 0
         self._battle_block_state = {}
+        # Placements the card check said never landed, awaiting a retry once
+        # they could actually work (see _retry_unplaced_units). Per match --
+        # a unit left in hand by one match must not be chased in the next.
+        self._unplaced_units = {}
+        self._unplaced_next_retry_at = 0.0
         # How many times exp_extract has shown up THIS match, and which
         # sighting actually accepts it (see _check_expedition_wave_result)
         # -- both reset alongside the battle block state in _play_one_match.
@@ -1747,6 +1752,8 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         battle_blocks = self._load_battle_blocks(task)
         self._battle_block_index = 0
         self._battle_block_state = {}
+        self._unplaced_units = {}
+        self._unplaced_next_retry_at = 0.0
         # Battle clock for the "Leave at Minute" block (see runner_blocks).
         # Reset per match so the minute is measured from THIS battle's start.
         self._battle_started_at = time.time()

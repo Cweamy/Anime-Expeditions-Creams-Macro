@@ -139,6 +139,12 @@ class BlockOps:
         per-block progress it's made (e.g. an Upgrade block's remaining
         `times` budget and next-retry time) across calls.
         """
+        if self._battle_block_index >= len(battle_blocks):
+            # The list is done, but units it failed to place may have become
+            # placeable since -- gold accrues for the rest of the match. This
+            # is the only point where there is spare time to go back for them.
+            self._retry_unplaced_units(hwnd, stop_event)
+            return
         while self._battle_block_index < len(battle_blocks):
             block = battle_blocks[self._battle_block_index]
             btype = block.get("type")
@@ -1151,6 +1157,83 @@ class BlockOps:
             return capture_region(left + x, top + y, width, height)
         return vision.capture_window_region_bgr(hwnd, region)
 
+    # -----------------------------------------------------------------------
+    # Units that did not go down
+    # -----------------------------------------------------------------------
+    # A placement can fail for reasons that stop being true later in the
+    # match -- most obviously gold. Reported live on Flower Forest: cards 5
+    # (Y1,350) and 6 (Y1,150) still in hand at Y1,979, both affordable by
+    # then, with the Battle block list already exhausted so nothing ever went
+    # back for them. The run finished 4/13 units down.
+    #
+    # So a failed placement is remembered, and retried once the board says it
+    # could work. Keyed by hotbar slot, because that is what identifies the
+    # unit and one slot can only be pending once.
+
+    def _remember_unplaced(self, block, index, macro_name, unit_ordinal, name, slot):
+        pending = getattr(self, "_unplaced_units", None)
+        if pending is None:
+            pending = self._unplaced_units = {}
+        pending[slot] = {"block": block, "index": index, "macro_name": macro_name,
+                         "unit_ordinal": unit_ordinal, "name": name}
+
+    def _forget_unplaced(self, slot):
+        pending = getattr(self, "_unplaced_units", None)
+        if pending:
+            pending.pop(slot, None)
+
+    def _retry_unplaced_units(self, hwnd, stop_event: threading.Event) -> None:
+        """Retry one pending placement, if any is worth retrying right now.
+
+        One per call, like every other Battle-phase action, so the match's
+        Victory/Defeat poll keeps running -- and rate-limited, so a unit that
+        simply cannot be afforded yet is not hammered every tick.
+
+        A pending unit whose card has cleared is dropped without a retry: it
+        got placed some other way (the re-stage replay, most likely) and
+        clicking again would put a second copy somewhere unintended.
+        """
+        pending = getattr(self, "_unplaced_units", None)
+        if not pending:
+            return
+        now = time.time()
+        if now < getattr(self, "_unplaced_next_retry_at", 0.0):
+            return
+        self._unplaced_next_retry_at = now + UNPLACED_RETRY_INTERVAL
+
+        for slot in sorted(pending):
+            card = vision.read_unit_card(hwnd, slot)
+            if not card["in_hand"]:
+                entry = pending.pop(slot)
+                self._log(f'[Macro] Place Unit "{entry["name"]}": card {slot} has cleared on its '
+                           f'own -- nothing left to retry.')
+                return
+            if card.get("affordable") is False:
+                continue          # still too expensive; leave it pending
+            entry = pending[slot]
+            self._log(f'[Macro] Place Unit "{entry["name"]}": retrying -- card {slot} is still in '
+                       f'hand and now affordable.')
+            left, top, _, _ = wm.get_window_rect_screen(hwnd)
+            self._run_place_unit_block(hwnd, stop_event, left, top, entry["block"], entry["index"],
+                                         entry["macro_name"], entry["unit_ordinal"])
+            return
+
+    @staticmethod
+    def _card_slot_for(hotkey):
+        """Hotbar slot (1-10) a Place Unit block's hotkey selects, or None.
+
+        The bar is ten slots and "0" is the tenth, the way the keyboard row
+        runs. Anything non-numeric selects a unit some other way and has no
+        card to read, so the caller skips the check rather than guessing.
+        """
+        text = str(hotkey or "").strip()
+        if not text.isdigit():
+            return None
+        number = int(text)
+        if number == 0:
+            return 10
+        return number if 1 <= number <= 10 else None
+
     def _scan_place_search_box(self, hwnd, left: int, top: int, orig_x: int, orig_y: int):
         """One capture of the PLACE_SEARCH_BOX_SIZE x PLACE_SEARCH_BOX_SIZE
         region around (orig_x, orig_y) -- window-client coords -- scanned in
@@ -1414,54 +1497,76 @@ class BlockOps:
         if not next_is_same_unit:
             self._release_quick_place_shift()
 
-        if skip_verify:
-            # No verify here -- see skip_verify's own comment above.
-            # Position is still recorded, just without waiting on
-            # unit_exist first; the white-pixel hit before the click is
-            # what's trusted instead.
-            reason = 'quick-place' if is_quick_place else 'Pre Start'
+        # Did it actually go down? The unit's own hotbar card answers that
+        # directly -- a placed unit's card loses its price, one still in hand
+        # keeps it. See vision.read_unit_card for the measurements.
+        #
+        # This replaces a whole-screen search for unit_exist, which answered a
+        # different question entirely: "is any unit info panel open?". A panel
+        # left over from the previous placement satisfied it, so a unit that
+        # never left the hand was logged as "verified placed (score 1.00)".
+        # Observed live on Flower Forest -- six placements logged, four units
+        # on the board, no error for either of the two that failed.
+        slot = self._card_slot_for(hotkey)
+        if slot is None:
+            # Nothing to read (no numeric hotkey) -- keep the old behaviour of
+            # trusting the pre-click white-tile hit rather than inventing a
+            # failure out of a check that could not run.
+            reason = 'quick-place' if is_quick_place else 'Pre Start' if skip_verify else 'Battle'
             self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) ({reason}).')
             if unit_ordinal is not None:
                 self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
             return
 
-        # Verify: look for unit_exist FIRST, before clicking anything -- it
-        # may already be visible with no extra input needed at all. Only if
-        # it isn't there does this click once (not double-click, which risked
-        # triggering something else entirely, like a sell/context menu) and
-        # check again, up to PLACE_UNIT_VERIFY_ATTEMPTS times total.
-        exists_match = None
+        # The retry clicks are kept: on a real run a placement has been seen
+        # to land on the SECOND click, so dropping them to save a check would
+        # cost placements. Only what counts as success has changed.
+        card = None
         clicked_to_verify = False
-        for verify_attempt in range(1, PLACE_UNIT_VERIFY_ATTEMPTS + 1):
+        attempts = 1 if skip_verify else PLACE_UNIT_VERIFY_ATTEMPTS
+        for attempt in range(1, attempts + 1):
             if self._checkpoint(stop_event):
                 return
-            if verify_attempt > 1:
+            if attempt > 1:
                 self._mouse.click(left + cur_x, top + cur_y)
                 clicked_to_verify = True
-                time.sleep(0.3)  # let the info panel actually render before checking for it
-            try:
-                exists_match = vision.wait_for_image(hwnd, "unit_exist", timeout=PLACE_UNIT_VERIFY_TIMEOUT)
-            except vision.TemplateNotFound:
-                exists_match = None
-                break  # no unit_exist.png added -- retrying won't change that, stop wasting clicks
-            if exists_match is not None:
+                time.sleep(PLACE_CARD_SETTLE)
+            else:
+                time.sleep(PLACE_CARD_SETTLE)  # let the card redraw before reading it
+            card = vision.read_unit_card(hwnd, slot)
+            if not card["in_hand"]:
                 break
-            self._log(f'[Macro] Place Unit "{name}": verify check {verify_attempt}/{PLACE_UNIT_VERIFY_ATTEMPTS} '
-                       f'-- unit_exist not seen yet.')
+            if attempt < attempts:
+                self._log(f'[Macro] Place Unit "{name}": still in hand after attempt '
+                           f'{attempt}/{attempts} -- trying the spot again.')
 
-        # Only reset the info panel if a verify click actually happened --
-        # the plain search-first check above never opens anything, so there's
-        # nothing to close if that's all it took.
         if clicked_to_verify:
             self._reset_unit_info_panel(hwnd)
 
-        if exists_match is None:
-            self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) but couldn\'t verify '
-                       f'(no unit_exist match) -- add Assets/ui/unit_exist.png to enable this check.')
+        if card is not None and card["in_hand"]:
+            why = ('cannot afford it yet' if card.get("affordable") is False
+                   else 'the game would not take the tile')
+            if skip_verify:
+                # Pre Start STAGES a unit rather than deploying it. Observed
+                # live: all three Pre Start cards kept their price for the
+                # whole phase and only cleared once the round started, even
+                # though those units did end up on the board. A lit card here
+                # is therefore not evidence of failure and must not be
+                # reported as one. It is still queued -- the retry pass
+                # re-reads the card once the round is running and drops it
+                # without a click if it cleared by itself.
+                self._log(f'[Macro] Place Unit "{name}": staged at ({cur_x}, {cur_y}) -- card '
+                           f'{slot} still shows its price ({why}); will confirm once the '
+                           f'round starts.')
+            else:
+                self._log(f'[Macro] Place Unit "{name}": did NOT place at ({cur_x}, {cur_y}) -- '
+                           f'card {slot} still in hand ({why}).')
+            self._remember_unplaced(block, index, macro_name, unit_ordinal, name, slot)
             return
+        self._forget_unplaced(slot)
 
-        self._log(f'[Macro] Place Unit "{name}": verified placed at ({cur_x}, {cur_y}) '
-                   f'(score {exists_match["score"]:.2f}).')
+        self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) '
+                   f'(card {slot} cleared).')
         if unit_ordinal is not None:
             self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
 
