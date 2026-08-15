@@ -1336,6 +1336,25 @@ class BlockOps:
         ys, xs = np.where(valid_mask)
         if len(xs) == 0:
             return None
+        # Refuse to settle on a tile this match already put a unit on. The
+        # game will not stack two units, so a placement aimed at an occupied
+        # tile is thrown away -- and it looks like a success, because for a
+        # multi-copy unit the hotbar card cannot tell placed from not-placed.
+        # Live on East Town: three Cell saved 16px apart all resolved to the
+        # same tile and only the first ever landed, silently.
+        #
+        # Filtering here rather than after choosing is what makes the wiggle
+        # and the outward spiral keep looking, instead of settling on a spot
+        # that was never going to take.
+        taken = getattr(self, "_placed_points_this_match", None)
+        if taken:
+            abs_x, abs_y = xs + box_x, ys + box_y
+            keep = np.ones(len(xs), dtype=bool)
+            for tx, ty in taken:
+                keep &= ((abs_x - tx) ** 2 + (abs_y - ty) ** 2) >= PLACE_MIN_SEPARATION ** 2
+            xs, ys = xs[keep], ys[keep]
+            if len(xs) == 0:
+                return None
         # Where the requested spot sits inside the (possibly shifted) box.
         cx, cy = orig_x - box_x, orig_y - box_y
         dists = (xs - cx) ** 2 + (ys - cy) ** 2
@@ -1639,8 +1658,15 @@ class BlockOps:
         # Auto Upgrade Unit block aimed at it silently skipped -- live, the
         # three Senku placed in Pre Start went unupgraded while Kenpachi and
         # Megumi, placed in Battle, upgraded fine.
-        if unit_ordinal is not None and not definitely_failed:
-            self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+        if not definitely_failed:
+            if unit_ordinal is not None:
+                self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+            # Per-match, unlike _placed_unit_positions, which is built once in
+            # __init__ and never cleared -- stale points from an earlier match
+            # would block perfectly good tiles in this one.
+            if not hasattr(self, "_placed_points_this_match"):
+                self._placed_points_this_match = []
+            self._placed_points_this_match.append((cur_x, cur_y))
 
         if definitely_failed:
             where = 'staged at' if not verify else 'did NOT place at'
