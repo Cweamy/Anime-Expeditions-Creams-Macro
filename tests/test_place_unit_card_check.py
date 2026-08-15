@@ -563,3 +563,68 @@ def test_an_unreadable_template_falls_back_to_the_widest_bar(monkeypatch):
                         lambda n: (_ for _ in ()).throw(OSError("gone")))
 
     assert r._hotbar_slot_count("t") == vision.CARD_DEFAULT_SLOTS
+
+
+# ---------------------------------------------------------------------------
+# A deferred placement must not lose its priority
+# ---------------------------------------------------------------------------
+# The Auto Upgrade block sits right after its placement in the routine, so a
+# placement that gets deferred (no gold yet) has its upgrade run one tick
+# later, find no unit, and skip for good. Live on East Town: Salmon Sorcerer
+# and Kenpachi were both placed by the retry and both finished the match with
+# no priority set.
+
+UPGRADE_BLOCK = {"type": "auto_upgrade_unit",
+                 "params": {"index": "5", "priority": 4, "input": "click"}, "once": False}
+
+
+@pytest.fixture
+def deferring(retrying, monkeypatch):
+    from core import templates
+    monkeypatch.setattr(templates, "load_template",
+                        lambda n: {"blocks": {"prestart": [UPGRADE_BLOCK]}})
+    retrying.upgraded = []
+    retrying._run_auto_upgrade_unit_tick = (
+        lambda h, s, b, n: retrying.upgraded.append(b["params"]["priority"]))
+    # the retry's placement succeeds -> the slot stops being pending
+    def place(h, s, l, t, b, i, m, o, **k):
+        retrying.retried.append(b["params"]["name"])
+        retrying._unplaced_units.pop(5, None)
+    retrying._run_place_unit_block = place
+    return retrying
+
+
+def test_a_unit_placed_on_retry_gets_its_priority(deferring, monkeypatch):
+    _cards(monkeypatch, {5: IN_HAND_RICH, 6: IN_HAND_RICH})
+
+    deferring._retry_unplaced_units(1, threading.Event())
+
+    assert deferring.retried == ["cell"]
+    assert deferring.upgraded == [4], "placed on retry but never given its priority"
+
+
+def test_a_retry_that_did_not_place_does_not_upgrade_thin_air(retrying, monkeypatch):
+    from core import templates
+    monkeypatch.setattr(templates, "load_template",
+                        lambda n: {"blocks": {"prestart": [UPGRADE_BLOCK]}})
+    retrying.upgraded = []
+    retrying._run_auto_upgrade_unit_tick = (
+        lambda h, s, b, n: retrying.upgraded.append(b["params"]["priority"]))
+    _cards(monkeypatch, {5: IN_HAND_RICH, 6: IN_HAND_RICH})   # stays pending
+
+    retrying._retry_unplaced_units(1, threading.Event())
+
+    assert retrying.upgraded == [], "upgraded a unit the retry failed to place"
+
+
+def test_no_upgrade_block_for_that_unit_is_fine(deferring, monkeypatch):
+    from core import templates
+    monkeypatch.setattr(templates, "load_template",
+                        lambda n: {"blocks": {"prestart": []}})
+    deferring._upgrade_block_cache = {}
+    _cards(monkeypatch, {5: IN_HAND_RICH, 6: IN_HAND_RICH})
+
+    deferring._retry_unplaced_units(1, threading.Event())
+
+    assert deferring.upgraded == []
+    assert deferring.retried == ["cell"]

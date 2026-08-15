@@ -1251,7 +1251,55 @@ class BlockOps:
             left, top, _, _ = wm.get_window_rect_screen(hwnd)
             self._run_place_unit_block(hwnd, stop_event, left, top, block, entry["index"],
                                          entry["macro_name"], entry["unit_ordinal"])
+            # A deferred placement misses its own Auto Upgrade block. That
+            # block sits right after the placement in the routine, so it runs
+            # one tick later, finds the unit is not down yet, and skips for
+            # good -- live, Salmon Sorcerer and Kenpachi were both placed by
+            # this retry and both ended the match with no priority set. So
+            # apply it here, now that the unit actually exists.
+            if slot not in pending:
+                self._apply_deferred_upgrade(hwnd, stop_event, entry)
             return
+
+    def _apply_deferred_upgrade(self, hwnd, stop_event: threading.Event, entry) -> None:
+        """Run the Auto Upgrade Unit block belonging to a unit the retry just
+        placed, if the routine has one for it."""
+        ordinal = entry.get("unit_ordinal")
+        if ordinal is None:
+            return
+        block = self._upgrade_block_for(entry.get("macro_name"), ordinal)
+        if block is None:
+            return
+        self._log(f'[Macro] Place Unit "{entry["name"]}": placed on retry -- applying its '
+                   f'Auto Upgrade (priority {block.get("params", {}).get("priority")}).')
+        self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, entry.get("index") or 0)
+
+    def _upgrade_block_for(self, macro_name, ordinal):
+        """The routine's auto_upgrade_unit block targeting unit #ordinal.
+
+        Read from the template rather than remembered at queue time: the
+        placement does not know whether an upgrade block follows it, and the
+        two are only related by the ordinal. Cached per macro.
+        """
+        cache = getattr(self, "_upgrade_block_cache", None)
+        if cache is None:
+            cache = self._upgrade_block_cache = {}
+        if macro_name not in cache:
+            found = {}
+            try:
+                from . import templates as _templates
+                blocks = (_templates.load_template(macro_name) or {}).get("blocks") or {}
+                for phase in ("prestart", "battle", "loop_a", "loop_b"):
+                    for blk in blocks.get(phase) or []:
+                        if blk.get("type") == "auto_upgrade_unit":
+                            try:
+                                found[int(blk.get("params", {}).get("index"))] = blk
+                            except (TypeError, ValueError):
+                                pass
+            except Exception:
+                pass
+            cache[macro_name] = found
+        return cache[macro_name].get(ordinal)
 
     @staticmethod
     def _nudged_block(block: dict, attempt: int) -> dict:
