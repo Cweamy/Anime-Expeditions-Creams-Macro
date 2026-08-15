@@ -536,6 +536,7 @@
           <option value="">Load...</option>
         </select>
         <button onclick="newTemplate()" class="task-toolbar-btn" title="Clear the editor and start a new template">New</button>
+        <button onclick="openExamples()" class="task-toolbar-btn" title="Start from a ready-made routine instead of a blank editor">Examples</button>
         <button onclick="deleteSelectedTemplate()" class="task-toolbar-btn danger" title="Delete the loaded template">Delete</button>
         <button onclick="importTemplates()" class="task-toolbar-btn" title="Load templates from a shared .json file">Import File</button>
         <button onclick="exportTemplates()" class="task-toolbar-btn" title="Save every template to a .json file to back up or share">Export File</button>
@@ -2080,6 +2081,30 @@
   <!-- ============ Challenge Story Maps (Resource > Auto Challenge) ============
        Per-map Macro Operation assignment; kept in a modal to keep the Resource
        screen clean. Rows rendered by renderChallengeScreen() into #challenge-map-list. -->
+  <!-- Examples: ready-made routines that ship with the app. Picking one
+       COPIES it into the user's own templates (see Api.use_example_template)
+       rather than loading it in place, so the bundled original can never be
+       edited away and the copy is theirs to change. -->
+  <div id="examples-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) closeExamples()">
+    <div class="modal-panel" style="width: 560px; max-width: 94vw;">
+      <div class="modal-head">
+        <span class="modal-title">Example Macros</span>
+        <span style="flex:1;"></span>
+        <button onclick="openCommunity()" class="task-toolbar-btn"
+                style="margin-right: 10px;"
+                title="discord.gg/creams -- opens in your browser">More Examples on Discord :)</button>
+        <span class="modal-close" onclick="closeExamples()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="wh-hint" style="margin-bottom: 8px;">Adds a copy to your own templates and loads it &mdash; edit it freely, the original stays put.</div>
+        <!-- padding, not margin: .task-card lifts 1px and casts a shadow on
+             hover, and an overflow-y container clips both on the top row.
+             The horizontal padding keeps the shadow off the scrollbar too. -->
+        <div id="examples-list" style="max-height: 60vh; overflow-y: auto; padding: 4px 4px 0;"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="challenge-maps-modal" class="modal-overlay" style="display:none;" onmousedown="if(event.target===this) closeChallengeMaps()">
     <div class="modal-panel" style="width: 520px; max-width: 94vw;">
       <div class="modal-head">

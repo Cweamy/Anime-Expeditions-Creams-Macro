@@ -1,0 +1,101 @@
+{
+  "name": "Expedition - deferred placements",
+  "description": "Places what the starting purse can afford before the round, then waits for the battle to be under way and places the rest. Expedition only stages Pre Start units and drops any it cannot pay for the moment the round begins, so the expensive ones have to go down later.",
+  "blocks": {
+    "team": "",
+    "equipment": "include",
+    "prestart": [
+      {
+        "type": "walk_path",
+        "params": {},
+        "once": true,
+        "mode": "auto",
+        "pathName": "",
+        "sprint": false
+      },
+      {
+        "type": "place_unit",
+        "params": {
+          "name": "ramen guy",
+          "x": 469,
+          "y": 384
+        },
+        "once": false,
+        "hotkey": "1",
+        "ignoreHighlight": false,
+        "retryUntilPlaced": false
+      },
+      {
+        "type": "place_unit",
+        "params": {
+          "name": "senku",
+          "x": 474,
+          "y": 340
+        },
+        "once": false,
+        "hotkey": "2",
+        "ignoreHighlight": false,
+        "retryUntilPlaced": false
+      },
+      {
+        "type": "place_unit",
+        "params": {
+          "name": "kenpachi",
+          "x": 746,
+          "y": 361
+        },
+        "once": false,
+        "hotkey": "3",
+        "ignoreHighlight": false,
+        "retryUntilPlaced": false
+      }
+    ],
+    "battle": [
+      {
+        "type": "wait_wave",
+        "params": {
+          "wave": "2"
+        },
+        "once": false
+      },
+      {
+        "type": "place_unit",
+        "params": {
+          "name": "megumi",
+          "x": 589,
+          "y": 344
+        },
+        "once": false,
+        "hotkey": "4",
+        "ignoreHighlight": false,
+        "retryUntilPlaced": false
+      },
+      {
+        "type": "place_unit",
+        "params": {
+          "name": "cell",
+          "x": 537,
+          "y": 398
+        },
+        "once": false,
+        "hotkey": "5",
+        "ignoreHighlight": false,
+        "retryUntilPlaced": false
+      },
+      {
+        "type": "place_unit",
+        "params": {
+          "name": "puppet",
+          "x": 533,
+          "y": 336
+        },
+        "once": false,
+        "hotkey": "6",
+        "ignoreHighlight": false,
+        "retryUntilPlaced": false
+      }
+    ],
+    "loop_a": [],
+    "loop_b": []
+  }
+}

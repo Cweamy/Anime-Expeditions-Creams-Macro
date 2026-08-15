@@ -13,7 +13,7 @@ Assets/stage_data.json
 # the task queue. None of it is meaningful to anyone but you.
 debug/
 Paths/*
-Templates/
+Templates/*
 # Record block input recordings (core/input_record.py) -- personal, no
 # shipped-defaults exception like Paths/defaults/ below (there's no
 # game-wide "known good" recording to ship; every one is bespoke).
@@ -27,6 +27,14 @@ Recordings/*
 # it, the auto-walk feature would just silently do nothing for anyone who
 # clones this.
 !Paths/defaults/
+
+# Templates/examples/ is the same exception for routines: ready-made macros
+# that ship with the app so a new user has somewhere to start other than a
+# blank editor (Macro Manager > Examples, see core.templates.list_examples).
+# Shared game knowledge rather than anyone's personal setup, and deliberately
+# a subfolder -- list_templates() uses os.listdir, so these never appear in
+# the user's own Load... list and can never be saved over.
+!Templates/examples/
 
 # Personal config -- includes your Discord webhook URL, hotkeys, calibrated
 # regions, etc. Never commit this.
