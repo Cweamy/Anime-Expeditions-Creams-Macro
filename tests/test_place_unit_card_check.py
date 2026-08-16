@@ -461,8 +461,12 @@ def test_no_valid_tile_is_queued_not_abandoned(placing, monkeypatch):
     cannot tell placed from not. Dropping the block is why three Cells saved
     16px apart only ever landed one."""
     monkeypatch.setattr(BlockOps, "_find_valid_place_spot", lambda self, *a, **k: None)
+    # The pre-click affordability read is legitimate -- it is what stops an
+    # unaffordable unit being circled. It says "affordable" here so the block
+    # gets as far as hunting for a tile.
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
-                        lambda h, s, n=None: pytest.fail("no click happened; no card to read"))
+                        lambda h, s, n=None: {"in_hand": True, "affordable": True,
+                                              "price_px": 660, "hue": 45})
     placing._unplaced_units = {}
 
     _place(placing)
@@ -897,3 +901,31 @@ def test_kenpachi_path_unaffordable_then_placed_then_upgraded(placing, monkeypat
     assert placing._placed_unit_positions.get(7), "the sweep never placed it"
     assert 7 not in placing._unplaced_units, "still queued after being placed"
     assert applied == [2], f"placed but priority never applied (got {applied})"
+
+
+def test_a_greyed_card_does_not_stop_the_attempt(placing, monkeypatch):
+    """Phantom Placing lets a unit go down before it is paid for, so a greyed
+    card is NOT "cannot place" -- it is "places as a phantom". Refusing to try
+    would strand every unit the player has not yet earned."""
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": True, "affordable": False,
+                                              "price_px": 400, "hue": 0})
+    hunted = []
+    monkeypatch.setattr(BlockOps, "_find_valid_place_spot",
+                        lambda self, h, st, l, t, x, y, nm: hunted.append((x, y)) or (x, y))
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    assert hunted, "refused to even look for a tile because the card was greyed"
+
+
+def test_an_affordable_unit_still_gets_placed_normally(placing, monkeypatch):
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": True, "affordable": True,
+                                              "price_px": 660, "hue": 45})
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    assert placing._placed_unit_positions[7] == (500, 400)

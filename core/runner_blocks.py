@@ -1421,6 +1421,12 @@ class BlockOps:
                 break
             time.sleep(0.15)
         self._reset_unit_info_panel(hwnd)
+        # Let the panel finish closing. Clicking a unit whose panel is still
+        # open TOGGLES it shut, so an Auto Upgrade block running straight
+        # after this probe would close the panel instead of opening it and
+        # then find no priority button -- live, Senku placed fine and came
+        # away with no priority set.
+        time.sleep(PLACE_CONFIRM_RESET_SETTLE)
         return found
 
     def _hotbar_slot_count(self, macro_name) -> int:
