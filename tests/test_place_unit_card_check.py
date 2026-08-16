@@ -843,3 +843,57 @@ def test_each_queued_copy_keeps_the_slot_its_card_lives_in():
                          5, "m", 5, "s2", 2, reason="no_tile")
 
     assert r._unplaced_units[5]["slot"] == 2
+
+
+# ---------------------------------------------------------------------------
+# The full deferred path, end to end
+# ---------------------------------------------------------------------------
+
+def test_kenpachi_path_unaffordable_then_placed_then_upgraded(placing, monkeypatch):
+    """The exact live scenario, through the REAL placement block rather than a
+    stub, because the bug could be in the seam between the two.
+
+    Kenpachi is queued at Pre Start as unaffordable, gold arrives, the sweep
+    places it -- and it must come away with priority 2, not nothing.
+    """
+    from core import templates
+    upgrade = {"type": "auto_upgrade_unit",
+               "params": {"index": "7", "priority": 2, "input": "click"}, "once": False}
+    monkeypatch.setattr(templates, "load_template",
+                        lambda n: {"blocks": {"prestart": [
+                            {"type": "place_unit", "hotkey": "3", "params": {"name": "Kenpachi"}},
+                            upgrade]}})
+    monkeypatch.setattr(runner_blocks.wm, "get_window_rect_screen", lambda h: (0, 0, 1152, 756))
+    placing._is_expedition_match = False
+    placing._unplaced_units = {}
+
+    broke = {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0}
+    rich = {"in_hand": True, "affordable": True, "price_px": 660, "hue": 45}
+    state = {"gold": False}
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: rich if state["gold"] else broke)
+
+    block = {"type": "place_unit", "hotkey": "3",
+             "params": {"name": "Kenpachi", "x": 575, "y": 325}}
+    placing._run_place_unit_block(1, threading.Event(), 0, 0, block, 15, "m", unit_ordinal=7)
+
+    assert 7 in placing._unplaced_units, "an unaffordable unit was not queued"
+    assert placing._unplaced_units[7]["reason"] == "unaffordable"
+
+    # Gold arrives; the sweep runs. The board now says a unit is standing there.
+    state["gold"] = True
+    applied = []
+    placing._run_auto_upgrade_unit_tick = (
+        lambda h, s, b, n: applied.append(b["params"]["priority"]))
+    real_read = runner_blocks.vision.read_unit_card
+    def after_place(h, s, n=None):
+        return {"in_hand": False, "affordable": None, "price_px": 5, "hue": -1} \
+            if placing._placed_unit_positions.get(7) else real_read(h, s, n)
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card", after_place)
+    placing._unplaced_next_retry_at = 0.0
+
+    placing._retry_unplaced_units(1, threading.Event())
+
+    assert placing._placed_unit_positions.get(7), "the sweep never placed it"
+    assert 7 not in placing._unplaced_units, "still queued after being placed"
+    assert applied == [2], f"placed but priority never applied (got {applied})"
