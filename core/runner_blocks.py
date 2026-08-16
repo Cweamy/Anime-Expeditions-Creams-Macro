@@ -1413,6 +1413,21 @@ class BlockOps:
         deadline = time.time() + PLACE_CONFIRM_PANEL_TIMEOUT
         found = False
         while True:
+            # unit_exist FIRST: it is the info panel itself, which is what
+            # actually proves a unit is standing here. find_upgrade_state
+            # matches the Upgrade BUTTON, and a phantom -- a unit placed
+            # before it is paid for, which Phantom Placing allows -- renders
+            # that button greyed with its price on it, matching neither
+            # template. Live, real phantom placements were reported as
+            # "nothing is standing" and circled until the clock ran out,
+            # which is what cost those runs.
+            try:
+                match, _which = vision.find_image_any(hwnd, PLACE_CONFIRM_PANEL_IMAGES)
+            except vision.TemplateNotFound:
+                match = None               # optional crops, fall through
+            if match is not None:
+                found = True
+                break
             state, _match = vision.find_upgrade_state(hwnd)
             if state is not None:
                 found = True
@@ -1833,10 +1848,16 @@ class BlockOps:
         # price test reads as "no price" and therefore "placed".
         cannot_afford = (card is not None and card["in_hand"]
                          and card.get("affordable") is False)
-        definitely_failed = cannot_afford
-        if not cannot_afford and not is_quick_place:
-            if not self._unit_is_on_tile(hwnd, stop_event, left, top, cur_x, cur_y):
-                definitely_failed = True
+        # A greyed card is NOT proof of failure. Phantom Placing puts the unit
+        # down anyway and it materialises once gold arrives, so the board is
+        # the only thing that can say -- and it is asked even when the card is
+        # greyed, which is exactly the case that used to be written off.
+        if is_quick_place:
+            definitely_failed = cannot_afford      # a chain cannot be probed
+        else:
+            definitely_failed = not self._unit_is_on_tile(
+                hwnd, stop_event, left, top, cur_x, cur_y)
+            if definitely_failed:
                 self._log(f'[Macro] Place Unit "{name}": nothing is standing at '
                            f'({cur_x}, {cur_y}) -- the placement did not take.')
 

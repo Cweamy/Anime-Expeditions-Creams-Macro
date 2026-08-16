@@ -172,6 +172,8 @@ def placing(monkeypatch):
     # A unit IS standing on the tile unless a test says otherwise.
     monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state",
                         lambda h: ("upgradeable", {"cx": 1, "cy": 1}))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any",
+                        lambda h, names, **k: ({"cx": 1, "cy": 1, "score": 1.0}, names[0]))
     return _Runner()
 
 
@@ -213,6 +215,9 @@ def test_being_unable_to_afford_it_says_so(placing, monkeypatch):
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
                         lambda h, s, n=None: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
 
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
+
     _place(placing)
 
     assert any("cannot afford it yet" in m for m in placing.logs)
@@ -225,6 +230,9 @@ def test_a_pre_start_placement_is_checked_too(placing, monkeypatch):
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
                         lambda h, s, n=None: {"in_hand": True, "affordable": False, "price_px": 400, "hue": 0})
     placing._unplaced_units = {}
+
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
 
     _place(placing, verify=False)
 
@@ -726,6 +734,7 @@ def test_an_empty_tile_is_not_a_placement(placing, monkeypatch):
                         lambda h, s, n=None: {"in_hand": False, "affordable": None,
                                               "price_px": 5, "hue": -1})
     monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
     placing._unplaced_units = {}
 
     _place(placing)
@@ -740,6 +749,7 @@ def test_the_board_check_deselects_before_clicking(placing, monkeypatch):
     """Clicking an empty tile with a unit still in hand would PLACE one --
     turning the check into the thing it is checking for."""
     monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
                         lambda h, s, n=None: {"in_hand": False, "affordable": None,
                                               "price_px": 5, "hue": -1})
@@ -750,19 +760,24 @@ def test_the_board_check_deselects_before_clicking(placing, monkeypatch):
     assert any(c.args == (ord("Z"),) for c in placing._keyboard.tap.call_args_list),         "did not deselect before probing the tile"
 
 
-def test_an_unaffordable_card_skips_the_board_check(placing, monkeypatch):
-    """No click happened, so there is nothing to probe -- and probing would
-    cost a click and a search for no information."""
+def test_a_greyed_card_is_still_probed_because_of_phantom_placing(placing, monkeypatch):
+    """Phantom Placing puts a unit down before it is paid for, so a greyed
+    card cannot be taken as proof the placement failed -- the board has to be
+    asked. Writing it off unprobed is what stranded phantoms that had in fact
+    gone down."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
                         lambda h, s, n=None: {"in_hand": True, "affordable": False,
                                               "price_px": 400, "hue": 0})
+    probed = []
     monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state",
-                        lambda h: pytest.fail("probed the board for a unit never clicked"))
+                        lambda h: probed.append(1) or ("upgradeable", {"cx": 1, "cy": 1}))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
     placing._unplaced_units = {}
 
     _place(placing)
 
-    assert placing._unplaced_units[7]["reason"] == "unaffordable"
+    assert probed, "wrote off a greyed card without asking the board"
+    assert placing._placed_unit_positions[7] == (500, 400)
 
 
 def test_the_circle_widens_so_a_badly_wrong_spot_is_still_reached():
@@ -786,6 +801,7 @@ def test_the_circle_orbits_the_saved_spot_not_the_last_try(placing, monkeypatch)
                         lambda h, s, n=None: {"in_hand": False, "affordable": None,
                                               "price_px": 5, "hue": -1})
     monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
     aimed = []
     monkeypatch.setattr(BlockOps, "_find_valid_place_spot",
                         lambda self, h, st, l, t, x, y, nm: aimed.append((x, y)) or (x, y))
@@ -808,6 +824,7 @@ def test_circling_gives_up_on_time_not_just_on_attempts(placing, monkeypatch):
                         lambda h, s, n=None: {"in_hand": False, "affordable": None,
                                               "price_px": 5, "hue": -1})
     monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
     tries = []
     monkeypatch.setattr(BlockOps, "_find_valid_place_spot",
                         lambda self, h, st, l, t, x, y, nm: tries.append((x, y)) or (x, y))
@@ -877,6 +894,13 @@ def test_kenpachi_path_unaffordable_then_placed_then_upgraded(placing, monkeypat
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
                         lambda h, s, n=None: rich if state["gold"] else broke)
 
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state",
+                        lambda h: (None, None) if not state["gold"]
+                        else ("upgradeable", {"cx": 1, "cy": 1}))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any",
+                        lambda h, names, **k: (None, None) if not state["gold"]
+                        else ({"cx": 1, "cy": 1, "score": 1.0}, names[0]))
+
     block = {"type": "place_unit", "hotkey": "3",
              "params": {"name": "Kenpachi", "x": 575, "y": 325}}
     placing._run_place_unit_block(1, threading.Event(), 0, 0, block, 15, "m", unit_ordinal=7)
@@ -929,3 +953,38 @@ def test_an_affordable_unit_still_gets_placed_normally(placing, monkeypatch):
     _place(placing)
 
     assert placing._placed_unit_positions[7] == (500, 400)
+
+
+def test_a_phantom_counts_as_a_placed_unit(placing, monkeypatch):
+    """Phantom Placing puts a unit down before it is paid for. Its info panel
+    opens normally and carries the Quote/priority controls, but the Upgrade
+    button renders greyed with its price on it and matches neither upgrade
+    template -- so probing with find_upgrade_state alone called real phantom
+    placements "nothing is standing" and circled them until the clock ran
+    out, which is what lost those runs."""
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": True, "affordable": False,
+                                              "price_px": 400, "hue": 0})
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any",
+                        lambda h, names, **k: ({"cx": 1, "cy": 1, "score": 1.0}, "priority_upgrade"))
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    assert placing._placed_unit_positions[7] == (500, 400), "a phantom was not counted as placed"
+    assert not any("nothing is standing" in m for m in placing.logs)
+
+
+def test_no_panel_at_all_is_still_a_failed_placement(placing, monkeypatch):
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": False, "affordable": None,
+                                              "price_px": 5, "hue": -1})
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "find_image_any", lambda h, names, **k: (None, None))
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    assert any("nothing is standing" in m for m in placing.logs)
