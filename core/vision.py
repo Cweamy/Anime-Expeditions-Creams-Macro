@@ -1107,6 +1107,108 @@ def find_upgrade_state(hwnd: int):
     return ("upgradeable" if green >= UPGRADE_GREEN_MIN_FRACTION else "not_upgradeable"), match
 
 
+# ---------------------------------------------------------------------------
+# The unit hotbar
+# ---------------------------------------------------------------------------
+# A card answers "is this unit still in my hand?" directly. That is what a
+# placement actually needs to know, and what searching the whole screen for
+# unit_exist never told it: that search hits whenever ANY unit info panel is
+# open, so a unit that never left the hand still reported "verified placed
+# (score 1.00)" while its card sat there with the price still on it.
+#
+# Three states, measured on real 1152x756 captures:
+#
+#                         card value   price px   price hue
+#   in hand, affordable     75-162      657-668    36-54  (gold)
+#   in hand, greyed out      47-60      327-501      0    (red)
+#   placed, or empty slot    22-26        4-10       --
+#
+# The price-pixel count is the one to trust. On brightness alone a greyed
+# (unaffordable) card falls most of the way to a placed one -- 47 against 26
+# -- and reading it as "placed" would tell the runner a unit went down while
+# it is still in hand, which is the whole failure being fixed. But a greyed
+# card still DRAWS its price, so the pixel count stays an order of magnitude
+# clear of a placed slot. The hue then says whether it can be afforded.
+# The hotbar is CENTRED on the window, and how many slots it holds varies --
+# an Expedition frame showed 10, a Story frame showed 6. So a card's position
+# cannot be a fixed x: slot i sits at CARD_MID + (i - (n+1)/2) * CARD_STEP.
+# Confirmed against three real measurements:
+#   n=10, slot 6  -> model 611, measured 580-642 (centre 611)
+#   n=6,  slot 1  -> model 401, measured 362-439 (centre 400)
+#   n=6,  slot 6  -> model 751, measured 715-790 (centre 752)
+# Hardcoding the 10-slot layout is what made every card read on a 6-slot
+# Story bar land two slots to the left -- slots 1 and 2 sampled bare map, and
+# every in-hand/affordable answer in those runs was decided from scenery.
+CARD_MID, CARD_STEP, CARD_W = 576, 70, 62
+CARD_DEFAULT_SLOTS = 10        # the widest bar seen; used when the count is unknown
+CARD_Y0, CARD_H = 663, 63
+CARD_PRICE_STRIP_H = 16           # bottom of the card, where the price is drawn
+CARD_PRICE_SAT_MIN = 40           # deliberately loose -- a greyed price is washed out
+CARD_PRICE_VAL_MIN = 60
+CARD_IN_HAND_MIN_PRICE_PX = 100   # measured 4-10 placed vs 327+ in hand; nothing lands between
+# Affordability is read as a red-vs-gold FRACTION, not a dominant hue. The
+# dominant hue of the price strip is contaminated by the unit art behind the
+# glyphs: a genuinely red Y650 on purple/magenta artwork came out at hue 24
+# and got called gold. By fraction the same card is unmistakable -- 0.0% and
+# 3.6% gold against 37.9% and 44.3% red on the two measured cards.
+#
+# The test is deliberately one-sided. Only STRONG evidence of red counts as
+# unaffordable; anything ambiguous is treated as affordable, because a wrong
+# "cannot afford" skips a placement that would have worked, while a wrong
+# "can afford" costs one click that the game declines. Note the gold side has
+# only been measured by dominant hue (36-54) so far, not by fraction.
+CARD_RED_HUES = (20, 340)         # <= 20 or >= 340 degrees
+CARD_GOLD_HUES = (30, 65)
+CARD_UNAFFORDABLE_MAX_GOLD = 0.10
+CARD_UNAFFORDABLE_MIN_RED = 0.20
+
+
+def card_left_edge(slot: int, slot_count: int = CARD_DEFAULT_SLOTS) -> int:
+    """Window-x of slot `slot`'s left edge on a bar holding `slot_count`."""
+    return int(round(CARD_MID + (slot - (slot_count + 1) / 2) * CARD_STEP - CARD_W / 2))
+
+
+def read_unit_card(hwnd: int, slot: int, slot_count: int = CARD_DEFAULT_SLOTS) -> dict:
+    """What hotbar slot `slot` (1-10) is showing right now.
+
+    Returns {"in_hand", "affordable", "price_px", "hue"}. in_hand False means
+    the unit is on the board already or the slot is empty -- indistinguishable
+    from each other here, and it does not need to be: neither is something to
+    place. affordable is None whenever in_hand is False, since an absent price
+    has no colour to read.
+
+    Cheap on purpose: one 62x16 capture, no template, no click, no polling --
+    less work than the single unit_exist search it replaces, which was three
+    attempts of a whole-screen match with a 2s timeout and a click between
+    each.
+    """
+    import numpy as np
+    blank = {"in_hand": False, "affordable": None, "price_px": 0, "hue": -1}
+    if not 1 <= slot <= slot_count:
+        return blank
+    x0 = card_left_edge(slot, slot_count)
+    strip = capture_game_bgr(hwnd, (x0, CARD_Y0 + CARD_H - CARD_PRICE_STRIP_H,
+                                     CARD_W, CARD_PRICE_STRIP_H))
+    if strip is None or strip.size == 0:
+        return blank
+    hsv = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
+    hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    price = hue[(sat >= CARD_PRICE_SAT_MIN) & (val >= CARD_PRICE_VAL_MIN)]
+    count = int(price.size)
+    if count < CARD_IN_HAND_MIN_PRICE_PX:
+        return {"in_hand": False, "affordable": None, "price_px": count, "hue": -1}
+    # astype(int) before doubling: OpenCV packs hue 0-179 into a uint8 array,
+    # so doubling in place wraps anything past 127 back around into the red
+    # band -- which would flip an unaffordable card to affordable.
+    degrees = price.astype(int) * 2
+    red = float(((degrees <= CARD_RED_HUES[0]) | (degrees >= CARD_RED_HUES[1])).mean())
+    gold = float(((degrees >= CARD_GOLD_HUES[0]) & (degrees <= CARD_GOLD_HUES[1])).mean())
+    broke = gold < CARD_UNAFFORDABLE_MAX_GOLD and red >= CARD_UNAFFORDABLE_MIN_RED
+    return {"in_hand": True, "affordable": not broke, "price_px": count,
+            "hue": int(np.bincount(degrees, minlength=360).argmax()),
+            "red_fraction": red, "gold_fraction": gold}
+
+
 def find_image_any(hwnd: int, names: tuple, region: tuple = None, threshold: float = DEFAULT_THRESHOLD,
                     template_dir: str = UI_ASSETS_DIR):
     """find_image, but over several DIFFERENTLY-NAMED templates in one call

@@ -362,7 +362,7 @@ TOWER_SCREEN_TIMEOUT = 10.0  # how long to wait for each Tower screen (nav_tower
 
 # Reference-window region (x, y, w, h) of the Tower game mode.
 # The tower's recent floor is always in this region but it is
-# subject to change.
+# subject to change
 TOWER_CARD_REGION = (565, 230, 770 - 565, 351 - 230)  # (565, 230) -> (770, 351)
 
 # Auto Bounty derives all objective clicks from the live board. These values
@@ -665,6 +665,23 @@ PLACE_HOTKEY_SETTLE = 0.35  # after pressing the hotkey, before the pixel search
 PLACE_UNIT_CLICK_SETTLE = 0.25   # lets the placement actually register before the next check
 PLACE_UNIT_VERIFY_TIMEOUT = 2.0
 PLACE_UNIT_VERIFY_ATTEMPTS = 3  # search-then-click retried up to this many times before giving up on verifying
+PLACE_CARD_SETTLE = 0.35  # let the hotbar card redraw before reading it -- it drops its price a beat after the unit lands, and reading too early would call a good placement a failure
+PLACE_CONFIRM_PANEL_TIMEOUT = 1.2  # how long to wait for a unit info panel after clicking the tile a unit was just placed on -- a panel means a unit is standing there, no panel means the placement was thrown away
+# Anything that only appears on an open unit info panel counts as proof a
+# unit is standing on the tile. The Quote/priority controls are the ones
+# that survive a PHANTOM -- a unit placed before it is paid for, which
+# Phantom Placing allows. Its panel opens normally and carries these, but
+# its Upgrade button renders greyed with the price on it and matches
+# neither upgrade template, so find_upgrade_state alone called real
+# phantom placements "nothing is standing" and circled them for nothing.
+PLACE_CONFIRM_PANEL_IMAGES = ("priority_upgrade", "quote_off", "quote_on", "unit_exist")
+PLACE_CONFIRM_RESET_SETTLE = 0.35  # after the board probe closes the info panel, before the next block touches the unit -- clicking a unit whose panel is still open toggles it SHUT, so an Auto Upgrade running straight after would close it and find no priority button
+PLACE_CIRCLE_TIMEOUT = 20.0  # whole-circle budget for one unit. Each attempt re-presses the hotkey, re-searches and waits for the confirm, so an attempt COUNT alone is not a bound -- seventeen of them on one hopeless unit would hold Pre Start up while every other unit waits
+UNPLACED_RETRY_INTERVAL = 3.0  # gap between retries of a unit that would not go down -- gold accrues over a match, so "cannot afford it yet" stops being true, but checking every poll would spend the whole match on it
+UNPLACED_RETRY_MAX_ATTEMPTS = 17  # the saved spot, then two full circles of eight points at widening radius. Bounded because a retry that keeps "succeeding" without placing anything would otherwise run all match
+UNPLACED_RETRY_NUDGE = 40  # px a retry steps off the saved spot. The circle widens as attempts go on (1x the first time round the eight points, 2x the second), so a saved coordinate that is badly wrong still gets found -- Salmon Sorcerer 2 sat in the HUD strip, well outside anything a 24px ring could reach
+PRESTART_SWEEP_TIMEOUT = 12.0  # how long Pre Start keeps circling for a spot before starting the round anyway -- Start Game is waiting on this, and a unit that is merely unaffordable will not come good until gold accrues in Battle
+PRESTART_SWEEP_INTERVAL = 0.4  # gap between circling passes during Pre Start
 # "Keep Placing" block toggle: re-run the WHOLE select->find->click->verify
 # sequence (not just re-click a spot) until unit_exist confirms, capped so a
 # genuinely-impossible placement (no gold, unit on cooldown, no valid tile
@@ -884,7 +901,12 @@ DEFAULT_COORDS = {
     "stage_row_height": STAGE_ROW_HEIGHT,
     "act_row_x": ACT_CLICK_BASE[0], "act_row_y": ACT_CLICK_BASE[1],
     "act_row_height": ACT_ROW_HEIGHT,
+    # Event gamemode card click point (see runner._reach_event_act_selected):
+    # the card is clicked HERE by coordinate, then the event_gamemode button
+    # (the image with the "Event Gamemode" text) is found and clicked by
+    # image search. No tuple constant above -- keep it in sync with main.py's
     # MACRO_COORD_DEFAULTS.
+    "event_gamemode_x": 152, "event_gamemode_y": 253,
     "challenge_stage_1_x": CHALLENGE_STAGE_CLICK["1"][0], "challenge_stage_1_y": CHALLENGE_STAGE_CLICK["1"][1],
     "challenge_stage_2_x": CHALLENGE_STAGE_CLICK["2"][0], "challenge_stage_2_y": CHALLENGE_STAGE_CLICK["2"][1],
     "challenge_stage_3_x": CHALLENGE_STAGE_CLICK["3"][0], "challenge_stage_3_y": CHALLENGE_STAGE_CLICK["3"][1],

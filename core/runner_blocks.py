@@ -139,6 +139,12 @@ class BlockOps:
         per-block progress it's made (e.g. an Upgrade block's remaining
         `times` budget and next-retry time) across calls.
         """
+        if self._battle_block_index >= len(battle_blocks):
+            # The list is done, but units it failed to place may have become
+            # placeable since -- gold accrues for the rest of the match. This
+            # is the only point where there is spare time to go back for them.
+            self._retry_unplaced_units(hwnd, stop_event)
+            return
         while self._battle_block_index < len(battle_blocks):
             block = battle_blocks[self._battle_block_index]
             btype = block.get("type")
@@ -1022,6 +1028,47 @@ class BlockOps:
             # it. Whatever else happens, Shift never leaves this function
             # still held.
             self._release_quick_place_shift()
+        self._sweep_unplaced_before_start(hwnd, stop_event)
+
+    def _sweep_unplaced_before_start(self, hwnd, stop_event: threading.Event) -> None:
+        """Keep circling anything Pre Start could not place, before the round
+        starts.
+
+        The retry sweep used to run only from _run_battle_blocks_tick, so a
+        unit that failed here sat queued until the match was already underway
+        -- reported live as "the circling logic didn't trigger", because every
+        failure in the log was a Pre Start one.
+
+        A saved coordinate that no longer lands on a free tile is exactly what
+        the circle is for: each pass re-aims UNPLACED_RETRY_NUDGE around the
+        spot and runs the full tile search from there, so a coordinate that
+        has drifted gets corrected instead of costing the unit.
+
+        Bounded by PRESTART_SWEEP_TIMEOUT, because Start Game is waiting on
+        this and a unit that simply cannot be afforded yet will never come
+        good before the round begins -- that one is left for the Battle sweep,
+        where gold actually accrues.
+        """
+        if not getattr(self, "_unplaced_units", None):
+            return
+        deadline = time.time() + PRESTART_SWEEP_TIMEOUT
+        self._log(f"[Macro] Pre Start: {len(self._unplaced_units)} unit(s) did not go down -- "
+                   f"circling for a spot before starting the round.")
+        while self._unplaced_units and time.time() < deadline:
+            if self._checkpoint(stop_event):
+                return
+            before = len(self._unplaced_units)
+            self._unplaced_next_retry_at = 0.0      # no rate limit here; the round is waiting
+            self._retry_unplaced_units(hwnd, stop_event)
+            if len(self._unplaced_units) == before and all(
+                    e.get("attempts", 0) >= UNPLACED_RETRY_MAX_ATTEMPTS
+                    for e in self._unplaced_units.values()):
+                break                               # every pending unit is out of tries
+            time.sleep(PRESTART_SWEEP_INTERVAL)
+        still = len(getattr(self, "_unplaced_units", {}) or {})
+        if still:
+            self._log(f"[Macro] Pre Start: {still} unit(s) still not placed -- leaving them queued "
+                       f"for the Battle sweep, where gold keeps coming in.")
 
     def _run_prestart_single_block(self, hwnd, stop_event: threading.Event, task: dict, default_walk_paths: dict,
                                      block: dict, i: int, macro_name: str, first_repeat: bool, next_block: dict) -> None:
@@ -1151,6 +1198,308 @@ class BlockOps:
             return capture_region(left + x, top + y, width, height)
         return vision.capture_window_region_bgr(hwnd, region)
 
+    # -----------------------------------------------------------------------
+    # Units that did not go down
+    # -----------------------------------------------------------------------
+    # A placement can fail for reasons that stop being true later in the
+    # match -- most obviously gold. Reported live on Flower Forest: cards 5
+    # (Y1,350) and 6 (Y1,150) still in hand at Y1,979, both affordable by
+    # then, with the Battle block list already exhausted so nothing ever went
+    # back for them. The run finished 4/13 units down.
+    #
+    # So a failed placement is remembered, and retried once the board says it
+    # could work. Keyed by hotbar slot, because that is what identifies the
+    # unit and one slot can only be pending once.
+
+    def _remember_unplaced(self, block, index, macro_name, unit_ordinal, name, slot,
+                             reason="unaffordable"):
+        """Queue a placement to try again. `reason` is what stopped it:
+
+        "unaffordable" -- the card is greyed, so the unit is certainly not
+        down, and the retry waits for the price to go gold.
+        "no_tile"      -- the search found nowhere valid, so no click even
+        happened. Also certain, and the one failure that stays detectable for
+        a multi-copy unit, whose card cannot distinguish placed from not.
+        """
+        pending = getattr(self, "_unplaced_units", None)
+        if pending is None:
+            pending = self._unplaced_units = {}
+        # Keyed by unit ORDINAL, not by hotbar slot. Three copies of one unit
+        # share a slot -- all three Salmon Sorcerer are hotkey 2 -- so keying
+        # by slot made each failure overwrite the last and only the final copy
+        # was ever retried. Live: five placements failed and the sweep
+        # reported "3 unit(s) did not go down", with Salmon Sorcerer 2 quietly
+        # dropped from the queue and never tried again.
+        key = unit_ordinal if unit_ordinal is not None else ("slot", slot)
+        existing = pending.get(key) or {}
+        pending[key] = {"block": block, "index": index, "macro_name": macro_name,
+                        "unit_ordinal": unit_ordinal, "name": name, "reason": reason,
+                        "slot": slot,
+                        # Keep the count across re-queues so a placement that
+                        # fails a different way each time still hits the cap.
+                        "attempts": existing.get("attempts", 0)}
+
+    def _forget_unplaced(self, key):
+        pending = getattr(self, "_unplaced_units", None)
+        if pending:
+            pending.pop(key, None)
+
+    def _retry_unplaced_units(self, hwnd, stop_event: threading.Event) -> None:
+        """Retry one pending placement, if any is worth retrying right now.
+
+        One per call, like every other Battle-phase action, so the match's
+        Victory/Defeat poll keeps running -- and rate-limited, so a unit that
+        simply cannot be afforded yet is not hammered every tick.
+
+        A pending unit whose card has cleared is dropped without a retry: it
+        got placed some other way (the re-stage replay, most likely) and
+        clicking again would put a second copy somewhere unintended.
+        """
+        pending = getattr(self, "_unplaced_units", None)
+        if not pending:
+            return
+        now = time.time()
+        if now < getattr(self, "_unplaced_next_retry_at", 0.0):
+            return
+        self._unplaced_next_retry_at = now + UNPLACED_RETRY_INTERVAL
+
+        for key in sorted(pending, key=lambda k: (isinstance(k, tuple), k)):
+            entry = pending[key]
+            slot = entry.get("slot")
+            card = vision.read_unit_card(hwnd, slot,
+                                          self._hotbar_slot_count(entry["macro_name"]))
+            if not card["in_hand"]:
+                pending.pop(key)
+                self._log(f'[Macro] Place Unit "{entry["name"]}": card {slot} has cleared on its '
+                           f'own -- nothing left to retry.')
+                return
+            if card.get("affordable") is False:
+                continue          # still too expensive; leave it pending
+            # Bounded, because "the card is lit" is not proof the unit is
+            # missing -- a multi-copy unit keeps its price after every copy.
+            # Without a cap a card that never clears is re-placed for the rest
+            # of the match; live, that ran until the game refused with "Max
+            # placement limit reached!".
+            entry["attempts"] = entry.get("attempts", 0) + 1
+            if entry["attempts"] > UNPLACED_RETRY_MAX_ATTEMPTS:
+                pending.pop(key)
+                self._log(f'[Macro] Place Unit "{entry["name"]}": card {slot} is still lit after '
+                           f'{UNPLACED_RETRY_MAX_ATTEMPTS} retries -- giving up on it for this match.')
+                return
+            # Try somewhere slightly different each time rather than hammering
+            # the one coordinate. Each attempt still runs the normal search
+            # from wherever it is aimed -- a 38px box, then 24/48/72px rings --
+            # so nudging by UNPLACED_RETRY_NUDGE puts genuinely new ground in
+            # reach instead of re-covering what already came up empty. Without
+            # this, three Cells saved 16px apart fought over one tile and only
+            # one of them ever landed.
+            block = self._nudged_block(entry["block"], entry["attempts"])
+            params = block.get("params", {})
+            self._log(f'[Macro] Place Unit "{entry["name"]}": retrying at '
+                       f'({params.get("x")}, {params.get("y")}) -- {entry.get("reason")}, card {slot} '
+                       f'still in hand (attempt {entry["attempts"]}/{UNPLACED_RETRY_MAX_ATTEMPTS}).')
+            left, top, _, _ = wm.get_window_rect_screen(hwnd)
+            self._run_place_unit_block(hwnd, stop_event, left, top, block, entry["index"],
+                                         entry["macro_name"], entry["unit_ordinal"])
+            # A deferred placement misses its own Auto Upgrade block. That
+            # block sits right after the placement in the routine, so it runs
+            # one tick later, finds the unit is not down yet, and skips for
+            # good -- live, Salmon Sorcerer and Kenpachi were both placed by
+            # this retry and both ended the match with no priority set. So
+            # apply it here, now that the unit actually exists.
+            if key not in pending:
+                self._apply_deferred_upgrade(hwnd, stop_event, entry)
+            return
+
+    def _apply_deferred_upgrade(self, hwnd, stop_event: threading.Event, entry) -> None:
+        """Run the Auto Upgrade Unit block belonging to a unit the retry just
+        placed, if the routine has one for it."""
+        ordinal = entry.get("unit_ordinal")
+        if ordinal is None:
+            return
+        block = self._upgrade_block_for(entry.get("macro_name"), ordinal)
+        if block is None:
+            return
+        self._log(f'[Macro] Place Unit "{entry["name"]}": placed on retry -- applying its '
+                   f'Auto Upgrade (priority {block.get("params", {}).get("priority")}).')
+        self._run_auto_upgrade_unit_tick(hwnd, stop_event, block, entry.get("index") or 0)
+
+    def _upgrade_block_for(self, macro_name, ordinal):
+        """The routine's auto_upgrade_unit block targeting unit #ordinal.
+
+        Read from the template rather than remembered at queue time: the
+        placement does not know whether an upgrade block follows it, and the
+        two are only related by the ordinal. Cached per macro.
+        """
+        cache = getattr(self, "_upgrade_block_cache", None)
+        if cache is None:
+            cache = self._upgrade_block_cache = {}
+        if macro_name not in cache:
+            found = {}
+            try:
+                from . import templates as _templates
+                blocks = (_templates.load_template(macro_name) or {}).get("blocks") or {}
+                for phase in ("prestart", "battle", "loop_a", "loop_b"):
+                    for blk in blocks.get(phase) or []:
+                        if blk.get("type") == "auto_upgrade_unit":
+                            try:
+                                found[int(blk.get("params", {}).get("index"))] = blk
+                            except (TypeError, ValueError):
+                                pass
+            except Exception:
+                pass
+            cache[macro_name] = found
+        return cache[macro_name].get(ordinal)
+
+    @staticmethod
+    def _nudged_block(block: dict, attempt: int) -> dict:
+        """A copy of `block` aimed UNPLACED_RETRY_NUDGE px off the saved spot,
+        in a different direction per attempt.
+
+        A copy, never the original: the block belongs to the loaded template
+        and mutating it would move the saved coordinate for the rest of the
+        run -- and for every later repeat of the stage.
+
+        Attempt 1 keeps the saved spot, so the first retry is a straight redo
+        (the usual case is simply that gold arrived). Later attempts step out
+        in the four compass directions.
+        """
+        if attempt <= 1:
+            return block                    # first go: just redo the saved spot
+        # Eight points per ring, and the ring widens each time round, so a
+        # coordinate that is badly wrong is still reached eventually rather
+        # than the same near miss being retried forever.
+        step = attempt - 2
+        ring = 1 + step // 8
+        n = UNPLACED_RETRY_NUDGE * ring
+        d = int(round(n * 0.7071))          # same distance, on the diagonals
+        offsets = ((n, 0), (0, n), (-n, 0), (0, -n),
+                   (d, d), (-d, d), (d, -d), (-d, -d))
+        dx, dy = offsets[step % len(offsets)]
+        params = dict(block.get("params") or {})
+        try:
+            params["x"] = int(params.get("x") or 0) + dx
+            params["y"] = int(params.get("y") or 0) + dy
+        except (TypeError, ValueError):
+            return block
+        nudged = dict(block)
+        nudged["params"] = params
+        return nudged
+
+    def _unit_is_on_tile(self, hwnd, stop_event: threading.Event, left: int, top: int,
+                           x: int, y: int) -> bool:
+        """Is a unit actually standing at (x, y)?
+
+        Clicking a placed unit opens its info panel; clicking bare ground does
+        not. That is the only check here that survives a MULTI-COPY unit --
+        the hotbar card cannot tell placed from not-placed for those, and the
+        card being placed is always the SELECTED one, which shows a white
+        "1/3" counter rather than a price, so the price test reads it as
+        empty and calls the placement a success.
+
+        That is not hypothetical: Salmon Sorcerer 2 logged "placed at
+        (510, 103)" on every run while never appearing on the board, and the
+        Auto Upgrade block that followed it reported "priority_upgrade not
+        found on the info panel" -- the panel was missing because the unit was
+        not there. This asks that same question directly.
+
+        Z first so nothing is in hand: clicking an empty tile with a unit
+        still selected would PLACE one, which would turn the check into the
+        thing it is checking for.
+        """
+        self._keyboard.tap(ord("Z"))
+        time.sleep(0.1)
+        self._mouse.click(left + x, top + y)
+        deadline = time.time() + PLACE_CONFIRM_PANEL_TIMEOUT
+        found = False
+        while True:
+            # unit_exist FIRST: it is the info panel itself, which is what
+            # actually proves a unit is standing here. find_upgrade_state
+            # matches the Upgrade BUTTON, and a phantom -- a unit placed
+            # before it is paid for, which Phantom Placing allows -- renders
+            # that button greyed with its price on it, matching neither
+            # template. Live, real phantom placements were reported as
+            # "nothing is standing" and circled until the clock ran out,
+            # which is what cost those runs.
+            try:
+                match, _which = vision.find_image_any(hwnd, PLACE_CONFIRM_PANEL_IMAGES)
+            except vision.TemplateNotFound:
+                match = None               # optional crops, fall through
+            if match is not None:
+                found = True
+                break
+            state, _match = vision.find_upgrade_state(hwnd)
+            if state is not None:
+                found = True
+                break
+            if time.time() >= deadline or self._checkpoint(stop_event):
+                break
+            time.sleep(0.15)
+        self._reset_unit_info_panel(hwnd)
+        # Let the panel finish closing. Clicking a unit whose panel is still
+        # open TOGGLES it shut, so an Auto Upgrade block running straight
+        # after this probe would close the panel instead of opening it and
+        # then find no priority button -- live, Senku placed fine and came
+        # away with no priority set.
+        time.sleep(PLACE_CONFIRM_RESET_SETTLE)
+        return found
+
+    def _hotbar_slot_count(self, macro_name) -> int:
+        """How many slots the unit hotbar is showing, which decides where each
+        card sits -- the bar is CENTRED, so slot 1 moves as the count changes.
+
+        Expedition draws a fixed ten-slot bar (measured: slot 6 at x 580-642,
+        which only fits n=10). Story draws one slot per unit in the loadout
+        (measured: six cards, slot 1 at x 362-439, which only fits n=6), so
+        the loadout's distinct hotkeys are the count there.
+
+        Getting this wrong is not a small error: with n=10 assumed on a
+        six-slot bar every read lands two slots left, and slots 1-2 sample
+        bare map. Cached per macro -- it cannot change mid-match.
+        """
+        if getattr(self, "_is_expedition_match", False):
+            return vision.CARD_DEFAULT_SLOTS
+        cache = getattr(self, "_hotbar_slots_cache", None)
+        if cache is None:
+            cache = self._hotbar_slots_cache = {}
+        if macro_name in cache:
+            return cache[macro_name]
+        count = vision.CARD_DEFAULT_SLOTS
+        try:
+            from . import templates as _templates
+            blocks = (_templates.load_template(macro_name) or {}).get("blocks") or {}
+            seen = set()
+            for phase in ("prestart", "battle", "loop_a", "loop_b"):
+                for blk in blocks.get(phase) or []:
+                    if blk.get("type") == "place_unit":
+                        n = self._card_slot_for(blk.get("hotkey"))
+                        if n is not None:
+                            seen.add(n)
+            if seen:
+                # The bar is as wide as the highest slot in use -- a loadout
+                # that skips hotkey 2 still leaves a gap where 2 would be.
+                count = max(seen)
+        except Exception:
+            pass
+        cache[macro_name] = count
+        return count
+
+    @staticmethod
+    def _card_slot_for(hotkey):
+        """Hotbar slot (1-10) a Place Unit block's hotkey selects, or None.
+
+        The bar is ten slots and "0" is the tenth, the way the keyboard row
+        runs. Anything non-numeric selects a unit some other way and has no
+        card to read, so the caller skips the check rather than guessing.
+        """
+        text = str(hotkey or "").strip()
+        if not text.isdigit():
+            return None
+        number = int(text)
+        if number == 0:
+            return 10
+        return number if 1 <= number <= 10 else None
+
     def _scan_place_search_box(self, hwnd, left: int, top: int, orig_x: int, orig_y: int):
         """One capture of the PLACE_SEARCH_BOX_SIZE x PLACE_SEARCH_BOX_SIZE
         region around (orig_x, orig_y) -- window-client coords -- scanned in
@@ -1278,7 +1627,8 @@ class BlockOps:
 
     def _run_place_unit_block(self, hwnd, stop_event: threading.Event, left: int, top: int, block: dict,
                                 index: int, macro_name: str, unit_ordinal: int = None,
-                                next_is_same_unit: bool = False, verify: bool = True) -> None:
+                                next_is_same_unit: bool = False, verify: bool = True,
+                                circle_attempt: int = 1) -> None:
         params = block.get("params") or {}
         name = params.get("name") or f"#{index}"
         hotkey = block.get("hotkey")
@@ -1297,6 +1647,13 @@ class BlockOps:
                 self._release_quick_place_shift()
             return
         orig_x, orig_y = int(orig_x), int(orig_y)
+        # Circle the SAVED coordinate, not the last place we tried. Recursing
+        # with the nudged block made each step measure from the previous one,
+        # so the "circle" walked away across the board instead of orbiting the
+        # spot the user set.
+        if circle_attempt > 1:
+            aim = (self._nudged_block(block, circle_attempt).get("params") or {})
+            orig_x, orig_y = int(aim.get("x", orig_x)), int(aim.get("y", orig_y))
 
         # Quick place: a run of consecutive Place Unit blocks for the SAME
         # unit (matched by hotkey) holds Left Shift down from right before
@@ -1383,8 +1740,20 @@ class BlockOps:
             self._release_quick_place_shift()
             return
         if spot is None:
+            # Queued, not abandoned. No click happened, so this unit is
+            # definitely NOT on the board -- which makes this the one failure
+            # that is unambiguous even for a multi-copy unit, where the card
+            # cannot say. "No free tile" is usually temporary too: the tiles
+            # around the saved spot get taken by units placed moments before,
+            # and the retry nudges to a different spot each attempt. Dropping
+            # the block outright is why three Cells saved 16px apart only ever
+            # landed one of them.
             self._log(f'[Macro] Place Unit "{name}": no valid (white) tile found at ({orig_x}, {orig_y}) '
-                       f'or within {PLACE_SPIRAL_RADII[-1]}px around it -- giving up on this block.')
+                       f'or within {PLACE_SPIRAL_RADII[-1]}px around it -- queued to retry nearby.')
+            no_tile_slot = self._card_slot_for(hotkey)
+            if no_tile_slot is not None:
+                self._remember_unplaced(block, index, macro_name, unit_ordinal, name,
+                                         no_tile_slot, reason="no_tile")
             if not next_is_same_unit:
                 self._release_quick_place_shift()
             return
@@ -1414,56 +1783,133 @@ class BlockOps:
         if not next_is_same_unit:
             self._release_quick_place_shift()
 
-        if skip_verify:
-            # No verify here -- see skip_verify's own comment above.
-            # Position is still recorded, just without waiting on
-            # unit_exist first; the white-pixel hit before the click is
-            # what's trusted instead.
-            reason = 'quick-place' if is_quick_place else 'Pre Start'
+        # Did it actually go down? The unit's own hotbar card answers that
+        # directly -- a placed unit's card loses its price, one still in hand
+        # keeps it. See vision.read_unit_card for the measurements.
+        #
+        # This replaces a whole-screen search for unit_exist, which answered a
+        # different question entirely: "is any unit info panel open?". A panel
+        # left over from the previous placement satisfied it, so a unit that
+        # never left the hand was logged as "verified placed (score 1.00)".
+        # Observed live on Flower Forest -- six placements logged, four units
+        # on the board, no error for either of the two that failed.
+        slot = self._card_slot_for(hotkey)
+        if slot is None:
+            # Nothing to read (no numeric hotkey) -- keep the old behaviour of
+            # trusting the pre-click white-tile hit rather than inventing a
+            # failure out of a check that could not run.
+            reason = 'quick-place' if is_quick_place else 'Pre Start' if skip_verify else 'Battle'
             self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) ({reason}).')
             if unit_ordinal is not None:
                 self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
             return
 
-        # Verify: look for unit_exist FIRST, before clicking anything -- it
-        # may already be visible with no extra input needed at all. Only if
-        # it isn't there does this click once (not double-click, which risked
-        # triggering something else entirely, like a sell/context menu) and
-        # check again, up to PLACE_UNIT_VERIFY_ATTEMPTS times total.
-        exists_match = None
+        # The retry clicks are kept: on a real run a placement has been seen
+        # to land on the SECOND click, so dropping them to save a check would
+        # cost placements. Only what counts as success has changed.
+        card = None
         clicked_to_verify = False
-        for verify_attempt in range(1, PLACE_UNIT_VERIFY_ATTEMPTS + 1):
+        attempts = 1 if skip_verify else PLACE_UNIT_VERIFY_ATTEMPTS
+        for attempt in range(1, attempts + 1):
             if self._checkpoint(stop_event):
                 return
-            if verify_attempt > 1:
+            if attempt > 1:
                 self._mouse.click(left + cur_x, top + cur_y)
                 clicked_to_verify = True
-                time.sleep(0.3)  # let the info panel actually render before checking for it
-            try:
-                exists_match = vision.wait_for_image(hwnd, "unit_exist", timeout=PLACE_UNIT_VERIFY_TIMEOUT)
-            except vision.TemplateNotFound:
-                exists_match = None
-                break  # no unit_exist.png added -- retrying won't change that, stop wasting clicks
-            if exists_match is not None:
+                time.sleep(PLACE_CARD_SETTLE)
+            else:
+                time.sleep(PLACE_CARD_SETTLE)  # let the card redraw before reading it
+            card = vision.read_unit_card(hwnd, slot, self._hotbar_slot_count(macro_name))
+            if not card["in_hand"]:
                 break
-            self._log(f'[Macro] Place Unit "{name}": verify check {verify_attempt}/{PLACE_UNIT_VERIFY_ATTEMPTS} '
-                       f'-- unit_exist not seen yet.')
+            if attempt < attempts:
+                self._log(f'[Macro] Place Unit "{name}": still in hand after attempt '
+                           f'{attempt}/{attempts} -- trying the spot again.')
 
-        # Only reset the info panel if a verify click actually happened --
-        # the plain search-first check above never opens anything, so there's
-        # nothing to close if that's all it took.
         if clicked_to_verify:
             self._reset_unit_info_panel(hwnd)
 
-        if exists_match is None:
-            self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}) but couldn\'t verify '
-                       f'(no unit_exist match) -- add Assets/ui/unit_exist.png to enable this check.')
-            return
+        # A lit card means "this unit still has a copy you could place" -- NOT
+        # "this placement failed". A unit the game lets you field several of
+        # keeps its price after each copy goes down, so reading lit as failure
+        # called every multi-copy placement a failure and left the retry pass
+        # placing more copies forever. Observed on East Town: Salmon Sorcerer 3
+        # retried indefinitely while already on the board, until the game put
+        # up "Max placement limit reached!".
+        #
+        # An UNAFFORDABLE card is the one state that does prove a placement did
+        # not happen -- the game cannot have taken money it would not let you
+        # spend. A lit but affordable card is ambiguous between "more copies
+        # left" and "the tile was refused", so it is trusted as placed, exactly
+        # as the code did before this check existed.
+        # The card can only prove the UNAFFORDABLE case. For everything else
+        # ask the board itself, because the card being placed is the selected
+        # one and shows its "1/3" counter instead of a price -- which the
+        # price test reads as "no price" and therefore "placed".
+        cannot_afford = (card is not None and card["in_hand"]
+                         and card.get("affordable") is False)
+        # A greyed card is NOT proof of failure. Phantom Placing puts the unit
+        # down anyway and it materialises once gold arrives, so the board is
+        # the only thing that can say -- and it is asked even when the card is
+        # greyed, which is exactly the case that used to be written off.
+        if is_quick_place:
+            definitely_failed = cannot_afford      # a chain cannot be probed
+        else:
+            definitely_failed = not self._unit_is_on_tile(
+                hwnd, stop_event, left, top, cur_x, cur_y)
+            if definitely_failed:
+                self._log(f'[Macro] Place Unit "{name}": nothing is standing at '
+                           f'({cur_x}, {cur_y}) -- the placement did not take.')
 
-        self._log(f'[Macro] Place Unit "{name}": verified placed at ({cur_x}, {cur_y}) '
-                   f'(score {exists_match["score"]:.2f}).')
-        if unit_ordinal is not None:
+        # Record the position unless the unit demonstrably is not there.
+        # Skipping this for every lit card meant a Pre Start unit never got a
+        # position, so _placed_unit_click_point could not find it and every
+        # Auto Upgrade Unit block aimed at it silently skipped -- live, the
+        # three Senku placed in Pre Start went unupgraded while Kenpachi and
+        # Megumi, placed in Battle, upgraded fine.
+        if unit_ordinal is not None and not definitely_failed:
             self._placed_unit_positions[unit_ordinal] = (cur_x, cur_y)
+
+        if definitely_failed:
+            where = 'staged at' if not verify else 'did NOT place at'
+            # Circle NOW, not later. Queueing a failed placement for the
+            # sweep meant the routine carried straight on to the next block
+            # -- and the Auto Upgrade that follows it then fired against a
+            # unit that was not there, landing that unit's priority on
+            # whichever unit WAS standing nearby. Seen live: Puppet's
+            # priority changed. Retry the placement here, widening the circle
+            # each go, until something actually stands on the tile.
+            if circle_attempt == 1:
+                # Budget the whole circle, not just the number of tries. Each
+                # attempt re-presses the hotkey, re-searches and waits up to
+                # PLACE_CONFIRM_PANEL_TIMEOUT, so seventeen of them on one
+                # hopeless unit would hold Pre Start up for a minute while
+                # every other unit waits its turn.
+                self._circle_deadline = time.time() + PLACE_CIRCLE_TIMEOUT
+            out_of_time = time.time() >= getattr(self, "_circle_deadline", 0.0)
+            if out_of_time and not cannot_afford:
+                self._log(f'[Macro] Place Unit "{name}": circled for '
+                           f'{PLACE_CIRCLE_TIMEOUT:.0f}s without finding a spot -- '
+                           f'queued for the sweep so the rest of the routine can run.')
+            if not cannot_afford and not next_is_same_unit and not out_of_time                     and circle_attempt < UNPLACED_RETRY_MAX_ATTEMPTS:
+                spot = (self._nudged_block(block, circle_attempt + 1).get("params") or {})
+                self._log(f'[Macro] Place Unit "{name}": circling -- trying '
+                           f'({spot.get("x")}, {spot.get("y")}) instead '
+                           f'(attempt {circle_attempt + 1}/{UNPLACED_RETRY_MAX_ATTEMPTS}).')
+                self._run_place_unit_block(hwnd, stop_event, left, top, block, index,
+                                             macro_name, unit_ordinal, next_is_same_unit,
+                                             verify, circle_attempt + 1)
+                return
+            why = ('card {} is greyed out, so it cannot afford it yet'.format(slot)
+                   if cannot_afford else 'the tile would not take it')
+            self._log(f'[Macro] Place Unit "{name}": {where} ({cur_x}, {cur_y}) -- {why}; '
+                       f'queued to circle and retry.')
+            self._remember_unplaced(block, index, macro_name, unit_ordinal, name, slot,
+                                     reason="unaffordable" if cannot_afford else "no_tile")
+            return
+        self._forget_unplaced(unit_ordinal if unit_ordinal is not None else ("slot", slot))
+
+        self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}).')
 
     def _place_unit_retrying(self, hwnd, stop_event: threading.Event, left: int, top: int,
                                name: str, hotkey, orig_x: int, orig_y: int, block: dict,
