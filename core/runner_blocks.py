@@ -1597,7 +1597,8 @@ class BlockOps:
 
     def _run_place_unit_block(self, hwnd, stop_event: threading.Event, left: int, top: int, block: dict,
                                 index: int, macro_name: str, unit_ordinal: int = None,
-                                next_is_same_unit: bool = False, verify: bool = True) -> None:
+                                next_is_same_unit: bool = False, verify: bool = True,
+                                circle_attempt: int = 1) -> None:
         params = block.get("params") or {}
         name = params.get("name") or f"#{index}"
         hotkey = block.get("hotkey")
@@ -1616,6 +1617,13 @@ class BlockOps:
                 self._release_quick_place_shift()
             return
         orig_x, orig_y = int(orig_x), int(orig_y)
+        # Circle the SAVED coordinate, not the last place we tried. Recursing
+        # with the nudged block made each step measure from the previous one,
+        # so the "circle" walked away across the board instead of orbiting the
+        # spot the user set.
+        if circle_attempt > 1:
+            aim = (self._nudged_block(block, circle_attempt).get("params") or {})
+            orig_x, orig_y = int(aim.get("x", orig_x)), int(aim.get("y", orig_y))
 
         # Quick place: a run of consecutive Place Unit blocks for the SAME
         # unit (matched by hotkey) holds Left Shift down from right before
@@ -1828,6 +1836,22 @@ class BlockOps:
 
         if definitely_failed:
             where = 'staged at' if not verify else 'did NOT place at'
+            # Circle NOW, not later. Queueing a failed placement for the
+            # sweep meant the routine carried straight on to the next block
+            # -- and the Auto Upgrade that follows it then fired against a
+            # unit that was not there, landing that unit's priority on
+            # whichever unit WAS standing nearby. Seen live: Puppet's
+            # priority changed. Retry the placement here, widening the circle
+            # each go, until something actually stands on the tile.
+            if not cannot_afford and not next_is_same_unit                     and circle_attempt < UNPLACED_RETRY_MAX_ATTEMPTS:
+                spot = (self._nudged_block(block, circle_attempt + 1).get("params") or {})
+                self._log(f'[Macro] Place Unit "{name}": circling -- trying '
+                           f'({spot.get("x")}, {spot.get("y")}) instead '
+                           f'(attempt {circle_attempt + 1}/{UNPLACED_RETRY_MAX_ATTEMPTS}).')
+                self._run_place_unit_block(hwnd, stop_event, left, top, block, index,
+                                             macro_name, unit_ordinal, next_is_same_unit,
+                                             verify, circle_attempt + 1)
+                return
             why = ('card {} is greyed out, so it cannot afford it yet'.format(slot)
                    if cannot_afford else 'the tile would not take it')
             self._log(f'[Macro] Place Unit "{name}": {where} ({cur_x}, {cur_y}) -- {why}; '

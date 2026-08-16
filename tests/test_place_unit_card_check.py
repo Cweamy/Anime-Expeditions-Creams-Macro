@@ -159,7 +159,12 @@ class _Runner(BlockOps):
 def placing(monkeypatch):
     """A runner whose tile search always succeeds, so the only thing under
     test is what happens AFTER the click."""
-    monkeypatch.setattr(runner_blocks.time, "sleep", lambda _s: None)
+    # Fake clock, so PLACE_CONFIRM_PANEL_TIMEOUT expires instantly instead of
+    # spinning for real seconds on every circling attempt.
+    now = {"t": 1000.0}
+    monkeypatch.setattr(runner_blocks.time, "sleep",
+                        lambda s: now.__setitem__("t", now["t"] + max(s, 0.1)))
+    monkeypatch.setattr(runner_blocks.time, "time", lambda: now["t"])
     monkeypatch.setattr(runner_blocks.vision, "find_image", lambda *a, **k: None)
     monkeypatch.setattr(BlockOps, "_find_valid_place_spot",
                         lambda self, *a, **k: (500, 400))
@@ -767,3 +772,25 @@ def test_the_circle_widens_so_a_badly_wrong_spot_is_still_reached():
     assert len(set(spots)) == CAP, "the circle repeats itself instead of widening"
     reach = max(max(abs(x - 500), abs(y - 400)) for x, y in spots)
     assert reach >= N * 2, f"never gets further than {reach}px from the saved spot"
+
+
+def test_the_circle_orbits_the_saved_spot_not_the_last_try(placing, monkeypatch):
+    """Recursing with the nudged block measured each step from the previous
+    one, so the circle walked away across the board instead of orbiting the
+    coordinate the user set."""
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": False, "affordable": None,
+                                              "price_px": 5, "hue": -1})
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    aimed = []
+    monkeypatch.setattr(BlockOps, "_find_valid_place_spot",
+                        lambda self, h, st, l, t, x, y, nm: aimed.append((x, y)) or (x, y))
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    from core.runner_constants import UNPLACED_RETRY_NUDGE as N
+    assert len(aimed) > 3, "did not circle"
+    far = max(max(abs(x - 500), abs(y - 400)) for x, y in aimed)
+    assert far <= N * 2 + 2, f"drifted {far}px from the saved spot -- the circle is compounding"
+    assert aimed[0] == (500, 400)
