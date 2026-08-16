@@ -229,7 +229,7 @@ def test_a_pre_start_placement_is_checked_too(placing, monkeypatch):
     _place(placing, verify=False)
 
     assert 7 not in placing._placed_unit_positions
-    assert 4 in placing._unplaced_units, "an unaffordable unit still has to be followed up"
+    assert 7 in placing._unplaced_units, "an unaffordable unit still has to be followed up"
 
 
 def test_a_pre_start_unit_still_gets_a_recorded_position(placing, monkeypatch):
@@ -393,11 +393,11 @@ def test_a_successful_placement_clears_any_pending_entry(placing, monkeypatch):
     """Otherwise a unit that failed once, then landed on the block's own
     retry, stays on the list and gets placed a second time."""
     monkeypatch.setattr(runner_blocks.vision, "read_unit_card", lambda h, s, n=None: CLEARED)
-    placing._unplaced_units = {4: {"name": "megumi"}}
+    placing._unplaced_units = {7: {"name": "megumi"}}
 
     _place(placing)
 
-    assert 4 not in placing._unplaced_units
+    assert 7 not in placing._unplaced_units
 
 
 def test_the_battle_tick_goes_back_for_them_once_the_list_is_done(monkeypatch):
@@ -467,7 +467,7 @@ def test_no_valid_tile_is_queued_not_abandoned(placing, monkeypatch):
 
     _place(placing)
 
-    assert placing._unplaced_units[4]["reason"] == "no_tile"
+    assert placing._unplaced_units[7]["reason"] == "no_tile"
     assert any("queued to retry nearby" in m for m in placing.logs)
 
 
@@ -727,8 +727,8 @@ def test_an_empty_tile_is_not_a_placement(placing, monkeypatch):
     _place(placing)
 
     assert 7 not in placing._placed_unit_positions, "recorded a unit that is not on the board"
-    assert 4 in placing._unplaced_units, "moved on instead of queueing it to circle"
-    assert placing._unplaced_units[4]["reason"] == "no_tile"
+    assert 7 in placing._unplaced_units, "moved on instead of queueing it to circle"
+    assert placing._unplaced_units[7]["reason"] == "no_tile"
     assert any("nothing is standing at" in m for m in placing.logs)
 
 
@@ -758,7 +758,7 @@ def test_an_unaffordable_card_skips_the_board_check(placing, monkeypatch):
 
     _place(placing)
 
-    assert placing._unplaced_units[4]["reason"] == "unaffordable"
+    assert placing._unplaced_units[7]["reason"] == "unaffordable"
 
 
 def test_the_circle_widens_so_a_badly_wrong_spot_is_still_reached():
@@ -814,4 +814,32 @@ def test_circling_gives_up_on_time_not_just_on_attempts(placing, monkeypatch):
     from core.runner_constants import UNPLACED_RETRY_MAX_ATTEMPTS as CAP
     assert len(tries) < CAP, f"ran all {CAP} attempts instead of stopping on the clock"
     assert any("without finding a spot" in m for m in placing.logs)
-    assert 4 in placing._unplaced_units, "gave up entirely instead of handing it to the sweep"
+    assert 7 in placing._unplaced_units, "gave up entirely instead of handing it to the sweep"
+
+
+def test_three_copies_of_one_unit_each_get_their_own_retry_slot():
+    """The queue was keyed by hotbar slot, and three copies of a unit share
+    one. Live on East Town: five placements failed, the sweep reported "3
+    unit(s) did not go down", and Salmon Sorcerer 2 was quietly overwritten
+    out of the queue and never retried."""
+    r = _RetryRunner()
+    r._unplaced_units = {}
+    for ordinal, name in ((4, "Salmon Sorcerer"), (5, "Salmon Sorcerer 2"), (6, "Salmon Sorcerer 3")):
+        r._remember_unplaced({"type": "place_unit", "hotkey": "2",
+                              "params": {"name": name, "x": 500, "y": 400}},
+                             ordinal, "m", ordinal, name, 2, reason="no_tile")
+
+    assert len(r._unplaced_units) == 3, f"copies collapsed onto one another: {r._unplaced_units}"
+    assert {e["name"] for e in r._unplaced_units.values()} == {
+        "Salmon Sorcerer", "Salmon Sorcerer 2", "Salmon Sorcerer 3"}
+
+
+def test_each_queued_copy_keeps_the_slot_its_card_lives_in():
+    """Keyed by ordinal, but the card still has to be read from the hotbar
+    slot the unit actually occupies."""
+    r = _RetryRunner()
+    r._unplaced_units = {}
+    r._remember_unplaced({"type": "place_unit", "hotkey": "2", "params": {"name": "s2"}},
+                         5, "m", 5, "s2", 2, reason="no_tile")
+
+    assert r._unplaced_units[5]["slot"] == 2

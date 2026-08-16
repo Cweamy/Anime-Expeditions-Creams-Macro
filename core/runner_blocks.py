@@ -1224,17 +1224,25 @@ class BlockOps:
         pending = getattr(self, "_unplaced_units", None)
         if pending is None:
             pending = self._unplaced_units = {}
-        existing = pending.get(slot) or {}
-        pending[slot] = {"block": block, "index": index, "macro_name": macro_name,
-                         "unit_ordinal": unit_ordinal, "name": name, "reason": reason,
-                         # Keep the count across re-queues so a placement that
-                         # fails a different way each time still hits the cap.
-                         "attempts": existing.get("attempts", 0)}
+        # Keyed by unit ORDINAL, not by hotbar slot. Three copies of one unit
+        # share a slot -- all three Salmon Sorcerer are hotkey 2 -- so keying
+        # by slot made each failure overwrite the last and only the final copy
+        # was ever retried. Live: five placements failed and the sweep
+        # reported "3 unit(s) did not go down", with Salmon Sorcerer 2 quietly
+        # dropped from the queue and never tried again.
+        key = unit_ordinal if unit_ordinal is not None else ("slot", slot)
+        existing = pending.get(key) or {}
+        pending[key] = {"block": block, "index": index, "macro_name": macro_name,
+                        "unit_ordinal": unit_ordinal, "name": name, "reason": reason,
+                        "slot": slot,
+                        # Keep the count across re-queues so a placement that
+                        # fails a different way each time still hits the cap.
+                        "attempts": existing.get("attempts", 0)}
 
-    def _forget_unplaced(self, slot):
+    def _forget_unplaced(self, key):
         pending = getattr(self, "_unplaced_units", None)
         if pending:
-            pending.pop(slot, None)
+            pending.pop(key, None)
 
     def _retry_unplaced_units(self, hwnd, stop_event: threading.Event) -> None:
         """Retry one pending placement, if any is worth retrying right now.
@@ -1255,17 +1263,18 @@ class BlockOps:
             return
         self._unplaced_next_retry_at = now + UNPLACED_RETRY_INTERVAL
 
-        for slot in sorted(pending):
+        for key in sorted(pending, key=lambda k: (isinstance(k, tuple), k)):
+            entry = pending[key]
+            slot = entry.get("slot")
             card = vision.read_unit_card(hwnd, slot,
-                                          self._hotbar_slot_count(pending[slot]["macro_name"]))
+                                          self._hotbar_slot_count(entry["macro_name"]))
             if not card["in_hand"]:
-                entry = pending.pop(slot)
+                pending.pop(key)
                 self._log(f'[Macro] Place Unit "{entry["name"]}": card {slot} has cleared on its '
                            f'own -- nothing left to retry.')
                 return
             if card.get("affordable") is False:
                 continue          # still too expensive; leave it pending
-            entry = pending[slot]
             # Bounded, because "the card is lit" is not proof the unit is
             # missing -- a multi-copy unit keeps its price after every copy.
             # Without a cap a card that never clears is re-placed for the rest
@@ -1273,7 +1282,7 @@ class BlockOps:
             # placement limit reached!".
             entry["attempts"] = entry.get("attempts", 0) + 1
             if entry["attempts"] > UNPLACED_RETRY_MAX_ATTEMPTS:
-                pending.pop(slot)
+                pending.pop(key)
                 self._log(f'[Macro] Place Unit "{entry["name"]}": card {slot} is still lit after '
                            f'{UNPLACED_RETRY_MAX_ATTEMPTS} retries -- giving up on it for this match.')
                 return
@@ -1298,7 +1307,7 @@ class BlockOps:
             # good -- live, Salmon Sorcerer and Kenpachi were both placed by
             # this retry and both ended the match with no priority set. So
             # apply it here, now that the unit actually exists.
-            if slot not in pending:
+            if key not in pending:
                 self._apply_deferred_upgrade(hwnd, stop_event, entry)
             return
 
@@ -1871,7 +1880,7 @@ class BlockOps:
             self._remember_unplaced(block, index, macro_name, unit_ordinal, name, slot,
                                      reason="unaffordable" if cannot_afford else "no_tile")
             return
-        self._forget_unplaced(slot)
+        self._forget_unplaced(unit_ordinal if unit_ordinal is not None else ("slot", slot))
 
         self._log(f'[Macro] Place Unit "{name}": placed at ({cur_x}, {cur_y}).')
 
