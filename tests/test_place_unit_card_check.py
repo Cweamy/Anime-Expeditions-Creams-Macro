@@ -164,6 +164,9 @@ def placing(monkeypatch):
     monkeypatch.setattr(BlockOps, "_find_valid_place_spot",
                         lambda self, *a, **k: (500, 400))
     monkeypatch.setattr(runner_blocks.keys, "key_name_to_vk", lambda name: 0x31)
+    # A unit IS standing on the tile unless a test says otherwise.
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state",
+                        lambda h: ("upgradeable", {"cx": 1, "cy": 1}))
     return _Runner()
 
 
@@ -183,7 +186,7 @@ def test_a_cleared_card_counts_as_placed(placing, monkeypatch):
     assert any("placed at" in m for m in placing.logs)
 
 
-def test_a_lit_but_affordable_card_is_trusted_as_placed(placing, monkeypatch):
+def test_a_lit_card_with_a_unit_on_the_tile_counts_as_placed(placing, monkeypatch):
     """A lit card means "this unit still has a copy you could place", NOT
     "this placement failed" -- a multi-copy unit keeps its price after every
     copy goes down. Live on East Town: Salmon Sorcerer 3 was called a failure
@@ -198,7 +201,7 @@ def test_a_lit_but_affordable_card_is_trusted_as_placed(placing, monkeypatch):
 
     assert placing._placed_unit_positions[7] == (500, 400)
     assert not placing._unplaced_units, "queued a retry on an ambiguous card"
-    assert not any("did NOT place" in m for m in placing.logs)
+    assert not any("did not take" in m for m in placing.logs)
 
 
 def test_being_unable_to_afford_it_says_so(placing, monkeypatch):
@@ -696,3 +699,71 @@ def test_nothing_queued_means_no_sweep(monkeypatch):
     r = _RetryRunner()
     r._sweep_unplaced_before_start(1, threading.Event())
     assert r.logs == []
+
+
+# ---------------------------------------------------------------------------
+# The board, not the card, decides
+# ---------------------------------------------------------------------------
+# Salmon Sorcerer 2 logged "placed at (510, 103)" on every single run and was
+# never on the board. Its card was the SELECTED one, showing a white "1/3"
+# counter instead of a price, so the price test read it as empty and called
+# the placement a success. The Auto Upgrade block right after it told the
+# truth -- "priority_upgrade not found on the info panel" -- because there was
+# no unit there to open a panel.
+
+def test_an_empty_tile_is_not_a_placement(placing, monkeypatch):
+    """The regression. This is what silently moved on from Salmon 2."""
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": False, "affordable": None,
+                                              "price_px": 5, "hue": -1})
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    assert 7 not in placing._placed_unit_positions, "recorded a unit that is not on the board"
+    assert 4 in placing._unplaced_units, "moved on instead of queueing it to circle"
+    assert placing._unplaced_units[4]["reason"] == "no_tile"
+    assert any("nothing is standing at" in m for m in placing.logs)
+
+
+def test_the_board_check_deselects_before_clicking(placing, monkeypatch):
+    """Clicking an empty tile with a unit still in hand would PLACE one --
+    turning the check into the thing it is checking for."""
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": False, "affordable": None,
+                                              "price_px": 5, "hue": -1})
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    assert any(c.args == (ord("Z"),) for c in placing._keyboard.tap.call_args_list),         "did not deselect before probing the tile"
+
+
+def test_an_unaffordable_card_skips_the_board_check(placing, monkeypatch):
+    """No click happened, so there is nothing to probe -- and probing would
+    cost a click and a search for no information."""
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": True, "affordable": False,
+                                              "price_px": 400, "hue": 0})
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state",
+                        lambda h: pytest.fail("probed the board for a unit never clicked"))
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    assert placing._unplaced_units[4]["reason"] == "unaffordable"
+
+
+def test_the_circle_widens_so_a_badly_wrong_spot_is_still_reached():
+    """Salmon 2's saved coordinate sat in the HUD strip, far outside any tile
+    a single tight ring could reach."""
+    from core.runner_constants import UNPLACED_RETRY_NUDGE as N, UNPLACED_RETRY_MAX_ATTEMPTS as CAP
+    blk = {"params": {"x": 500, "y": 400}}
+    spots = [(BlockOps._nudged_block(blk, a)["params"]["x"],
+              BlockOps._nudged_block(blk, a)["params"]["y"]) for a in range(1, CAP + 1)]
+
+    assert len(set(spots)) == CAP, "the circle repeats itself instead of widening"
+    reach = max(max(abs(x - 500), abs(y - 400)) for x, y in spots)
+    assert reach >= N * 2, f"never gets further than {reach}px from the saved spot"

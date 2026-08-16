@@ -1355,14 +1355,18 @@ class BlockOps:
         (the usual case is simply that gold arrived). Later attempts step out
         in the four compass directions.
         """
-        n = UNPLACED_RETRY_NUDGE
+        if attempt <= 1:
+            return block                    # first go: just redo the saved spot
+        # Eight points per ring, and the ring widens each time round, so a
+        # coordinate that is badly wrong is still reached eventually rather
+        # than the same near miss being retried forever.
+        step = attempt - 2
+        ring = 1 + step // 8
+        n = UNPLACED_RETRY_NUDGE * ring
         d = int(round(n * 0.7071))          # same distance, on the diagonals
-        offsets = ((0, 0),
-                   (n, 0), (0, n), (-n, 0), (0, -n),
+        offsets = ((n, 0), (0, n), (-n, 0), (0, -n),
                    (d, d), (-d, d), (d, -d), (-d, -d))
-        dx, dy = offsets[max(0, attempt - 1) % len(offsets)]
-        if (dx, dy) == (0, 0):
-            return block
+        dx, dy = offsets[step % len(offsets)]
         params = dict(block.get("params") or {})
         try:
             params["x"] = int(params.get("x") or 0) + dx
@@ -1372,6 +1376,43 @@ class BlockOps:
         nudged = dict(block)
         nudged["params"] = params
         return nudged
+
+    def _unit_is_on_tile(self, hwnd, stop_event: threading.Event, left: int, top: int,
+                           x: int, y: int) -> bool:
+        """Is a unit actually standing at (x, y)?
+
+        Clicking a placed unit opens its info panel; clicking bare ground does
+        not. That is the only check here that survives a MULTI-COPY unit --
+        the hotbar card cannot tell placed from not-placed for those, and the
+        card being placed is always the SELECTED one, which shows a white
+        "1/3" counter rather than a price, so the price test reads it as
+        empty and calls the placement a success.
+
+        That is not hypothetical: Salmon Sorcerer 2 logged "placed at
+        (510, 103)" on every run while never appearing on the board, and the
+        Auto Upgrade block that followed it reported "priority_upgrade not
+        found on the info panel" -- the panel was missing because the unit was
+        not there. This asks that same question directly.
+
+        Z first so nothing is in hand: clicking an empty tile with a unit
+        still selected would PLACE one, which would turn the check into the
+        thing it is checking for.
+        """
+        self._keyboard.tap(ord("Z"))
+        time.sleep(0.1)
+        self._mouse.click(left + x, top + y)
+        deadline = time.time() + PLACE_CONFIRM_PANEL_TIMEOUT
+        found = False
+        while True:
+            state, _match = vision.find_upgrade_state(hwnd)
+            if state is not None:
+                found = True
+                break
+            if time.time() >= deadline or self._checkpoint(stop_event):
+                break
+            time.sleep(0.15)
+        self._reset_unit_info_panel(hwnd)
+        return found
 
     def _hotbar_slot_count(self, macro_name) -> int:
         """How many slots the unit hotbar is showing, which decides where each
@@ -1763,8 +1804,18 @@ class BlockOps:
         # spend. A lit but affordable card is ambiguous between "more copies
         # left" and "the tile was refused", so it is trusted as placed, exactly
         # as the code did before this check existed.
-        definitely_failed = (card is not None and card["in_hand"]
-                             and card.get("affordable") is False)
+        # The card can only prove the UNAFFORDABLE case. For everything else
+        # ask the board itself, because the card being placed is the selected
+        # one and shows its "1/3" counter instead of a price -- which the
+        # price test reads as "no price" and therefore "placed".
+        cannot_afford = (card is not None and card["in_hand"]
+                         and card.get("affordable") is False)
+        definitely_failed = cannot_afford
+        if not cannot_afford and not is_quick_place:
+            if not self._unit_is_on_tile(hwnd, stop_event, left, top, cur_x, cur_y):
+                definitely_failed = True
+                self._log(f'[Macro] Place Unit "{name}": nothing is standing at '
+                           f'({cur_x}, {cur_y}) -- the placement did not take.')
 
         # Record the position unless the unit demonstrably is not there.
         # Skipping this for every lit card meant a Pre Start unit never got a
@@ -1777,9 +1828,12 @@ class BlockOps:
 
         if definitely_failed:
             where = 'staged at' if not verify else 'did NOT place at'
-            self._log(f'[Macro] Place Unit "{name}": {where} ({cur_x}, {cur_y}) -- card {slot} '
-                       f'is greyed out, so it cannot afford it yet; queued to retry.')
-            self._remember_unplaced(block, index, macro_name, unit_ordinal, name, slot)
+            why = ('card {} is greyed out, so it cannot afford it yet'.format(slot)
+                   if cannot_afford else 'the tile would not take it')
+            self._log(f'[Macro] Place Unit "{name}": {where} ({cur_x}, {cur_y}) -- {why}; '
+                       f'queued to circle and retry.')
+            self._remember_unplaced(block, index, macro_name, unit_ordinal, name, slot,
+                                     reason="unaffordable" if cannot_afford else "no_tile")
             return
         self._forget_unplaced(slot)
 
