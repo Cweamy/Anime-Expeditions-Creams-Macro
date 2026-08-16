@@ -1843,7 +1843,19 @@ class BlockOps:
             # whichever unit WAS standing nearby. Seen live: Puppet's
             # priority changed. Retry the placement here, widening the circle
             # each go, until something actually stands on the tile.
-            if not cannot_afford and not next_is_same_unit                     and circle_attempt < UNPLACED_RETRY_MAX_ATTEMPTS:
+            if circle_attempt == 1:
+                # Budget the whole circle, not just the number of tries. Each
+                # attempt re-presses the hotkey, re-searches and waits up to
+                # PLACE_CONFIRM_PANEL_TIMEOUT, so seventeen of them on one
+                # hopeless unit would hold Pre Start up for a minute while
+                # every other unit waits its turn.
+                self._circle_deadline = time.time() + PLACE_CIRCLE_TIMEOUT
+            out_of_time = time.time() >= getattr(self, "_circle_deadline", 0.0)
+            if out_of_time and not cannot_afford:
+                self._log(f'[Macro] Place Unit "{name}": circled for '
+                           f'{PLACE_CIRCLE_TIMEOUT:.0f}s without finding a spot -- '
+                           f'queued for the sweep so the rest of the routine can run.')
+            if not cannot_afford and not next_is_same_unit and not out_of_time                     and circle_attempt < UNPLACED_RETRY_MAX_ATTEMPTS:
                 spot = (self._nudged_block(block, circle_attempt + 1).get("params") or {})
                 self._log(f'[Macro] Place Unit "{name}": circling -- trying '
                            f'({spot.get("x")}, {spot.get("y")}) instead '

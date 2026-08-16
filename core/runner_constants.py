@@ -667,6 +667,7 @@ PLACE_UNIT_VERIFY_TIMEOUT = 2.0
 PLACE_UNIT_VERIFY_ATTEMPTS = 3  # search-then-click retried up to this many times before giving up on verifying
 PLACE_CARD_SETTLE = 0.35  # let the hotbar card redraw before reading it -- it drops its price a beat after the unit lands, and reading too early would call a good placement a failure
 PLACE_CONFIRM_PANEL_TIMEOUT = 1.2  # how long to wait for a unit info panel after clicking the tile a unit was just placed on -- a panel means a unit is standing there, no panel means the placement was thrown away
+PLACE_CIRCLE_TIMEOUT = 20.0  # whole-circle budget for one unit. Each attempt re-presses the hotkey, re-searches and waits for the confirm, so an attempt COUNT alone is not a bound -- seventeen of them on one hopeless unit would hold Pre Start up while every other unit waits
 UNPLACED_RETRY_INTERVAL = 3.0  # gap between retries of a unit that would not go down -- gold accrues over a match, so "cannot afford it yet" stops being true, but checking every poll would spend the whole match on it
 UNPLACED_RETRY_MAX_ATTEMPTS = 17  # the saved spot, then two full circles of eight points at widening radius. Bounded because a retry that keeps "succeeding" without placing anything would otherwise run all match
 UNPLACED_RETRY_NUDGE = 40  # px a retry steps off the saved spot. The circle widens as attempts go on (1x the first time round the eight points, 2x the second), so a saved coordinate that is badly wrong still gets found -- Salmon Sorcerer 2 sat in the HUD strip, well outside anything a 24px ring could reach

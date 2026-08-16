@@ -794,3 +794,24 @@ def test_the_circle_orbits_the_saved_spot_not_the_last_try(placing, monkeypatch)
     far = max(max(abs(x - 500), abs(y - 400)) for x, y in aimed)
     assert far <= N * 2 + 2, f"drifted {far}px from the saved spot -- the circle is compounding"
     assert aimed[0] == (500, 400)
+
+
+def test_circling_gives_up_on_time_not_just_on_attempts(placing, monkeypatch):
+    """Each attempt re-presses the hotkey, re-searches and waits for the
+    confirm. A count alone is not a bound -- one hopeless unit would hold Pre
+    Start up while every other unit waits its turn."""
+    monkeypatch.setattr(runner_blocks.vision, "read_unit_card",
+                        lambda h, s, n=None: {"in_hand": False, "affordable": None,
+                                              "price_px": 5, "hue": -1})
+    monkeypatch.setattr(runner_blocks.vision, "find_upgrade_state", lambda h: (None, None))
+    tries = []
+    monkeypatch.setattr(BlockOps, "_find_valid_place_spot",
+                        lambda self, h, st, l, t, x, y, nm: tries.append((x, y)) or (x, y))
+    placing._unplaced_units = {}
+
+    _place(placing)
+
+    from core.runner_constants import UNPLACED_RETRY_MAX_ATTEMPTS as CAP
+    assert len(tries) < CAP, f"ran all {CAP} attempts instead of stopping on the clock"
+    assert any("without finding a spot" in m for m in placing.logs)
+    assert 4 in placing._unplaced_units, "gave up entirely instead of handing it to the sweep"
