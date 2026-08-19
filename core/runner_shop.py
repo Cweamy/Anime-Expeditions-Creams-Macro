@@ -23,7 +23,7 @@ SHOP_SCROLL_AMOUNT = -480
 SHOP_SCROLL_REFINEMENT_AMOUNT = -120
 SHOP_SCROLL_RESET_AMOUNT = 2400
 SHOP_ITEM_SEARCH_TIMEOUT = 3.0
-SHOP_BOTTOM_SCROLL_AMOUNT = -4800
+SHOP_BOTTOM_SCROLL_AMOUNT = -1200
 SHOP_LIST_CENTER = (545, 410)
 SHOP_LIST_SLOT_VIEWPORTS = {
     "left": (398, 218, 154, 362),
@@ -44,13 +44,13 @@ SHOP_ITEM_SCROLL_STEPS = {
     "red_flower": 0,
     "frown_fruit": 1,
     "delicious_pie": 1,
-    "mana_flask": 1,
-    "trait_crystal": 1,
-    "sprite_grey": 2,
-    "equipment_reroll": 2,
-    "equipment_lock": 3,
-    "stat_reroll": 3,
-    "stat_lock": 4,
+    "mana_flask": 2,
+    "trait_crystal": 3,
+    "sprite_grey": 3,
+    "equipment_reroll": 4,
+    "equipment_lock": 4,
+    "stat_reroll": 5,
+    "stat_lock": 5,
 }
 SHOP_ITEM_SCROLL_AMOUNTS = {
     "cursed_boba": 0,
@@ -58,12 +58,12 @@ SHOP_ITEM_SCROLL_AMOUNTS = {
     "frown_fruit": -120,
     "delicious_pie": -120,
     "mana_flask": -480,
-    "trait_crystal": -480,
-    "sprite_grey": -720,
-    "equipment_reroll": -720,
+    "trait_crystal": -600,
+    "sprite_grey": -600,
+    "equipment_reroll": -960,
     "equipment_lock": -960,
-    "stat_reroll": -960,
-    "stat_lock": -4800,
+    "stat_reroll": -1200,
+    "stat_lock": -1200,
 }
 SHOP_ITEM_COLUMNS = {
     "cursed_boba": "left",
@@ -71,20 +71,20 @@ SHOP_ITEM_COLUMNS = {
     "frown_fruit": "left",
     "delicious_pie": "right",
     "mana_flask": "left",
-    "trait_crystal": "right",
-    "sprite_grey": "left",
-    "equipment_reroll": "right",
-    "equipment_lock": "left",
-    "stat_reroll": "right",
-    "stat_lock": "left",
+    "trait_crystal": "left",
+    "sprite_grey": "right",
+    "equipment_reroll": "left",
+    "equipment_lock": "right",
+    "stat_reroll": "left",
+    "stat_lock": "right",
 }
 SHOP_SWEEP_POSITIONS = (
     (0, ("cursed_boba", "red_flower")),
     (-120, ("frown_fruit", "delicious_pie")),
-    (-480, ("mana_flask", "trait_crystal")),
-    (-720, ("sprite_grey", "equipment_reroll")),
-    (-960, ("equipment_lock", "stat_reroll")),
-    (SHOP_BOTTOM_SCROLL_AMOUNT, ("stat_lock",)),
+    (-480, ("mana_flask",)),
+    (-600, ("trait_crystal", "sprite_grey")),
+    (-960, ("equipment_reroll", "equipment_lock")),
+    (-1200, ("stat_reroll", "stat_lock")),
 )
 
 _TERMINAL_ITEM_STATUSES = {
@@ -244,6 +244,7 @@ class ShopOps:
                     hwnd,
                     template,
                     region=SHOP_LIST_SLOT_VIEWPORTS[column],
+                    threshold=0.74 if attempt == 1 else 0.78,
                 )
             except vision.TemplateNotFound as exc:
                 self._log(f"[Shop] {exc}")
@@ -267,6 +268,7 @@ class ShopOps:
                     hwnd,
                     template,
                     region=SHOP_LIST_SLOT_VIEWPORTS[column],
+                    threshold=0.74,
                 )
             except vision.TemplateNotFound:
                 match = None
@@ -664,11 +666,24 @@ class ShopOps:
         if self._wait_for_image_gone(
                 hwnd,
                 (auto_shop.AUTO_SHOP_UI_TEMPLATES["cancel"],),
-                SHOP_MODAL_CLOSE_TIMEOUT,
+                3.0,
                 stop_event,
         ):
             time.sleep(SHOP_MODAL_POST_CLOSE_DELAY)
             return True
+
+        # Second attempt in case first click was dropped during animation/focus
+        if not self._checkpoint(stop_event):
+            self._mouse.click(screen_x, screen_y)
+            if self._wait_for_image_gone(
+                    hwnd,
+                    (auto_shop.AUTO_SHOP_UI_TEMPLATES["cancel"],),
+                    SHOP_MODAL_CLOSE_TIMEOUT,
+                    stop_event,
+            ):
+                time.sleep(SHOP_MODAL_POST_CLOSE_DELAY)
+                return True
+
         self._shop_cancel_modal(hwnd, cancel_match)
         return False
 
