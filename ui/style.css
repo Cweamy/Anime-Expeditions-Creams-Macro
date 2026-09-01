@@ -951,7 +951,7 @@ h1, h2, h3, .brand-font { font-family: 'Sora', 'Inter', system-ui, sans-serif; }
 .palette-chip:active { cursor: grabbing; transform: scale(0.98); }
 
 .block-row {
-  display: flex; align-items: center; gap: 9px;
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
   padding: 8px 10px 8px 12px; border-radius: 8px; border: 1px solid var(--border);
   border-left: 3px solid var(--blk, var(--border));
   background: var(--bg-card); margin-bottom: 6px; cursor: grab;

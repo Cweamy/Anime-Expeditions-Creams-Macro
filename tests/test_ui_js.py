@@ -161,6 +161,21 @@ def test_infinite_task_summary_shows_its_exit_wave(tmp_path):
     assert "Stop after wave 50" in out["meta"]
 
 
+def test_event_infinite_task_summary_shows_its_exit_wave(tmp_path):
+    out = run_js("""
+        const TASK_DATA = { event: { label: 'Event' } };
+        const DEFAULT_INFINITE_WAVE_LIMIT = 20;
+        eval(extract('taskSummary'));
+        console.log(JSON.stringify(taskSummary({
+          mode: 'event', stage: 'infinite', map: 'Event',
+          repeat: 1, play_mode: 'solo', macro: 'Summer Infinite Auto Fish',
+          infinite_wave_limit: 30
+        })));
+    """, tmp_path)
+    assert out["title"].startswith("Event") and "Infinite" in out["title"]
+    assert "Stop after wave 30" in out["meta"]
+
+
 def test_tournament_task_summary_names_its_type_and_hides_play_mode(tmp_path):
     out = run_js("""
         const TASK_DATA = { tournament: { label: 'Tournament' } };

@@ -287,6 +287,10 @@ class BlockOps:
                 self._run_click_block(hwnd, stop_event, block, self._battle_block_index + 1)
                 done = True
                 self._battle_block_state = {}
+            elif btype == "drag":
+                self._run_drag_block(hwnd, stop_event, block, self._battle_block_index + 1)
+                done = True
+                self._battle_block_state = {}
             elif btype == "send_key":
                 self._run_send_key_tick(block, self._battle_block_index + 1)
                 done = True
@@ -373,6 +377,40 @@ class BlockOps:
         self._log(f"[Macro] {label}: clicking ({x}, {y}).")
         left, top, _, _ = wm.get_window_rect_screen(hwnd)
         self._mouse.click(left + x, top + y)
+
+    def _run_drag_block(self, hwnd, stop_event: threading.Event, block: dict, block_num: int,
+                        phase_label: str = "Battle") -> None:
+        """Drag block (Macro Manager > Setup > Drag): press the button at
+        (x1, y1) and move to (x2, y2) while held, then release -- a swipe
+        for any UI element a raw Click can't reach. Same 1152x756
+        window-client coords Click's x/y use, straight to Mouse.drag. Steps
+        (how many interpolated moves) and duration_ms (how long the whole
+        drag takes) are per-block user settings -- a faster drag is more
+        likely to read as a click, so the block lets you slow it down until
+        the game registers the hold."""
+        label = f"{phase_label} block #{block_num} (Drag)"
+        params = block.get("params", {})
+        try:
+            x1, y1 = int(params.get("x1") or 0), int(params.get("y1") or 0)
+            x2, y2 = int(params.get("x2") or 0), int(params.get("y2") or 0)
+        except (TypeError, ValueError):
+            self._log(f"[Macro] {label}: bad coordinates -- skipping.")
+            return
+        if not (x1 or y1) and not (x2 or y2):
+            # (0,0)->(0,0) is the unset default straight from the palette --
+            # a forgotten set of positions, same skip Click gives (0,0).
+            self._log(f"[Macro] {label}: no positions set -- skipping.")
+            return
+        try:
+            steps = max(1, int(params.get("steps") or DRAG_DEFAULT_STEPS))
+            duration_ms = max(0, int(params.get("duration_ms") or DRAG_DEFAULT_DURATION_MS))
+        except (TypeError, ValueError):
+            steps, duration_ms = DRAG_DEFAULT_STEPS, DRAG_DEFAULT_DURATION_MS
+        self._log(f"[Macro] {label}: dragging ({x1}, {y1}) -> ({x2}, {y2}) "
+                  f"({steps} steps, {duration_ms}ms).")
+        left, top, _, _ = wm.get_window_rect_screen(hwnd)
+        self._mouse.drag(left + x1, top + y1, left + x2, top + y2,
+                         steps=steps, duration=duration_ms / 1000.0)
 
     def _placed_unit_click_point(self, block: dict, label: str):
         index = block.get("params", {}).get("index")
@@ -1047,6 +1085,8 @@ class BlockOps:
             self._run_record_macro_tick(hwnd, stop_event, block, i, phase_label="Pre Start")
         elif btype == "click":
             self._run_click_block(hwnd, stop_event, block, i, phase_label="Pre Start")
+        elif btype == "drag":
+            self._run_drag_block(hwnd, stop_event, block, i, phase_label="Pre Start")
         elif btype == "wait_ms":
             self._run_wait_ms_tick(stop_event, block, i, phase_label="Pre Start")
         elif btype == "send_key":
