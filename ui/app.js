@@ -2181,6 +2181,15 @@ const TASK_DATA = {
     stages: ['infinite', 'portal'],
     isEvent: true,
   },
+  portals: {
+    label: 'Portals',
+    // A mode-agnostic portal runner: the user types a portal name that is
+    // used as the SEARCH QUERY in the Inventory -> Portals tab (see
+    // core.runner_portals / PortalsOp). Stored in `map`, so it reads
+    // straight through to logs/status. No map carousel or difficulty -- the
+    // portal name IS the selection.
+    isPortals: true,
+  },
   tournament: {
     label: 'Tournament',
     // Tournament has its own lobby entry (nav_tournament -> a type card ->
@@ -2720,6 +2729,7 @@ function setTaskProp(id, key, value) {
     const d = TASK_DATA[t.mode];
     if (d.maps) t.map = d.maps[0];
     else if (d.isEvent) t.map = 'Event';  // no map to pick, but a label keeps logs/status readable
+    else if (d.isPortals) t.map = 'summer';  // default portal search query
     if (d.stages) t.stage = d.stages[0];
     if (d.difficulties) t.difficulty = d.difficulties[0];
     if (d.extractAfter) t.extract_after = '1';
@@ -2761,6 +2771,8 @@ function taskSummary(t) {
     title += ` · ${t.map}`;
   } else if (t.mode === 'event') {
     title += ` · ${t.stage === 'infinite' ? 'Infinite' : 'Portal'}`;
+  } else if (t.mode === 'portals') {
+    title += ` · ${t.map || 'summer'}`;
   }
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
   const diff = ((t.mode === 'story' && !specialStage) || t.mode === 'expedition') ? t.difficulty
@@ -2855,6 +2867,11 @@ function renderTaskBuilder() {
     fields.push(field('Map', sel('stage', d.stages, s => s === 'infinite' ? 'Infinite' : 'Portal',
       'Select the event to enter: Infinite & Fishing, or Portal Mode'),
       'Select the event to enter'));
+  } else if (t.mode === 'portals') {
+    fields.push(field('Portal Name', `<input type="text" class="block-input" style="width:130px;"
+      value="${escapeHtml(t.map ?? 'summer')}" placeholder="e.g. summer"
+      oninput="setTaskProp('${t.id}', 'map', this.value)">`,
+      'The portal to search for in the Inventory > Portals tab (the search query, e.g. "summer")'));
   } else if (t.mode === 'tournament') {
     fields.push(field('Type', sel('map', d.maps, null, 'Select the Tournament type to enter'), 'Select the Tournament type to enter'));
   } else if (t.mode === 'tower') {

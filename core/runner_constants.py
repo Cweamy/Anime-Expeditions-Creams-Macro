@@ -354,6 +354,10 @@ EVENT_KIND_IMAGES = {
     # out to lobby) rather than raising mid-navigation.
     "portal": ("summer_event_portal",),
 }
+PORTAL_SEARCHES = {
+    "search": (433, 174, 492 - 433, 188 - 174),
+    "portals": (344, 208, 687 - 344, 296 - 208),
+}
 
 # Tournament mode: reached through Play like Story/Raid -- its nav_tournament
 # button sits on the same gamemode menu (picked instead of Story), NOT via its

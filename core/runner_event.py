@@ -125,6 +125,7 @@ class EventOps:
             return False
         if isinstance(kind_images, str):
             kind_images = (kind_images,)
+        
         self._set_status(action=f"Clicking {kind} event...")
         # Any candidate crop that matches wins; later entries are fallbacks
         # for a card that shows in more than one visual state.
@@ -163,7 +164,7 @@ class EventOps:
         # may still hold a previous query) -- Ctrl+A to select, Delete to
         # clear, then type. Same search-box recipe the settings search uses.
         self._set_status(action="Searching Summer portals...")
-        if self._click_found_image(hwnd, "portal_search", EVENT_SCREEN_TIMEOUT, stop_event) is None:
+        if self._click_found_image(hwnd, "portal_search", EVENT_SCREEN_TIMEOUT, stop_event, region=PORTAL_SEARCHES.get("search")) is None:
             self._spam_back_until_gone(hwnd, stop_event)
             return False
         self._keyboard.combo(keys.VK_CONTROL, ord("A"))
@@ -175,7 +176,7 @@ class EventOps:
 
         # The tier card (tier-specific crop, see the docstring above).
         self._set_status(action="Selecting Summer portal tier...")
-        if self._click_found_image(hwnd, "summer_portal", EVENT_SCREEN_TIMEOUT, stop_event) is None:
+        if self._click_found_image(hwnd, "summer_portal", EVENT_SCREEN_TIMEOUT, stop_event, region=PORTAL_SEARCHES.get("portals")) is None:
             self._spam_back_until_gone(hwnd, stop_event)
             return False
         if self._checkpoint(stop_event):

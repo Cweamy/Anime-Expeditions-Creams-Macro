@@ -39,6 +39,7 @@ from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
 from .runner_event import EventOps
 from .runner_fuel import FuelOps
+from .runner_portals import PortalsOp
 from .runner_shop import ShopOps
 
 
@@ -115,7 +116,7 @@ def _find_team_load_button(frame, expected_y):
     return cx, cy
 
 
-class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, ExpeditionOps, BlockOps, EventOps):
+class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, ExpeditionOps, BlockOps, EventOps, PortalsOp):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
     active at a time (one physical game window, one macro)."""
@@ -899,10 +900,11 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     return
 
                 map_name = task.get("map")
-                # Event mode has no map to pick (just an Act) -- it's the one
-                # mode where a missing map is expected, not a misconfigured
-                # task, so don't skip it over that.
-                if not map_name and (task.get("mode") or "story") != "event":
+                # Event mode has no map to pick (just an Act) and Portals mode
+                # uses a free-text Portal Name as its query -- in both, a
+                # missing map is expected, not a misconfigured task, so don't
+                # skip them over that.
+                if not map_name and (task.get("mode") or "story") not in ("event", "portals"):
                     self._log(f"[Macro] Task {task_index}/{len(tasks)} has no map set -- skipping it.")
                     continue
 
@@ -1506,6 +1508,16 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 return False
             if self._checkpoint(stop_event):
                 return False
+        elif mode == "portals":
+            # Portals runner: lobby -> Inventory (nav_inv) -> Portals tab
+            # (normal_portals_nav) -> search the task's portal name -> click
+            # the portal card -> activate, then the shared confirm/Solo tail
+            # (see PortalsOp._run_portal_selection_from_inventory).
+            if not self._run_portal_selection_from_inventory(
+                    hwnd, stop_event, query=task.get("map") or "summer"):
+                return False
+            if self._checkpoint(stop_event):
+                return False
         elif mode == "tournament":
             # Tournament goes through Play like Story/Raid (nav_tournament sits
             # on the gamemode menu, picked instead of Story), but has no map
@@ -1633,7 +1645,7 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # press (unlike Story/Raid/Infinite, which land on a stage screen that
         # needs nav_select_stage first). Skip the confirm and let the Start
         # tail below click nav_start. See EventOps._select_summer_portal.
-        portal_ready = (mode == "event" and task.get("stage") == "portal")
+        portal_ready = (mode == "portals") or (mode == "event" and task.get("stage") == "portal")
         if task.get("play_mode") != "matchmaking" and not portal_ready:
             if mode == "tournament":
                 confirm_image = "nav_entertournament"
@@ -2241,6 +2253,16 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 if not self._select_summer_portal(hwnd, stop_event, entry=False):
                     return False
                 self._log("[Macro] Next Summer portal selected -- continuing this task's repeats.")
+                return True
+            if (result == "win" and task.get("mode") == "portals"):
+                # The Portals mode's result screen also has "Select Portal" --
+                # pick the next portal using the task's Portal Name query and
+                # continue the repeats (see PortalsOp._select_portal_post_victory).
+                self._set_status(action="Victory -- selecting the next portal...")
+                if not self._select_portal_post_victory(
+                        hwnd, stop_event, task.get("map") or "summer"):
+                    return False
+                self._log("[Macro] Next portal selected -- continuing this task's repeats.")
                 return True
             if task.get("mode") == "tower":
                 repeat_image = "Next_Floor" if result == "win" else "Repeat_Floor"
