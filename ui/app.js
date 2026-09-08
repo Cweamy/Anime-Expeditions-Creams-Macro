@@ -2177,7 +2177,8 @@ const TASK_DATA = {
     // way Raid stores its Acts, so it reuses the existing stage/act
     // plumbing. The chosen kind is what runner._reach_event_kind_selected
     // clicks. Mirrors core.runner_constants' EVENT_KIND_ORDER. Portal Mode
-    // is reserved but not runnable yet.
+    // additionally picks + activates a portal on the way in, and picks the
+    // next one after each win (see runner_event._select_summer_portal).
     stages: ['infinite', 'portal'],
     isEvent: true,
   },
@@ -2234,11 +2235,6 @@ function defaultTask() {
     infinite_wave_limit: DEFAULT_INFINITE_WAVE_LIMIT,
     extract_after: '1',
     repeat: 1, team: '', equipment: 'include', play_mode: 'solo', macro: '',
-    // Event-only: auto-clear Villian Invasion Act 4 when a Crow Relic drops.
-    // act4_mode 'once' spends one relic then resumes; 'until_locked' spends
-    // every banked relic. act4_macro is Act 4's own Macro Operation (it plays
-    // nothing like Acts 1-3). See runner._run_act4_diversion.
-    act4_on_drop: false, act4_mode: 'once', act4_macro: '',
   };
 }
 
@@ -2417,12 +2413,13 @@ async function importSettings() {
 // at nothing on someone else's machine). Import restores both, giving all
 // tasks fresh ids and never overwriting a template that already exists
 // locally under the same name.
-// Every macro a task can point at. act4_macro is Act 4's own Macro
-// Operation and was left out of the export entirely, so a shared queue
-// arrived referencing a macro the recipient did not have -- and the export
-// still reported success.
+// Every macro a task can point at -- just `macro` now that the Villian
+// Invasion Act 4 divert (and its separate act4_macro) is gone. Kept as a
+// helper because the export walks it: a task's macro used to be left out of
+// the export entirely, so a shared queue arrived referencing a macro the
+// recipient did not have -- and the export still reported success.
 function taskMacroNames(task) {
-  return [task.macro, task.act4_macro].filter(Boolean);
+  return [task.macro].filter(Boolean);
 }
 
 async function exportTasks() {
@@ -2923,8 +2920,9 @@ function renderTaskBuilder() {
       <option value="">No Macro</option>
       ${taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === t.macro ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('')}
     </select>`;
-  // Infinite & Fishing is the only runnable event kind, and it must use an
-  // Autoplay Macro Operation; Portal Mode (unrunnable) keeps the plain label.
+  // Infinite & Fishing runs unlimited waves, so it needs an Autoplay Macro
+  // Operation to keep going; Portal Mode is a normal stage and keeps the
+  // plain label.
   const macroLabel = (t.mode === 'event' && t.stage === 'infinite')
     ? 'Macro Operation (Must be Autoplay)' : 'Macro Operation';
   fields.push(field(macroLabel, macroSel, 'Select a pre-start placement macro template'));
@@ -2962,6 +2960,7 @@ async function refreshTaskQueue() {
     // the whole list blank while the header still shows a count.
     const dropped = rawTasks.filter(t => !TASK_DATA[t.mode]).length;
     let repairedExtractAfter = 0;
+    let migratedEventStages = 0;
     taskCards = rawTasks.filter(t => TASK_DATA[t.mode]).map(saved => {
       const t = { ...defaultTask(), ...saved };
       if (t.team == null) t.team = '';
@@ -2975,14 +2974,26 @@ async function refreshTaskQueue() {
         t.stage = t.difficulty;
         t.difficulty = 'Normal';
       }
+      // Event used to be Villian Invasion, whose stage was an Act number
+      // ('1'-'4'). That event is gone; the stage now names the Summer event
+      // kind ('infinite'/'portal'). Without this an old task keeps a stage
+      // the picker has no option for and stops the run at "Unknown Event
+      // kind" -- migrate it to the default kind instead.
+      if (t.mode === 'event' && !TASK_DATA.event.stages.includes(t.stage)) {
+        t.stage = TASK_DATA.event.stages[0];
+        migratedEventStages++;
+      }
       return t;
     });
-    if (dropped || repairedExtractAfter) {
+    if (dropped || repairedExtractAfter || migratedEventStages) {
       if (dropped) {
         addLog(`[Task] Removed ${dropped} task(s) with an unrecognized mode (e.g. old Challenge/Bounty entries).`);
       }
       if (repairedExtractAfter) {
         addLog(`[Task] Adjusted invalid or oversized Expedition "Extract After" value(s) to the supported range.`);
+      }
+      if (migratedEventStages) {
+        addLog(`[Task] Switched ${migratedEventStages} Event task(s) off the retired Villian Invasion Acts -- check the Event picker.`);
       }
       saveTaskQueue();
     }
@@ -6032,7 +6043,13 @@ const IMAGE_DESCRIPTIONS = {
   summer_nav: "The lobby 'Event' button for the Summer event -- Event mode's own entry (not under Play).",
   summer_event_gamemode: "The Summer event's gamemode card -- opens the Infinite & Fishing / Portal Mode picker.",
   summer_event_infinite: "The 'Infinite & Fishing' event card -- the event kind we run.",
-  summer_event_portal: "The 'Portal Mode' event card (Tiered & Secret Portals) -- reserved, not runnable yet.",
+  summer_event_portal: "The 'Portal Mode' event card (Tiered & Secret Portals).",
+  nav_inv: "The lobby's Inventory button -- the lead-in to the Portals tab.",
+  normal_portals_nav: "The Inventory's Portals tab.",
+  portal_search: "The portal picker's search box.",
+  summer_portal: "A Summer portal card in the portal picker's list.",
+  portal_activate: "The portal picker's confirm button ('Activate Portal' on entry, 'Select' post-victory).",
+  select_new_portal: "The Victory screen's 'Select Portal' button (Portal runs get this instead of Repeat Stage).",
   team: "The Team Loadout panel (opened with H).",
   teleportstuck: "Legacy normal-loading reference; no longer used as a disconnect signal.",
   toggle_false: "A Settings toggle in its OFF state.",

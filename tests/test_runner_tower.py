@@ -121,8 +121,6 @@ class MatchResultProbe:
     def _click_return_to_lobby_if_found(self, *_args):
         return True
 
-    def _relic_dropped(self, _hwnd):
-        return False
 
 
 class ImmediateThread:

@@ -47,10 +47,12 @@ class PortalsOp:
 
     def _select_portal_on_picker(self, hwnd, stop_event: threading.Event,
                                  query: str = "summer") -> bool:
-        """Search an already-open portal picker for `query`, click the tier
+        """Search an already-open portal picker for `query`, click the matching
         card, then activate -- driven by the PORTAL_SEARCHES regions (search
         box + portal-card list) so it's agnostic to how the picker was
-        reached (event gamemode, or the Inventory Portals tab).
+        reached (event gamemode, or the Inventory Portals tab). `query` is
+        both what gets typed into the search box and what names the card crop
+        to look for (see the candidate list below).
         """
         self._set_status(action="Selecting portal...")
 
@@ -64,18 +66,31 @@ class PortalsOp:
         if self._checkpoint(stop_event):
             return False
 
-        # Find the tier card, boxed to the portal-card list region.
+        # Find the portal card, boxed to the portal-card list region. The
+        # query drives WHICH crop is looked for, not just what gets typed:
+        # "<query>_portal" then "<query>", so running a portal other than
+        # Summer is just adding your own crop under that name (Settings >
+        # General > Image Manager). summer_portal stays last as the shipped
+        # fallback, so an unnamed/new portal still matches the Summer card
+        # the search box already filtered down to.
         px, py, pw, ph = (int(v) for v in PORTAL_SEARCHES["portals"])
+        slug = "".join(c if c.isalnum() else "_" for c in query.strip().lower()).strip("_")
+        candidates = [n for n in (f"{slug}_portal", slug, "summer_portal") if n]
+        candidates = list(dict.fromkeys(candidates))  # de-dup, keep priority order
         try:
-            match = vision.find_image(hwnd, "summer_portal", region=(px, py, pw, ph))
+            match, found_name = vision.find_image_any(hwnd, tuple(candidates),
+                                                      region=(px, py, pw, ph))
         except vision.TemplateNotFound as exc:
+            # Only raised when NOT ONE of the candidates has a crop on disk.
             self._log(f"[Macro] {exc}")
             match = None
         if match is None:
-            self._log(f'[Macro] No "{query}" portal card found in the portal list.')
+            self._log(f'[Macro] No "{query}" portal card found in the portal list '
+                      f'(searched for {", ".join(candidates)}).')
             self._spam_back_until_gone(hwnd, stop_event)
             return False
-        self._log(f'[Macro] Found the "{query}" portal card (score {match["score"]:.2f}) -- clicking it.')
+        self._log(f'[Macro] Found the "{query}" portal card via "{found_name}" '
+                  f'(score {match["score"]:.2f}) -- clicking it.')
         vision.click_match(self._mouse, hwnd, match)
         if self._checkpoint(stop_event):
             return False

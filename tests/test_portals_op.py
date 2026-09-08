@@ -56,7 +56,8 @@ def test_run_portal_selection_from_inventory_backs_out_when_inventory_missing(mo
 
 def test_select_portal_on_picker_searches_and_activates(monkeypatch):
     runner = _runner()
-    monkeypatch.setattr(portal_module.vision, "find_image", lambda *a, **k: {"score": 0.97, "cx": 500, "cy": 250})
+    monkeypatch.setattr(portal_module.vision, "find_image_any",
+                        lambda *a, **k: ({"score": 0.97, "cx": 500, "cy": 250}, "summer_portal"))
     clicked = []
     monkeypatch.setattr(portal_module.vision, "click_match", lambda mouse, hwnd, match: clicked.append(match["cx"]))
     assert runner._select_portal_on_picker(1, threading.Event(), "summer") is True
@@ -66,9 +67,40 @@ def test_select_portal_on_picker_searches_and_activates(monkeypatch):
     assert ("image", "portal_activate") in runner.clicked     # confirm
 
 
+def test_select_portal_on_picker_looks_for_crops_named_after_the_query(monkeypatch):
+    """The Portal Name is not just what gets typed -- it names the card crop to
+    look for, so running a non-Summer portal is just adding a crop under that
+    name. summer_portal stays last as the shipped fallback."""
+    runner = _runner()
+    searched = []
+
+    def fake_find_any(hwnd, names, **kwargs):
+        searched.extend(names)
+        return {"score": 0.97, "cx": 12, "cy": 34}, names[-1]
+
+    monkeypatch.setattr(portal_module.vision, "find_image_any", fake_find_any)
+    monkeypatch.setattr(portal_module.vision, "click_match", lambda *a, **k: None)
+    assert runner._select_portal_on_picker(1, threading.Event(), "Winter Rift") is True
+    assert searched == ["winter_rift_portal", "winter_rift", "summer_portal"]
+    assert runner.typed == ["Winter Rift"]
+
+
 def test_select_portal_on_picker_backs_out_when_card_missing(monkeypatch):
     runner = _runner()
-    monkeypatch.setattr(portal_module.vision, "find_image", lambda *a, **k: None)
+    monkeypatch.setattr(portal_module.vision, "find_image_any", lambda *a, **k: (None, None))
+    assert runner._select_portal_on_picker(1, threading.Event(), "summer") is False
+    assert runner.backs == [1]
+
+
+def test_select_portal_on_picker_backs_out_when_no_crop_exists_at_all(monkeypatch):
+    """find_image_any only raises when NOT ONE candidate has a crop on disk --
+    that is a missing-asset problem, not a stop, so it logs and backs out."""
+    runner = _runner()
+
+    def raise_missing(*a, **k):
+        raise portal_module.vision.TemplateNotFound("no such template")
+
+    monkeypatch.setattr(portal_module.vision, "find_image_any", raise_missing)
     assert runner._select_portal_on_picker(1, threading.Event(), "summer") is False
     assert runner.backs == [1]
 
