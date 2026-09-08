@@ -22,9 +22,17 @@ def _runner():
         ({"mode": "story", "stage": "Infinite", "infinite_wave_limit": 0}, 20),
         ({"mode": "story", "stage": "5", "infinite_wave_limit": 50}, None),
         ({"mode": "raid", "stage": "Infinite", "infinite_wave_limit": 50}, None),
+        # Event > Infinite & Fishing uses the same wave-limit exit as Story > Infinite.
+        ({"mode": "event", "stage": "infinite", "infinite_wave_limit": 40}, 40),
+        ({"mode": "event", "stage": "infinite"}, 20),
+        ({"mode": "event", "stage": "infinite", "infinite_wave_limit": "bad"}, 20),
+        ({"mode": "event", "stage": "infinite", "infinite_wave_limit": 0}, 20),
+        # Portal Mode (and any legacy event stage) is not an Infinite run.
+        ({"mode": "event", "stage": "portal", "infinite_wave_limit": 40}, None),
+        ({"mode": "event", "stage": "1", "infinite_wave_limit": 40}, None),
     ],
 )
-def test_infinite_wave_limit_only_applies_to_story_infinite(task, expected):
+def test_infinite_wave_limit_only_applies_to_infinite_stages(task, expected):
     assert MacroRunner._infinite_wave_limit(task) == expected
 
 

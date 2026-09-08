@@ -37,7 +37,9 @@ from .runner_bounty import BountyOps
 from .runner_challenge import ChallengeOps
 from .runner_crafting import CraftingOps
 from .runner_expedition import ExpeditionOps
+from .runner_event import EventOps
 from .runner_fuel import FuelOps
+from .runner_portals import PortalsOp
 from .runner_shop import ShopOps
 
 
@@ -114,7 +116,7 @@ def _find_team_load_button(frame, expected_y):
     return cx, cy
 
 
-class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, ExpeditionOps, BlockOps):
+class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, ExpeditionOps, BlockOps, EventOps, PortalsOp):
     """One run's worth of state -- module-level singleton via main.Api, same
     pattern as core.paths._recorder, since only one run can realistically be
     active at a time (one physical game window, one macro)."""
@@ -898,10 +900,11 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                     return
 
                 map_name = task.get("map")
-                # Event mode has no map to pick (just an Act) -- it's the one
-                # mode where a missing map is expected, not a misconfigured
-                # task, so don't skip it over that.
-                if not map_name and (task.get("mode") or "story") != "event":
+                # Event mode has no map to pick (just an Act) and Portals mode
+                # uses a free-text Portal Name as its query -- in both, a
+                # missing map is expected, not a misconfigured task, so don't
+                # skip them over that.
+                if not map_name and (task.get("mode") or "story") not in ("event", "portals"):
                     self._log(f"[Macro] Task {task_index}/{len(tasks)} has no map set -- skipping it.")
                     continue
 
@@ -1495,28 +1498,23 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         own lobby entry (nav_event -> event_gamemode -> Act) with no map or
         difficulty, then rejoins the shared confirm/Solo/Matchmaking tail."""
         if mode == "event":
-            # Event is reached straight from the lobby (nav_event), not
-            # through Play/gamemode/map, and has no difficulty picker -- so
-            # it reaches the chosen Act and then falls straight through to
-            # the shared confirm + Solo/Matchmaking tail below. Same
-            # retried-from-the-lobby loop as the map path, for the same
-            # reason (a failed attempt leaves nothing safe to assume).
-            reached_event = False
-            for attempt in range(1, MAP_SELECT_RETRY_ATTEMPTS + 1):
-                if self._checkpoint(stop_event):
-                    return False
-                if attempt > 1:
-                    self._log(f"[Macro] Retrying Event entry from the lobby "
-                               f"(attempt {attempt}/{MAP_SELECT_RETRY_ATTEMPTS})...")
-                if self._reach_event_act_selected(hwnd, stop_event, task.get("stage") or "1",
-                                                   scroll_power, scroll_nudges):
-                    reached_event = True
-                    break
-                if stop_event.is_set():
-                    return False
-            if not reached_event:
-                self._log(f'[Macro] Couldn\'t reach the Event Act after {MAP_SELECT_RETRY_ATTEMPTS} '
-                           f'attempts -- stopping.')
+            # Event's whole lobby -> nav -> kind-card entry is one callable
+            # (see EventOps._run_event_setup) -- no map carousel or difficulty
+            # picker, and it falls straight through to the shared confirm +
+            # Solo/Matchmaking tail below. Same retried-from-the-lobby loop
+            # as the map path, for the same reason (a failed attempt leaves
+            # nothing safe to assume).
+            if not self._run_event_setup(hwnd, stop_event, task, scroll_power, scroll_nudges):
+                return False
+            if self._checkpoint(stop_event):
+                return False
+        elif mode == "portals":
+            # Portals runner: lobby -> Inventory (nav_inv) -> Portals tab
+            # (normal_portals_nav) -> search the task's portal name -> click
+            # the portal card -> activate, then the shared confirm/Solo tail
+            # (see PortalsOp._run_portal_selection_from_inventory).
+            if not self._run_portal_selection_from_inventory(
+                    hwnd, stop_event, query=task.get("map") or "summer"):
                 return False
             if self._checkpoint(stop_event):
                 return False
@@ -1601,6 +1599,14 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 # stepper, straight after the map.
                 self._interruptible_sleep(DIFFICULTY_CLICK_DELAY, stop_event)
                 self._select_expedition_difficulty(hwnd, stop_event, task.get("difficulty") or "1")
+            elif mode == "event":
+                # Event's kind card (Infinite & Fishing / Portal Mode) IS the
+                # whole selection -- there's no stage-row picker or difficulty
+                # stepper after it (the kind-card click already landed us on
+                # the stage screen), so skip straight to the confirm/Start
+                # tail (_enter_selected_stage). _select_stage's numbered rows
+                # don't apply to the event kind cards at all.
+                self._log("[Macro] Event kind card already picked the stage -- no stage/difficulty click needed.")
             else:
                 stage = task.get("stage") or "1"
                 if not self._select_stage(hwnd, stop_event, stage, mode):
@@ -1634,7 +1640,13 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # retried) click, not just a wait. Solo-only: matchmaking goes
         # straight to Enter Matchmaking instead, since this doesn't
         # reliably show up the same way for it.
-        if task.get("play_mode") != "matchmaking":
+        # Portal's portal-activate step lands directly on the stage screen
+        # with a Start button -- there's no separate "Select Stage" confirm to
+        # press (unlike Story/Raid/Infinite, which land on a stage screen that
+        # needs nav_select_stage first). Skip the confirm and let the Start
+        # tail below click nav_start. See EventOps._select_summer_portal.
+        portal_ready = (mode == "portals") or (mode == "event" and task.get("stage") == "portal")
+        if task.get("play_mode") != "matchmaking" and not portal_ready:
             if mode == "tournament":
                 confirm_image = "nav_entertournament"
             elif mode == "expedition":
@@ -1795,9 +1807,15 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
 
     @staticmethod
     def _infinite_wave_limit(task: dict):
-        """Configured completed-wave target for a Story > Infinite task."""
+        """Configured completed-wave target for a Story > Infinite task or an
+        Event > Infinite & Fishing task. Returns None for every other stage --
+        only an Infinite-style unlimited-wave stage has a wave to stop at."""
         task = task or {}
-        if task.get("mode") != "story" or task.get("stage") != "Infinite":
+        is_infinite_stage = (
+            (task.get("mode") == "story" and task.get("stage") == "Infinite")
+            or (task.get("mode") == "event" and task.get("stage") == "infinite")
+        )
+        if not is_infinite_stage:
             return None
         try:
             return max(1, int(task.get("infinite_wave_limit") or DEFAULT_INFINITE_WAVE_LIMIT))
@@ -2227,6 +2245,25 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
             # same stage directly, skipping the lobby/gamemode/map/stage
             # picks entirely (see _run_task_setup, which only runs once per
             # task, not once per repeat).
+            if (result == "win" and task.get("mode") == "event" and task.get("stage") == "portal"):
+                # Portal's result screen has "Select Portal" instead of "Repeat
+                # Stage" -- pick the next Summer portal (search -> tier ->
+                # Select) and continue the repeats from there.
+                self._set_status(action="Victory -- selecting the next portal...")
+                if not self._select_summer_portal(hwnd, stop_event, entry=False):
+                    return False
+                self._log("[Macro] Next Summer portal selected -- continuing this task's repeats.")
+                return True
+            if (result == "win" and task.get("mode") == "portals"):
+                # The Portals mode's result screen also has "Select Portal" --
+                # pick the next portal using the task's Portal Name query and
+                # continue the repeats (see PortalsOp._select_portal_post_victory).
+                self._set_status(action="Victory -- selecting the next portal...")
+                if not self._select_portal_post_victory(
+                        hwnd, stop_event, task.get("map") or "summer"):
+                    return False
+                self._log("[Macro] Next portal selected -- continuing this task's repeats.")
+                return True
             if task.get("mode") == "tower":
                 repeat_image = "Next_Floor" if result == "win" else "Repeat_Floor"
                 repeat_label = repeat_image
@@ -3976,92 +4013,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
 
         self._spam_back_until_gone(hwnd, stop_event)
         return False
-
-    def _reach_event_act_selected(self, hwnd, stop_event: threading.Event, act: str,
-                                    scroll_power: int = None, scroll_nudges: int = None) -> bool:
-        """Lobby -> Event -> Villian Invasion -> Event gamemode -> Act (villain card), as one
-        restartable unit -- Event's equivalent of _reach_map_selected. Event
-        has its OWN lobby entry (the nav_event button), not the Play ->
-        gamemode -> map flow the other modes share, so there's no gamemode
-        menu or map carousel here: click nav_event, click Villian Invasion,
-        click the event_gamemode card, then the chosen Act's villain card. On
-        any failure it backs out to the lobby (_spam_back_until_gone) so the
-        next attempt starts clean, same as the map path does.
-
-        The first couple of Act cards are on screen already; later ones
-        (EVENT_ACT_SCROLL_FROM_INDEX on) sit below the fold and only come into
-        view by scrolling, so those get the same wheel-scroll search the Story
-        map carousel uses (see _scroll_find_and_click) instead of a plain
-        wait-then-click.
-        """
-        act = str(act)
-        act_images = EVENT_ACT_IMAGES.get(act)
-        # Both structures are checked, not just the images: EVENT_ACT_ORDER is
-        # indexed further down to decide whether the card needs scrolling to,
-        # so an act present in one but not the other would raise ValueError
-        # mid-navigation rather than failing cleanly here. They're hand-synced
-        # and Act 4 is queued to be added, so it's worth not depending on that.
-        if act_images is None or act not in EVENT_ACT_ORDER:
-            self._log(f'[Macro] Unknown Event Act "{act}" -- expected one of {EVENT_ACT_ORDER}.')
-            return False
-        if isinstance(act_images, str):
-            act_images = (act_images,)
-
-        if not self._ensure_lobby(hwnd, stop_event):
-            return False
-        if self._checkpoint(stop_event):
-            return False
-
-        # nav_event: the lobby's Event button (its own nav entry, not under
-        # Play). Each image click below is a wait-then-click with a
-        # focus-safe verify via _click_found_image, and each screen animates
-        # in, so a short settle follows before searching the next one.
-        self._set_status(action="Clicking Event...")
-        if self._click_found_image(hwnd, "nav_event", EVENT_SCREEN_TIMEOUT, stop_event) is None:
-            self._spam_back_until_gone(hwnd, stop_event)
-            return False
-        if self._checkpoint(stop_event):
-            return False
-        time.sleep(SETTLE_DELAY)
-
-        # (1) Click Villain Invasion from the event menu
-        self._set_status(action="Clicking Villain Invasion...")
-        match = self._click_found_image(hwnd, "Villain_Invasion", EVENT_SCREEN_TIMEOUT, stop_event)
-        if match is None:
-            self._spam_back_until_gone(hwnd, stop_event)
-            return False
-        if self._checkpoint(stop_event):
-            return False
-        time.sleep(SETTLE_DELAY)
-
-        # (2) Then the event_gamemode image (the button with the "Event
-        # Gamemode" text) -- the click that actually opens the villain list,
-        # found and clicked by image search. Its absence after the card click
-        # is the sign the card click failed (spam back + retry from lobby).
-        if self._click_found_image(hwnd, "event_gamemode", EVENT_SCREEN_TIMEOUT, stop_event) is None:
-            self._spam_back_until_gone(hwnd, stop_event)
-            return False
-        if self._checkpoint(stop_event):
-            return False
-        time.sleep(SETTLE_DELAY)
-
-        self._set_status(action=f"Clicking Act {act}...")
-        needs_scroll = EVENT_ACT_ORDER.index(act) >= EVENT_ACT_SCROLL_FROM_INDEX
-        if needs_scroll:
-            # Act 3+ is below the fold -- scroll the villain list into view
-            # (Story-carousel style) before clicking it.
-            if not self._scroll_find_and_click(hwnd, act_images, stop_event, scroll_power, scroll_nudges,
-                                                 label=f"Act {act}"):
-                self._spam_back_until_gone(hwnd, stop_event)
-                return False
-        elif self._click_found_image(hwnd, act_images[0], EVENT_SCREEN_TIMEOUT, stop_event) is None:
-            self._spam_back_until_gone(hwnd, stop_event)
-            return False
-        # Let the stage/Enter-Matchmaking screen finish animating in before
-        # the shared tail searches for its confirm button (same reason
-        # _select_stage settles after its own click).
-        time.sleep(SETTLE_DELAY)
-        return not self._checkpoint(stop_event)
 
     def _reach_tournament_selected(self, hwnd, stop_event: threading.Event, tournament_type: str) -> bool:
         """Lobby -> Play -> Tournament -> type card, as one restartable unit --

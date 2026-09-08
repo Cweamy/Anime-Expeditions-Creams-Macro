@@ -339,6 +339,26 @@ EVENT_ACT_IMAGES = {
 EVENT_ACT_SCROLL_FROM_INDEX = 2  # 0-based into EVENT_ACT_ORDER: index 2 == Act "3"
 EVENT_SCREEN_TIMEOUT = 10.0  # how long to wait for each Event screen (nav_event / event_gamemode / the Act card) to appear
 
+# The Summer event's gamemode screen offers two cards: "Infinite & Fishing"
+# (the one we run) and "Portal Mode" (Tiered & Secret Portals, reserved for
+# later). The user picks which one to enter; this maps that choice to the
+# card image(s) to click. Mirrors TOURNAMENT_TYPE_IMAGES: each value is a
+# tuple of candidate crops (any match wins), same shape as EVENT_ACT_IMAGES,
+# so a card that renders in more than one visual state can still be matched.
+EVENT_KIND_ORDER = ["infinite", "portal"]
+EVENT_KIND_IMAGES = {
+    "infinite": ("summer_event_infinite",),
+    # Portal Mode isn't runnable yet. Point it at a template name now so that
+    # adding it later is just dropping Assets/ui/summer_event_portal/ in; until
+    # then, selecting portal fails cleanly (TemplateNotFound -> None -> back
+    # out to lobby) rather than raising mid-navigation.
+    "portal": ("summer_event_portal",),
+}
+PORTAL_SEARCHES = {
+    "search": (433, 174, 492 - 433, 188 - 174),
+    "portals": (344, 208, 687 - 344, 296 - 208),
+}
+
 # Tournament mode: reached through Play like Story/Raid -- its nav_tournament
 # button sits on the same gamemode menu (picked instead of Story), NOT via its
 # own lobby entry the way Event's nav_event is. After nav_tournament comes a
@@ -678,6 +698,12 @@ SCREEN_MIDDLE_CLICK = (576, 378)  # dead center of the 1152x756 game client area
 # selecting a unit needs a beat to actually open its info panel before the
 # upgradeable/not_upgradeable search means anything.
 BATTLE_BLOCK_CLICK_SETTLE = 0.3
+# Drag block (Macro Manager > Setup > Drag): how many interpolated moves the
+# held-button drag makes, and how long the whole drag takes in ms. Defaults
+# mirror ui/app.js's BLOCK_TYPES.drag params; blocks saved before the params
+# existed (or with them unset) fall back to these.
+DRAG_DEFAULT_STEPS = 30
+DRAG_DEFAULT_DURATION_MS = 600
 # How long an Upgrade Unit block waits before retrying after finding
 # not_upgradeable (not enough gold yet, on cooldown, ...) -- not a failure,
 # just not ready, so it keeps its remaining `times` budget and tries again

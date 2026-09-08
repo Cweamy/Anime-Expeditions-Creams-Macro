@@ -2170,18 +2170,25 @@ const TASK_DATA = {
   },
   event: {
     label: 'Event',
-    // Event has its own lobby entry (nav_event -> event_gamemode -> Act),
-    // no map carousel and no difficulty picker -- just one of the Acts (each a
-    // villain), then Solo/Matchmaking. Stored in `stage` (values '1'-'4')
-    // the same way Raid stores its Acts, so it reuses the existing
-    // stage/act plumbing. Acts past the second are reached by scrolling the
-    // villain list (see runner._reach_event_act_selected). Act 4 ("Crow -
-    // Dawn") is relic-gated -- pick it to run it directly, or let a farm task
-    // auto-divert to it on a Crow Relic drop (see the Act 4 controls the Task
-    // Builder adds for event tasks). Mirrors core.runner_constants'
-    // EVENT_ACT_ORDER.
-    stages: ['1', '2', '3', '4'],
+    // Event has its own lobby entry (nav_event -> event_gamemode -> kind
+    // card), no map carousel and no difficulty picker -- just one of the
+    // event kinds (Infinite & Fishing, or Portal Mode), then Solo/
+    // Matchmaking. Stored in `stage` (values 'infinite'/'portal') the same
+    // way Raid stores its Acts, so it reuses the existing stage/act
+    // plumbing. The chosen kind is what runner._reach_event_kind_selected
+    // clicks. Mirrors core.runner_constants' EVENT_KIND_ORDER. Portal Mode
+    // is reserved but not runnable yet.
+    stages: ['infinite', 'portal'],
     isEvent: true,
+  },
+  portals: {
+    label: 'Portals',
+    // A mode-agnostic portal runner: the user types a portal name that is
+    // used as the SEARCH QUERY in the Inventory -> Portals tab (see
+    // core.runner_portals / PortalsOp). Stored in `map`, so it reads
+    // straight through to logs/status. No map carousel or difficulty -- the
+    // portal name IS the selection.
+    isPortals: true,
   },
   tournament: {
     label: 'Tournament',
@@ -2722,6 +2729,7 @@ function setTaskProp(id, key, value) {
     const d = TASK_DATA[t.mode];
     if (d.maps) t.map = d.maps[0];
     else if (d.isEvent) t.map = 'Event';  // no map to pick, but a label keeps logs/status readable
+    else if (d.isPortals) t.map = 'summer';  // default portal search query
     if (d.stages) t.stage = d.stages[0];
     if (d.difficulties) t.difficulty = d.difficulties[0];
     if (d.extractAfter) t.extract_after = '1';
@@ -2737,7 +2745,7 @@ function setTaskProp(id, key, value) {
       t.play_mode = 'solo';
     }
   }
-  if (key === 'stage' && value === 'Infinite' && !Number.isInteger(Number(t.infinite_wave_limit))) {
+  if (key === 'stage' && (value === 'Infinite' || value === 'infinite') && !Number.isInteger(Number(t.infinite_wave_limit))) {
     t.infinite_wave_limit = DEFAULT_INFINITE_WAVE_LIMIT;
   }
   updateQueueRowInPlace(t);
@@ -2762,7 +2770,9 @@ function taskSummary(t) {
   } else if (t.mode === 'expedition' || t.mode === 'tournament') {
     title += ` · ${t.map}`;
   } else if (t.mode === 'event') {
-    title += ` · Act ${t.stage}`;
+    title += ` · ${t.stage === 'infinite' ? 'Infinite' : 'Portal'}`;
+  } else if (t.mode === 'portals') {
+    title += ` · ${t.map || 'summer'}`;
   }
   const specialStage = t.mode === 'story' && (t.stage === 'Infinite' || t.stage === 'Mastery');
   const diff = ((t.mode === 'story' && !specialStage) || t.mode === 'expedition') ? t.difficulty
@@ -2770,13 +2780,11 @@ function taskSummary(t) {
   const meta = [
     `×${t.repeat}`,
     diff,
-    t.mode === 'story' && t.stage === 'Infinite'
+    ((t.mode === 'story' && t.stage === 'Infinite') || (t.mode === 'event' && t.stage === 'infinite'))
       ? `Stop after wave ${t.infinite_wave_limit || DEFAULT_INFINITE_WAVE_LIMIT}` : '',
     t.tower_mode === 'traitless' ? 'Traitless' : '',
     (t.mode === 'tournament' || t.mode === 'tower') ? '' : (t.play_mode === 'matchmaking' ? 'Matchmaking' : 'Solo'),
     t.macro ? `▸ ${t.macro}` : '',
-    (t.mode === 'event' && t.stage !== '4' && t.act4_on_drop)
-      ? `⮡ Act 4 on drop${t.act4_mode === 'until_locked' ? ' (until locked)' : ''}` : '',
   ].filter(Boolean).join(' · ');
   return { title, meta };
 }
@@ -2856,7 +2864,14 @@ function renderTaskBuilder() {
   } else if (t.mode === 'expedition') {
     fields.push(field('Expedition', sel('map', d.maps, null, 'Select Expedition map')));
   } else if (t.mode === 'event') {
-    fields.push(field('Act', sel('stage', d.stages, s => 'Act ' + s, 'Select Event Act 1-4'), 'Select Event Act 1-4'));
+    fields.push(field('Map', sel('stage', d.stages, s => s === 'infinite' ? 'Infinite' : 'Portal',
+      'Select the event to enter: Infinite & Fishing, or Portal Mode'),
+      'Select the event to enter'));
+  } else if (t.mode === 'portals') {
+    fields.push(field('Portal Name', `<input type="text" class="block-input" style="width:130px;"
+      value="${escapeHtml(t.map ?? 'summer')}" placeholder="e.g. summer"
+      oninput="setTaskProp('${t.id}', 'map', this.value)">`,
+      'The portal to search for in the Inventory > Portals tab (the search query, e.g. "summer")'));
   } else if (t.mode === 'tournament') {
     fields.push(field('Type', sel('map', d.maps, null, 'Select the Tournament type to enter'), 'Select the Tournament type to enter'));
   } else if (t.mode === 'tower') {
@@ -2877,7 +2892,7 @@ function renderTaskBuilder() {
     fields.push(field('Difficulty', `<span class="task-chip" style="align-self: flex-start;">Hard &middot; locked</span>`, 'Difficulty locked to Hard for this mode'));
   }
 
-  if (t.mode === 'story' && t.stage === 'Infinite') {
+  if ((t.mode === 'story' && t.stage === 'Infinite') || (t.mode === 'event' && t.stage === 'infinite')) {
     fields.push(field('Stop After Wave', `<input type="number" class="block-input" min="1"
       value="${Math.max(1, parseInt(t.infinite_wave_limit, 10) || DEFAULT_INFINITE_WAVE_LIMIT)}"
       oninput="setTaskProp('${t.id}', 'infinite_wave_limit', Math.max(1, parseInt(this.value, 10) || 1))">`,
@@ -2908,57 +2923,20 @@ function renderTaskBuilder() {
       <option value="">No Macro</option>
       ${taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === t.macro ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('')}
     </select>`;
-  fields.push(field('Macro Operation', macroSel, 'Select a pre-start placement macro template'));
-
-  // Event farm tasks (Acts 1-3) can auto-divert to Villian Invasion Act 4
-  // ("Crow - Dawn") when a Crow Relic drops. Not shown on an Act 4 task
-  // itself -- there's nothing to divert TO. Act 4 needs its own Macro
-  // Operation since it plays nothing like Acts 1-3.
-  if (t.mode === 'event' && t.stage !== '4') {
-    const on = !!t.act4_on_drop;
-    const onOffSeg = `
-      <div class="seg-toggle">
-        <button type="button" class="seg-btn ${on ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_on_drop', true); renderTaskBuilder()">On</button>
-        <button type="button" class="seg-btn ${!on ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_on_drop', false); renderTaskBuilder()">Off</button>
-      </div>`;
-    fields.push(field('Auto-clear Act 4 on relic drop', onOffSeg));
-    if (t.act4_on_drop) {
-      const runsSeg = `
-        <div class="seg-toggle">
-          <button type="button" class="seg-btn ${t.act4_mode !== 'until_locked' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_mode', 'once'); renderTaskBuilder()">Once</button>
-          <button type="button" class="seg-btn ${t.act4_mode === 'until_locked' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_mode', 'until_locked'); renderTaskBuilder()">Until locked</button>
-        </div>`;
-      fields.push(field('Act 4 Runs', runsSeg));
-      const act4MacroSel = `
-        <select class="task-select" onchange="setTaskProp('${t.id}', 'act4_macro', this.value)">
-          <option value="">No Macro</option>
-          ${taskTemplates.map(n => `<option value="${escapeHtml(n)}" ${n === t.act4_macro ? 'selected' : ''}>&#9654; ${escapeHtml(n)}</option>`).join('')}
-        </select>`;
-      fields.push(field('Act 4 Macro Operation', act4MacroSel));
-      // Act 4 gets its own play mode -- e.g. farm Solo but clear Act 4 in
-      // Matchmaking, or vice versa. Defaults to the task's own play mode until
-      // set (t.act4_play_mode absent -> runner falls back to t.play_mode).
-      const act4Play = t.act4_play_mode || t.play_mode;
-      const act4PlaySeg = `
-        <div class="seg-toggle">
-          <button type="button" class="seg-btn ${act4Play === 'solo' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_play_mode', 'solo'); renderTaskBuilder()">Solo</button>
-          <button type="button" class="seg-btn ${act4Play === 'matchmaking' ? 'active' : ''}" onclick="setTaskProp('${t.id}', 'act4_play_mode', 'matchmaking'); renderTaskBuilder()">Matchmaking</button>
-        </div>`;
-      fields.push(field('Act 4 Play Mode', act4PlaySeg));
-    }
-  }
+  // Infinite & Fishing is the only runnable event kind, and it must use an
+  // Autoplay Macro Operation; Portal Mode (unrunnable) keeps the plain label.
+  const macroLabel = (t.mode === 'event' && t.stage === 'infinite')
+    ? 'Macro Operation (Must be Autoplay)' : 'Macro Operation';
+  fields.push(field(macroLabel, macroSel, 'Select a pre-start placement macro template'));
 
   const extractHint = t.mode === 'expedition'
     ? `<div class="wh-hint">"Extract After" is how many extract prompts to skip before actually taking one -- 0 extracts at the first node, higher goes deeper (and takes longer) per run.</div>` : '';
-  const infiniteHint = (t.mode === 'story' && t.stage === 'Infinite')
+  const infiniteHint = ((t.mode === 'story' && t.stage === 'Infinite') || (t.mode === 'event' && t.stage === 'infinite'))
     ? `<div class="wh-hint"><b>Stop After Wave</b> completes the wave you enter, waits for the counter to advance once, then uses Leave Stage and returns to the lobby. For example, 20 leaves when wave 21 begins.</div>` : '';
-  const act4Hint = (t.mode === 'event' && t.stage !== '4' && t.act4_on_drop)
-    ? `<div class="wh-hint">When a Crow Relic drops on a win, the run leaves this stage, clears Act 4 (Crow - Dawn) with its own Macro Operation above, then comes back. <b>Once</b> spends one relic; <b>Until locked</b> spends every banked relic. Give Act 4 its own Macro Operation ${'&#8212;'} it plays nothing like Acts 1-3.</div>` : '';
   el.innerHTML = `
     <div class="task-builder-grid">${fields.join('')}</div>
     ${extractHint}
     ${infiniteHint}
-    ${act4Hint}
     <div class="wh-hint" style="margin-top: 8px;">The macro's Team Loadout comes from its template (Macro Manager tab).</div>
     <div class="flex items-center gap-2" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
       <button class="task-toolbar-btn add" onclick="cloneTaskCard('${t.id}')">&#10697; Clone Task</button>
@@ -4137,6 +4115,15 @@ const BLOCK_TYPES = {
   // applyPlaceUnitPosition writes params.x/y for whichever block opened
   // it, so the picker needed no changes to support this).
   click:              { label: 'Click',             group: 'Setup',  color: 'var(--rose)',  params: [{ key: 'x', type: 'number', placeholder: 'x', default: 0 }, { key: 'y', type: 'number', placeholder: 'y', default: 0 }] },
+  // A raw mouse drag from one fixed spot to another in the game window (same
+  // 1152x756 client coords Click's x/y use): press the button at (x1, y1),
+  // move to (x2, y2) while held, then release -- for swipe-style UI
+  // interactions no dedicated block covers. Bespoke labeled X1/Y1 -> X2/Y2
+  // fields, see renderDragControls / the runner's _run_drag_block
+  // (Mouse.drag). Same escape-hatch philosophy as Click. steps/duration_ms
+  // tune how the held-button drag plays: more steps = smoother, longer
+  // duration_ms = slower (a fast drag reads as a click in-game).
+  drag:               { label: 'Drag',             group: 'Setup',  color: 'var(--teal)', params: [{ key: 'x1', type: 'number', placeholder: 'x1', default: 0 }, { key: 'y1', type: 'number', placeholder: 'y1', default: 0 }, { key: 'x2', type: 'number', placeholder: 'x2', default: 0 }, { key: 'y2', type: 'number', placeholder: 'y2', default: 0 }, { key: 'steps', type: 'number', placeholder: 'steps', default: 30 }, { key: 'duration_ms', type: 'number', placeholder: 'ms', default: 600 }] },
   // Presses a keyboard key at this point (an ability, interact, menu key --
   // anything no dedicated block covers). Bespoke controls: a key-capture
   // button + an optional hold time. See renderSendKeyControls / the runner's
@@ -4180,7 +4167,7 @@ const PHASE_ALLOWED = {
   // path) is a normal addable block, allowed in BOTH phases -- you can drop
   // several into Pre Start to walk between multiple starter-placement spots
   // before the match begins. The Loop phases take the same set as Battle.
-  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'record', 'click', 'wait_ms', 'send_key', 'detect'],
+  prestart: ['place_unit', 'setting_change', 'auto_upgrade_unit', 'target_priority', 'walk', 'record', 'click', 'drag', 'wait_ms', 'send_key', 'detect'],
   battle: _BATTLE_ALLOWED,
   loop_a: _BATTLE_ALLOWED,
   loop_b: _BATTLE_ALLOWED,
@@ -4950,6 +4937,29 @@ function renderClickControls(b) {
   return x + y + set;
 }
 
+// Drag block: press at (x1, y1) and move to (x2, y2) while held, then
+// release -- a swipe for any UI element a raw Click can't reach. Same
+// 1152x756 client coords Click's x/y use; see the runner's _run_drag_block.
+// Each endpoint (From and To) gets its own Position/Set picker button, same
+// as Click's -- the picker writes to x1/y1 or x2/y2 (see openPlaceUnitModal's
+// endpoint handling / applyPlaceUnitPosition).
+function renderDragControls(b) {
+  const field = (label, inner) => `
+    <label class="blk-field"><span class="blk-field-label">${label}</span>${inner}</label>`;
+  const x1 = field('X1', `<input class="block-input" type="number" value="${b.params.x1}" oninput="updateBlockParam('${b.id}', 'x1', this.value)">`);
+  const y1 = field('Y1', `<input class="block-input" type="number" value="${b.params.y1}" oninput="updateBlockParam('${b.id}', 'y1', this.value)">`);
+  const x2 = field('X2', `<input class="block-input" type="number" value="${b.params.x2}" oninput="updateBlockParam('${b.id}', 'x2', this.value)">`);
+  const y2 = field('Y2', `<input class="block-input" type="number" value="${b.params.y2}" oninput="updateBlockParam('${b.id}', 'y2', this.value)">`);
+  const hasFrom = b.params.x1 || b.params.y1;
+  const hasTo = b.params.x2 || b.params.y2;
+  const fromBtn = field('From Position', `<button type="button" class="pu-set-btn ${hasFrom ? 'has-pos' : ''} tooltip-side" data-tooltip="Pick the drag START on a map or your Roblox screen" onclick="openPlaceUnitModal('${b.id}', 'from')">${hasFrom ? 'Set &#10003;' : 'Set'}</button>`);
+  const toBtn = field('To Position', `<button type="button" class="pu-set-btn ${hasTo ? 'has-pos' : ''} tooltip-side" data-tooltip="Pick the drag END on a map or your Roblox screen" onclick="openPlaceUnitModal('${b.id}', 'to')">${hasTo ? 'Set &#10003;' : 'Set'}</button>`);
+  const arrow = field('', '<span style="opacity:.6;">&#8594;</span>');
+  const steps = field('Steps', `<input class="block-input" type="number" min="1" value="${b.params.steps ?? 30}" oninput="updateBlockParam('${b.id}', 'steps', this.value)" title="How many interpolated moves the held drag makes -- more = smoother">`);
+  const duration = field('Duration (ms)', `<input class="block-input" type="number" min="0" value="${b.params.duration_ms ?? 600}" oninput="updateBlockParam('${b.id}', 'duration_ms', this.value)" title="How long the whole drag takes -- slower registers better in-game">`);
+  return x1 + y1 + fromBtn + arrow + x2 + y2 + toBtn + steps + duration;
+}
+
 // Send Key block: capture a key (stored in b.key, reusing the same keybind
 // capture the Place Unit hotkey uses) + an optional hold time in ms (0 = a
 // quick tap). See the runner's _run_send_key_tick.
@@ -5120,11 +5130,12 @@ function renderBlockRow(b, key) {
   // place_unit and click render ALL their fields bespoke (labeled X/Y +
   // the Set picker button) -- the generic anonymous param inputs would
   // duplicate them.
-  const inputs = (b.type === 'place_unit' || b.type === 'click' || b.type === 'send_key')
+  const inputs = (b.type === 'place_unit' || b.type === 'click' || b.type === 'send_key' || b.type === 'drag')
     ? '' : def.params.map(p => renderParamInput(b, p)).join('');
   const extra = b.type === 'setting_change' ? renderSettingControls(b)
     : b.type === 'place_unit' ? renderPlaceUnitControls(b)
     : b.type === 'click' ? renderClickControls(b)
+    : b.type === 'drag' ? renderDragControls(b)
     : b.type === 'send_key' ? renderSendKeyControls(b)
     : b.type === 'walk' ? renderWalkControls(b)
     : b.type === 'walk_path' ? renderWalkPathControls(b)
@@ -5492,6 +5503,10 @@ let puState = {
   image: null, naturalW: 0, naturalH: 0,
   zoom: 1, panX: 0, panY: 0,
   markX: null, markY: null,
+  // Which params the picker writes back to: { x: 'x', y: 'y' } for Click/
+  // Place Unit, or { x: 'x1', y: 'y1' } / { x: 'x2', y: 'y2' } for a Drag
+  // block's From/To endpoints (see openPlaceUnitModal).
+  paramKeys: null,
   // Settings > Debug > Macro Coordinates "Pick" mode: a coord key prefix
   // (e.g. 'story_click') instead of a block -- a picked spot writes to the
   // coord-<prefix>_x/_y settings inputs rather than a block's params. The
@@ -5528,14 +5543,21 @@ function setRecentPlaceUnitMap(category, name) {
 
 let puRequestId = 0;
 
-async function openPlaceUnitModal(blockId) {
+async function openPlaceUnitModal(blockId, endpoint) {
   const reqId = ++puRequestId;
   const loc = findBlockLocation(blockId);
   if (!loc) return;
   const b = loc.container[loc.idx];
+  // Which params the picker writes back to. Click/Place Unit use x/y; a Drag
+  // block has TWO endpoints (From x1/y1, To x2/y2) and each opens this modal
+  // with its own endpoint, so the picked point lands on the right one.
+  const keys = (b.type === 'drag' && endpoint === 'to') ? { x: 'x2', y: 'y2' }
+    : (b.type === 'drag' && endpoint === 'from') ? { x: 'x1', y: 'y1' }
+    : { x: 'x', y: 'y' };
+  puState.paramKeys = keys;
   puState.blockId = blockId;
-  puState.markX = b.params.x || null;
-  puState.markY = b.params.y || null;
+  puState.markX = b.params[keys.x] || null;
+  puState.markY = b.params[keys.y] || null;
   puState.image = null;
 
   document.getElementById('pu-canvas-wrap').style.display = 'none';
@@ -5580,6 +5602,7 @@ function closePlaceUnitModal() {
   ++puRequestId;
   document.getElementById('pu-modal').style.display = 'none';
   puState.blockId = null;
+  puState.paramKeys = null;
   puState.coordTarget = null;
   puState.coordHeightKey = null;
   puState.coordStep = null;
@@ -5854,8 +5877,11 @@ function applyPlaceUnitPosition() {
   const loc = findBlockLocation(puState.blockId);
   if (!loc) return;
   const b = loc.container[loc.idx];
-  b.params.x = puState.markX;
-  b.params.y = puState.markY;
+  // Click/Place Unit write to x/y; Drag blocks write to whichever endpoint
+  // opened the picker (x1/y1 or x2/y2, set by openPlaceUnitModal).
+  const keys = puState.paramKeys || { x: 'x', y: 'y' };
+  b.params[keys.x] = puState.markX;
+  b.params[keys.y] = puState.markY;
   document.getElementById('pu-pos-readout').textContent = `X ${puState.markX}, Y ${puState.markY}`;
   renderPhases();  // refreshes the block row's x/y inputs + Set button behind the modal
 }
@@ -6000,6 +6026,13 @@ const IMAGE_DESCRIPTIONS = {
   return: "The 'Return to Lobby' confirmation after Leave Stage.",
   "select upgrade card": "The level-up 'Select an upgrade!' reward-card popup.",
   story: "The Story card on the Play menu.",
+  stage_infinite: "The Infinite stage card (Story's Infinite stage and the Summer event's Infinite & Fishing stage).",
+  stage_infinite_large: "A larger crop of the Infinite stage card.",
+  stage_infinite_selected: "The Infinite stage card in its SELECTED state.",
+  summer_nav: "The lobby 'Event' button for the Summer event -- Event mode's own entry (not under Play).",
+  summer_event_gamemode: "The Summer event's gamemode card -- opens the Infinite & Fishing / Portal Mode picker.",
+  summer_event_infinite: "The 'Infinite & Fishing' event card -- the event kind we run.",
+  summer_event_portal: "The 'Portal Mode' event card (Tiered & Secret Portals) -- reserved, not runnable yet.",
   team: "The Team Loadout panel (opened with H).",
   teleportstuck: "Legacy normal-loading reference; no longer used as a disconnect signal.",
   toggle_false: "A Settings toggle in its OFF state.",
