@@ -143,10 +143,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         # operation. A matching task can keep using it when the queue moves
         # to the next stage instead of reopening Team Loadout every time.
         self._last_applied_team_loadout = None
-        # Set by _handle_match_result when an event farm task's Victory dropped
-        # a Crow Relic and the task opted into auto-clearing Act 4; read (and
-        # cleared) by _run_task, which runs the divert. See _run_act4_diversion.
-        self._act4_wants_in = False
         # "Leave at Minute" battle block (see runner_blocks): battle clock +
         # the flag it sets when it leaves. Real values set per match in
         # _play_one_match; defaults here so the Settings > Debug battle test
@@ -1227,30 +1223,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                         fresh_entry = True
                     continue
 
-                if self._act4_wants_in:
-                    # A Crow Relic dropped this repeat (see _handle_match_result,
-                    # which already forced a Leave Stage so we're back on the
-                    # lobby). Go clear Act 4 with the task's OWN Act 4 Macro
-                    # Operation, then re-enter the farm task from scratch --
-                    # same interleave shape as Challenge just below.
-                    self._act4_wants_in = False
-                    self._run_act4_diversion(hwnd, stop_event, task, coords, scroll_power,
-                                              scroll_nudges, default_walk_paths, webhook)
-                    if self._checkpoint(stop_event):
-                        return False
-                    if self._current_hwnd and wm.is_window(self._current_hwnd):
-                        hwnd = self._current_hwnd
-                    self._log(f'[Macro] Act 4 divert finished -- resuming "{map_name}".')
-                    if not is_last_repeat:
-                        if not self._run_task_setup(hwnd, stop_event, task, mode, map_name, coords,
-                                                      scroll_power, scroll_nudges, webhook):
-                            if stop_event.is_set():
-                                return False
-                            task_failed = True
-                            break
-                        fresh_entry = True
-                    continue
-
                 if challenge_wants_in:
                     self._active_task_progress["next_repeat"] = repeat_index + 1
                     self._log(f'[Macro] Challenge stage ready -- pausing "{map_name}" to run it '
@@ -1495,8 +1467,9 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         """Lobby -> Play -> Story/Raid -> map -> stage/act -> difficulty ->
         confirm -> matchmaking/solo -> teleport-in. Runs once per TASK, not
         once per repeat -- see the repeat loop in _run. Event mode takes its
-        own lobby entry (nav_event -> event_gamemode -> Act) with no map or
-        difficulty, then rejoins the shared confirm/Solo/Matchmaking tail."""
+        own lobby entry (nav_event -> summer_nav -> gamemode -> kind card)
+        with no map or difficulty, then rejoins the shared confirm/Solo/
+        Matchmaking tail."""
         if mode == "event":
             # Event's whole lobby -> nav -> kind-card entry is one callable
             # (see EventOps._run_event_setup) -- no map carousel or difficulty
@@ -1599,14 +1572,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                 # stepper, straight after the map.
                 self._interruptible_sleep(DIFFICULTY_CLICK_DELAY, stop_event)
                 self._select_expedition_difficulty(hwnd, stop_event, task.get("difficulty") or "1")
-            elif mode == "event":
-                # Event's kind card (Infinite & Fishing / Portal Mode) IS the
-                # whole selection -- there's no stage-row picker or difficulty
-                # stepper after it (the kind-card click already landed us on
-                # the stage screen), so skip straight to the confirm/Start
-                # tail (_enter_selected_stage). _select_stage's numbered rows
-                # don't apply to the event kind cards at all.
-                self._log("[Macro] Event kind card already picked the stage -- no stage/difficulty click needed.")
             else:
                 stage = task.get("stage") or "1"
                 if not self._select_stage(hwnd, stop_event, stage, mode):
@@ -2173,19 +2138,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
         self._set_status(action=f"Capturing {label} screen...")
         webhook_wants_shot = bool(webhook and webhook.get("enabled") and webhook.get("url"))
         result_screenshot = self._capture_result_screenshot(hwnd) if webhook_wants_shot else None
-
-        # Relic-drop auto-divert (event farm tasks that opted in, wins only --
-        # Crow Relics don't drop on a loss). If one's sitting on the reward
-        # row, flag Act 4 to be cleared once we've cleanly Left Stage here, and
-        # force a Leave (not Repeat) below so the divert's own navigation
-        # starts from the lobby. The Act 4 run itself happens back in _run_task
-        # (see the _act4_wants_in branch there).
-        self._act4_wants_in = False
-        if (result == "win" and task.get("mode") == "event" and task.get("act4_on_drop")
-                and self._relic_dropped(hwnd)):
-            self._act4_wants_in = True
-            repeat = False
-            self._log("[Macro] Crow Relic dropped -- leaving this stage to go clear Act 4.")
 
         map_name = task.get("map") or "-"
         threading.Thread(
@@ -4194,108 +4146,6 @@ class MacroRunner(BountyOps, ChallengeOps, CraftingOps, FuelOps, ShopOps, Expedi
                    f'stopping. If its card was visibly scrolling by, its crop isn\'t matching your setup '
                    f'-- add your own via Settings > General > Image Manager.')
         return False
-
-    def _relic_dropped(self, hwnd) -> bool:
-        """Whether a Crow Relic is on the Victory reward row (DROP_RELIC_IMAGE)
-        -- the trigger for an event farm task's Act 4 auto-divert. Best-effort:
-        a missing crop just reads as 'no relic', same as any other optional
-        image search in this file."""
-        try:
-            return vision.find_image(hwnd, DROP_RELIC_IMAGE) is not None
-        except vision.TemplateNotFound:
-            return False
-
-    def _act4_locked(self, hwnd) -> bool:
-        """Whether Act 4's locked card (VILLIAN4_CLOSE_IMAGE, the 'requires 1
-        Crow Relic / 0/1x Owned' popup) is on screen -- i.e. there's no relic
-        to spend, so an entry attempt can't succeed. Best-effort, same as
-        above."""
-        try:
-            return vision.find_image(hwnd, VILLIAN4_CLOSE_IMAGE) is not None
-        except vision.TemplateNotFound:
-            return False
-
-    def _run_act4_diversion(self, hwnd, stop_event: threading.Event, farm_task: dict, coords: dict,
-                              scroll_power: int, scroll_nudges: int, default_walk_paths: dict,
-                              webhook: dict) -> None:
-        """Clear Villian Invasion Act 4 ("Crow - Dawn") after a farm task's
-        Victory dropped a Crow Relic. Uses the farm task's OWN Act 4 Macro
-        Operation (act4_macro) -- Act 4 plays nothing like Acts 1-3, so it
-        can't reuse the farm macro. Runs Act 4 once, or (act4_mode ==
-        "until_locked") repeatedly until the card shows locked/out of relics
-        (VILLIAN4_CLOSE_IMAGE). The farm stage was already Left in
-        _handle_match_result, so this starts from the lobby; _run_task
-        re-enters the farm task afterward. Best-effort throughout -- any
-        navigation failure just logs and returns to let the farm resume."""
-        until_locked = (farm_task.get("act4_mode") == "until_locked")
-        act4_macro = farm_task.get("act4_macro") or ""
-        # Act 4 can run in its own play mode (Solo/Matchmaking); falls back to
-        # the farm task's play mode when it was never set (older tasks, or the
-        # user leaving it on the inherited default). See the Act 4 Play Mode
-        # control in ui/app.js renderTaskBuilder.
-        play_mode = farm_task.get("act4_play_mode") or farm_task.get("play_mode") or "solo"
-        runs = 0
-        while True:
-            if self._checkpoint(stop_event):
-                return
-            if self._current_hwnd and wm.is_window(self._current_hwnd):
-                hwnd = self._current_hwnd
-
-            # Synthetic one-repeat Act 4 task, driven through the exact same
-            # setup/play/result pipeline a real event task uses (same trick as
-            # Challenge's _run_one_challenge_stage). act4_on_drop is NOT set on
-            # it, so its own _handle_match_result never re-triggers a divert.
-            act4_task = {
-                "mode": "event", "map": "Event", "stage": EVENT_ACT4_STAGE, "difficulty": "-",
-                "macro": act4_macro, "play_mode": play_mode, "repeat": 1, "team": "",
-                "equipment": farm_task.get("equipment") or "include", "is_act4_divert": True,
-            }
-            self._set_status(current_task="Act 4 (Crow - Dawn)", current_repeat="1 / 1", map="Event",
-                              stage="Act 4", action="Clearing Act 4...", mode="event", difficulty="-",
-                              play_mode=play_mode, macro=act4_macro or "-")
-            self._log(f"[Macro] {'Clearing Act 4 again' if runs else 'Clearing Act 4 (Crow - Dawn)'} "
-                       f"with Macro Operation \"{act4_macro or '-'}\".")
-
-            if not self._run_task_setup(hwnd, stop_event, act4_task, "event", "Event", coords,
-                                          scroll_power, scroll_nudges, webhook):
-                if stop_event.is_set():
-                    return
-                if self._current_hwnd and wm.is_window(self._current_hwnd):
-                    hwnd = self._current_hwnd
-                # Couldn't enter. The expected reason after the relics run out
-                # is the locked card -- distinguish it so "until locked" reads
-                # as a clean finish, not an error.
-                if self._act4_locked(hwnd):
-                    self._log("[Macro] Act 4 is locked (no Crow Relic to spend) -- "
-                               f"{'done clearing it' if runs else 'nothing to clear'}.")
-                else:
-                    self._log("[Macro] Couldn't enter Act 4 -- giving up on the divert.")
-                self._spam_back_until_gone(hwnd, stop_event)
-                return
-
-            if self._current_hwnd and wm.is_window(self._current_hwnd):
-                hwnd = self._current_hwnd
-            battle_started = time.time()
-            result = self._play_one_match(hwnd, stop_event, act4_task, default_walk_paths,
-                                            first_repeat=True, webhook=webhook)
-            if result is None:
-                if not stop_event.is_set():
-                    self._recover_to_lobby(hwnd, stop_event)
-                return
-            duration = self._format_duration(time.time() - battle_started)
-            # Always Leave Stage (repeat=False) -- one clear per entry; the
-            # loop decides whether to go again.
-            if not self._handle_match_result(hwnd, stop_event, act4_task, result, duration, webhook,
-                                               repeat=False):
-                return
-            if self._checkpoint(stop_event):
-                return
-            runs += 1
-            self._log(f"[Macro] Act 4 cleared ({result}, {duration}).")
-            if not until_locked:
-                return
-            # until_locked: loop and try again; the next setup lands on the
-            # locked card once relics run out and stops us there.
 
     def _spam_back_until_gone(self, hwnd, stop_event: threading.Event) -> None:
         # A failed map search can leave the run sitting on any of several

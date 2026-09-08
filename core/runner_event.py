@@ -125,7 +125,7 @@ class EventOps:
             return False
         if isinstance(kind_images, str):
             kind_images = (kind_images,)
-        
+
         self._set_status(action=f"Clicking {kind} event...")
         # Any candidate crop that matches wins; later entries are fallbacks
         # for a card that shows in more than one visual state.

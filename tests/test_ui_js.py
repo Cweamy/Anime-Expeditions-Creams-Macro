@@ -746,14 +746,11 @@ def test_app_js_calls_no_undefined_top_level_function():
 # ---------------------------------------------------------------------------
 # Task export/import: a shared queue has to arrive usable
 # ---------------------------------------------------------------------------
-# exportTasks collected only `t.macro`. act4_macro -- Act 4's own Macro
-# Operation -- was never bundled, so a queue using one exported "successfully"
-# and arrived at the other end pointing at a macro the recipient does not
-# have. Reproduced against the shipped function:
-#
-#     task references : Main Farm (macro), Act4 Relic Run (act4_macro)
-#     actually bundled: ['Main Farm']
-#     log             : "[Task] Exported 1 task(s) to q.json"
+# A queue whose macro is missing locally used to export "successfully" and
+# arrive at the other end pointing at a macro the recipient does not have --
+# load_template returns an empty object for a name with no file and the
+# failure was swallowed. taskMacroNames + the export's own check are what
+# keep that honest, so both ends stay covered here.
 
 _TASK_EXPORT_WORLD = """
 const logs = []; let exported = null;
@@ -773,22 +770,22 @@ exportTasks().then(() => console.log(JSON.stringify({
   log: logs[logs.length - 1] })));
 """
 
-_ONE_TASK = "[{id:1, mode:'story', macro:'Main Farm', act4_macro:'Act4 Relic Run'}]"
+_ONE_TASK = "[{id:1, mode:'story', macro:'Main Farm'}]"
 
 
-def test_export_bundles_the_act4_macro_too(tmp_path):
-    out = run_js(_TASK_EXPORT_WORLD % (_ONE_TASK, "['Main Farm', 'Act4 Relic Run']"), tmp_path)
-    assert out["bundled"] == ["Act4 Relic Run", "Main Farm"], (
-        "the Act 4 macro was left out of the package again")
+def test_export_bundles_every_macro_a_task_references(tmp_path):
+    out = run_js(_TASK_EXPORT_WORLD % (_ONE_TASK, "['Main Farm', 'Unused']"), tmp_path)
+    assert out["bundled"] == ["Main Farm"], (
+        "the task's macro was left out of the package again")
 
 
 def test_export_stops_when_a_referenced_macro_no_longer_exists(tmp_path):
     """load_template returns an empty object for a name with no file and the
     failure was swallowed, so the export "succeeded" and only broke for
     whoever imported it."""
-    out = run_js(_TASK_EXPORT_WORLD % (_ONE_TASK, "['Main Farm']"), tmp_path)
+    out = run_js(_TASK_EXPORT_WORLD % (_ONE_TASK, "[]"), tmp_path)
     assert out["bundled"] is None, "a package missing one of its macros must not be written"
-    assert "Act4 Relic Run" in out["log"] and "Export stopped" in out["log"]
+    assert "Main Farm" in out["log"] and "Export stopped" in out["log"]
 
 
 _TASK_IMPORT_WORLD = """
@@ -1610,3 +1607,53 @@ def test_detect_controls_expose_live_test_button(tmp_path):
     assert "testDetect('d1'" in out
     assert 'Test now' in out
 
+
+
+# ---------------------------------------------------------------------------
+# Event stage migration: the queue survives Villian Invasion going away
+# ---------------------------------------------------------------------------
+# Event used to mean Villian Invasion, whose stage was an Act number ('1'-'4').
+# That event is gone and the stage now names a Summer event kind
+# ('infinite'/'portal'). An already-saved Act task keeps a stage the picker has
+# no option for, and the runner stops the whole run on it ("Unknown Event kind
+# \"4\""), so refreshTaskQueue has to migrate it on load.
+_EVENT_MIGRATION_WORLD = """
+const logs = [];
+global.addLog = m => logs.push(m);
+global.enteringTaskIds = new Set();
+global.renderTaskList = () => {};
+global.renderTaskBuilder = () => {};
+global.refreshTaskPresets = () => {};
+global.refreshTaskTemplates = async () => {};
+global.saveTaskQueue = () => {};
+global.newTaskId = () => 't1';
+global.DEFAULT_INFINITE_WAVE_LIMIT = 20;
+global.MAX_EXTRACT_AFTER = 20;
+global.TASK_DATA = { story: { maps: ['Rose'] }, event: { stages: ['infinite', 'portal'] } };
+global.taskCards = [];
+global.pywebview = { api: { get_tasks: async () => %s } };
+eval(extract('defaultTask'));
+eval(extract('normalizeExtractAfter'));
+eval(extract('refreshTaskQueue'));
+refreshTaskQueue().then(() => console.log(JSON.stringify({
+  stages: taskCards.map(t => t.stage), logs })));
+"""
+
+
+@pytest.mark.parametrize("saved_stage", ["1", "4"])
+def test_old_villian_invasion_act_tasks_migrate_to_an_event_kind(saved_stage, tmp_path):
+    tasks = json.dumps([{"id": "a", "mode": "event", "map": "Event", "stage": saved_stage}])
+    out = run_js(_EVENT_MIGRATION_WORLD % tasks, tmp_path)
+    assert out["stages"] == ["infinite"], (
+        f'an event task saved on Act {saved_stage} kept a stage the picker has no option for'
+    )
+    assert any("Villian Invasion" in line for line in out["logs"]), (
+        "the migration happened silently -- the user has no idea their task changed"
+    )
+
+
+def test_event_tasks_already_on_a_kind_are_left_alone(tmp_path):
+    tasks = json.dumps([{"id": "a", "mode": "event", "map": "Event", "stage": "portal"}])
+    out = run_js(_EVENT_MIGRATION_WORLD % tasks, tmp_path)
+    assert out["stages"] == ["portal"]
+    assert not any("Villian Invasion" in line for line in out["logs"])
