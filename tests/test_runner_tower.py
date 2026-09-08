@@ -84,7 +84,6 @@ class MatchResultProbe:
         self.wait_gone = []
         self._mouse = MouseProbe()
         self._coords = {"unit_info_reset_x": 11, "unit_info_reset_y": 22}
-        self._act4_wants_in = False
 
     def _log(self, message):
         self.logs.append(message)
