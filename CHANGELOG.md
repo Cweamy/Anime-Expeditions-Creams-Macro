@@ -2,7 +2,7 @@
 
 All notable changes to Anime Expeditions (Cream's Macro) are documented here.
 
-## [Unreleased]
+## [0.20.0] - 2026-09-09
 
 ### New
 - **Summer event**: Event mode now runs the Summer event instead of Villian Invasion. Its own lobby entry (Event -> Summer -> gamemode card) leads to two kinds, picked in the Task Builder's Event field: **Infinite & Fishing** (unlimited waves, so it takes a **Stop After Wave** target and wants an Autoplay Macro Operation) and **Portal Mode**, which picks and activates a portal on the way in and selects the next one after every win.
