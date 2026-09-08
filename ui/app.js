@@ -2413,11 +2413,10 @@ async function importSettings() {
 // at nothing on someone else's machine). Import restores both, giving all
 // tasks fresh ids and never overwriting a template that already exists
 // locally under the same name.
-// Every macro a task can point at -- just `macro` now that the Villian
-// Invasion Act 4 divert (and its separate act4_macro) is gone. Kept as a
-// helper because the export walks it: a task's macro used to be left out of
-// the export entirely, so a shared queue arrived referencing a macro the
-// recipient did not have -- and the export still reported success.
+// Every macro a task can point at. Kept as a helper because the export walks
+// it: a task's macro used to be left out of the export entirely, so a shared
+// queue arrived referencing a macro the recipient did not have -- and the
+// export still reported success.
 function taskMacroNames(task) {
   return [task.macro].filter(Boolean);
 }
