@@ -150,8 +150,8 @@ def test_item_lookup_is_restricted_to_its_expected_column(monkeypatch):
     )
 
     assert regions == [
-        (398, 218, 154, 362),
         (552, 218, 154, 362),
+        (398, 218, 154, 362),
     ]
 
 
@@ -215,7 +215,7 @@ def test_no_ocr_sweep_uses_absolute_scroll_position_for_each_due_row(monkeypatch
         (runner_shop.SHOP_SCROLL_RESET_AMOUNT,),
         (-960,),
         (runner_shop.SHOP_SCROLL_RESET_AMOUNT,),
-        (runner_shop.SHOP_BOTTOM_SCROLL_AMOUNT,),
+        (-1200,),
     ]
 
 

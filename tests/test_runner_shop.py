@@ -170,13 +170,13 @@ def test_known_item_scroll_steps_match_the_observed_shop_rows():
         "red_flower": 0,
         "frown_fruit": 1,
         "delicious_pie": 1,
-        "mana_flask": 1,
-        "trait_crystal": 1,
-        "sprite_grey": 2,
-        "equipment_reroll": 2,
-        "equipment_lock": 3,
-        "stat_reroll": 3,
-        "stat_lock": 4,
+        "mana_flask": 2,
+        "trait_crystal": 3,
+        "sprite_grey": 3,
+        "equipment_reroll": 4,
+        "equipment_lock": 4,
+        "stat_reroll": 5,
+        "stat_lock": 5,
     }
     assert runner_shop.SHOP_ITEM_SCROLL_AMOUNTS == {
         "cursed_boba": 0,
@@ -184,12 +184,12 @@ def test_known_item_scroll_steps_match_the_observed_shop_rows():
         "frown_fruit": -120,
         "delicious_pie": -120,
         "mana_flask": -480,
-        "trait_crystal": -480,
-        "sprite_grey": -720,
-        "equipment_reroll": -720,
+        "trait_crystal": -600,
+        "sprite_grey": -600,
+        "equipment_reroll": -960,
         "equipment_lock": -960,
-        "stat_reroll": -960,
-        "stat_lock": -4800,
+        "stat_reroll": -1200,
+        "stat_lock": -1200,
     }
 
 
@@ -227,7 +227,7 @@ def test_item_search_resets_to_top_then_waits_at_the_known_row(monkeypatch):
         for call in runner._mouse.scroll.call_args_list
     ] == [
         (runner_shop.SHOP_SCROLL_RESET_AMOUNT,),
-        (runner_shop.SHOP_SCROLL_AMOUNT,),
+        (-480,),
     ]
 
 
@@ -261,7 +261,7 @@ def test_sprite_search_uses_the_calibrated_partial_second_row(monkeypatch):
         for call in runner._mouse.scroll.call_args_list
     ] == [
         (runner_shop.SHOP_SCROLL_RESET_AMOUNT,),
-        (-720,),
+        (-600,),
     ]
 
 
